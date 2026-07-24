@@ -203,6 +203,20 @@ async def _extract_sms_fields(request: Request) -> dict[str, Any]:
     }
 
 
+@app.get("/sms-webhook")
+def sms_webhook_get_hint():
+    """iOS Shortcuts defaults to GET — tell the user exactly how to fix it."""
+    return {
+        "ok": False,
+        "error": "Use POST, not GET",
+        "fix": (
+            "In Shortcuts → Get Contents of URL → expand the action → "
+            "set Method to POST, add header X-API-Key, Request Body = JSON "
+            "with sender=Sender and body=Message Contents."
+        ),
+    }
+
+
 @app.post("/sms-webhook")
 async def receive_sms(request: Request):
     # Check the API key inside the handler so failed auth attempts are logged too
