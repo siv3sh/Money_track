@@ -203,8 +203,24 @@ async def _extract_sms_fields(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/sms-webhook", dependencies=[Depends(require_api_key)])
+@app.post("/sms-webhook")
 async def receive_sms(request: Request):
+    # Check the API key inside the handler so failed auth attempts are logged too
+    provided_key = request.headers.get("x-api-key") or ""
+    if not API_KEY or not provided_key or not secrets.compare_digest(provided_key, API_KEY):
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "bad_api_key" if provided_key else "missing_api_key",
+                "key_preview": (provided_key[:6] + "…") if provided_key else "",
+                "content_type": request.headers.get("content-type") or "unknown",
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key",
+        )
+
     fields = await _extract_sms_fields(request)
     sender = fields["sender"]
     body = fields["body"]
