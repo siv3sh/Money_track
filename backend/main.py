@@ -255,13 +255,17 @@ async def receive_sms(request: Request):
             "stored": False,
             "reason": "missing sender or body",
             "hint": (
-                "In Shortcuts, set Request Body to JSON and use Message variables "
-                "for sender + Message Contents for body (not typed text)."
+                "Your POST reached the server, but the body was empty. "
+                "In Get Contents of URL: set Request Body to Form (easier than JSON). "
+                "Add field sender = Sender variable, field body = Message Contents variable. "
+                "Do not type those words — tap the blue Magic Variable chips. "
+                "Test by receiving a real bank SMS (Play often has empty input)."
             ),
             "received": {
                 "sender": sender,
                 "body": body,
                 "content_type": fields["content_type"],
+                "raw_preview": fields["raw_preview"],
             },
         }
 
