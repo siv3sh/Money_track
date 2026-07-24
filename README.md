@@ -104,8 +104,24 @@ Use ngrok/Cloudflare Tunnel while developing against a laptop.
 
 ## 5. Deploy
 
-- **Backend**: Railway / Render — `uvicorn main:app --host 0.0.0.0 --port $PORT`, env: `MONGO_URI`, `API_KEY`, `CORS_ORIGINS`
-- **Frontend**: Vercel — root `frontend/`, env `VITE_API_URL=https://your-backend…`
+### Backend on Render (Docker)
+
+Repo root includes a `Dockerfile` and `render.yaml` so Render can build without setting a subdirectory.
+
+1. New **Web Service** → connect `siv3sh/Money_track`
+2. Runtime: **Docker** (Dockerfile at repo root is auto-detected)
+3. Set env vars: `MONGO_URI`, `API_KEY`, `CORS_ORIGINS` (include your Vercel URL)
+4. Health check path: `/health`
+
+Or use Blueprint: Render → **New Blueprint** → select this repo (`render.yaml`).
+
+Alternatively (no Docker): Root Directory = `backend`, start command  
+`uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+### Frontend on Vercel
+
+- Root Directory: `frontend`
+- Env: `VITE_API_URL=https://your-render-service.onrender.com`
 
 ```bash
 export API_KEY=dev-local-api-key

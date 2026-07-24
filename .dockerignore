@@ -1,0 +1,11 @@
+# Ignore build context noise when Docker builds from the repo root
+.git
+.DS_Store
+**/__pycache__
+**/.venv
+**/node_modules
+**/dist
+frontend
+sms-tracker
+**/.env
+*.md
