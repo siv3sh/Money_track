@@ -6,9 +6,8 @@ import {
   fetchMonthly,
   fetchSummary,
   fetchTransactions,
-  API_BASE,
 } from './api'
-import { StatementImport } from './components/StatementImport'
+import { EasyAdd } from './components/EasyAdd'
 import { MerchantChart } from './components/MerchantChart'
 import { MonthlyChart } from './components/MonthlyChart'
 import { SummaryHeader } from './components/SummaryHeader'
@@ -139,8 +138,7 @@ export default function App() {
           </p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">Money Track</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Bank SMS parsed into spend · connected to{' '}
-            <span className="text-[var(--text)]">{API_BASE.replace(/^https?:\/\//, '')}</span>
+            Track spend from SMS or add it yourself
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -168,7 +166,7 @@ export default function App() {
       ) : null}
 
       <div className="mt-6">
-        <StatementImport
+        <EasyAdd
           onImported={() => {
             void loadDashboard()
             void loadTransactions()

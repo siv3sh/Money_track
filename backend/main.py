@@ -82,6 +82,16 @@ class SmsPayload(BaseModel):
         return cleaned
 
 
+class ManualTransactionPayload(BaseModel):
+    type: str = Field(..., pattern="^(debit|credit)$")
+    amount: float = Field(..., gt=0)
+    merchant: str | None = Field(default=None, max_length=120)
+    bank: str | None = Field(default=None, max_length=64)
+    date: str | None = Field(default=None, description="YYYY-MM-DD")
+    note: str | None = Field(default=None, max_length=500)
+    card_type: str = Field(default="bank_account", pattern="^(credit_card|debit_card|upi|bank_account)$")
+
+
 class StatementImportPayload(BaseModel):
     content: str = Field(..., min_length=1, max_length=2_000_000)
     bank: str | None = Field(default=None, max_length=64)
@@ -188,6 +198,39 @@ def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
         "parsed": len(docs),
         "ids": ids,
     }
+
+
+@app.post("/transactions")
+def create_transaction(payload: ManualTransactionPayload):
+    """Simple manual add from the dashboard (easiest path)."""
+    received_at = datetime.now(timezone.utc)
+    if payload.date:
+        try:
+            received_at = datetime.strptime(payload.date.strip()[:10], "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from exc
+
+    merchant = (payload.merchant or "").strip() or None
+    note = (payload.note or "").strip()
+    raw = note or (f"{payload.type} {payload.amount}" + (f" · {merchant}" if merchant else ""))
+
+    doc = {
+        "type": payload.type,
+        "amount": float(payload.amount),
+        "account_last4": None,
+        "card_type": payload.card_type,
+        "merchant": merchant,
+        "balance": None,
+        "bank": (payload.bank or "").strip() or None,
+        "raw_text": raw,
+        "sender": "MANUAL",
+        "source": "manual",
+        "received_at": received_at,
+    }
+    result = transactions.insert_one(doc)
+    return {"ok": True, "id": str(result.inserted_id), "transaction": _serialize({**doc, "_id": result.inserted_id})}
 
 
 @app.post("/statements/import")

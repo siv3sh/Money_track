@@ -66,6 +66,22 @@ export function deleteTransaction(id: string): Promise<{ ok: boolean }> {
   return request(`/transactions/${id}`, { method: 'DELETE' })
 }
 
+export function createManualTransaction(payload: {
+  type: 'debit' | 'credit'
+  amount: number
+  merchant?: string
+  bank?: string
+  date?: string
+  note?: string
+  card_type?: 'credit_card' | 'debit_card' | 'upi' | 'bank_account'
+}): Promise<{ ok: boolean; id: string }> {
+  return request('/transactions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
 export interface StatementImportResult {
   imported: number
   skipped_duplicates: number
