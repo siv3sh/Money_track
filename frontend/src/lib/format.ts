@@ -6,6 +6,34 @@ export function formatINR(amount: number): string {
   }).format(amount)
 }
 
+/** Map DLT sender IDs like VM-HDFCBK → display bank name. */
+const SENDER_BANK: Record<string, string> = {
+  HDFCBK: 'HDFC Bank',
+  HDFC: 'HDFC Bank',
+  SBIINB: 'SBI',
+  SBIPSG: 'SBI',
+  SBI: 'SBI',
+  ICICIB: 'ICICI Bank',
+  ICICI: 'ICICI Bank',
+  AXISBK: 'Axis Bank',
+  AXIS: 'Axis Bank',
+  KOTAKB: 'Kotak Bank',
+  KOTAK: 'Kotak Bank',
+  IDFCFB: 'IDFC First Bank',
+  IDFC: 'IDFC First Bank',
+}
+
+export function bankLabel(bank: string | null | undefined, sender?: string | null): string {
+  if (bank && bank.trim()) return bank
+  const cleaned = (sender || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+  if (!cleaned) return 'Unknown bank'
+  const keys = Object.keys(SENDER_BANK).sort((a, b) => b.length - a.length)
+  for (const key of keys) {
+    if (cleaned === key || cleaned.endsWith(key)) return SENDER_BANK[key]
+  }
+  return sender || 'Unknown bank'
+}
+
 export function formatDate(iso: string): string {
   if (!iso) return '—'
   const d = new Date(iso)

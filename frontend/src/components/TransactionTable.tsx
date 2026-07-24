@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import type { CardType, Transaction, TxnType } from '../types'
 import { CARD_TYPE_LABELS } from '../types'
-import { formatDate, formatINR } from '../lib/format'
+import { bankLabel, formatDate, formatINR } from '../lib/format'
 
 export interface Filters {
   card_type: CardType | ''
@@ -73,7 +73,7 @@ function TransactionRow({
               <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-[var(--muted)]">
                 <span>{formatDate(txn.received_at)}</span>
                 <span>·</span>
-                <span>{txn.bank || 'Unknown bank'}</span>
+                <span>{bankLabel(txn.bank, txn.sender)}</span>
                 <span>·</span>
                 <span>
                   {txn.card_type ? CARD_TYPE_LABELS[txn.card_type] : '—'}
