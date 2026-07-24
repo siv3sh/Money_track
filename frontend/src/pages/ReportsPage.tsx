@@ -9,15 +9,16 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+  CumulativeNetChart,
+  DailyCashflowChart,
+  DonutBreakdownChart,
+  IncomeExpenseRadarChart,
+  MerchantHorizontalChart,
+  MonthlyCashflowChart,
+  SavingsGaugeChart,
+  TransactionMixChart,
+  WeekdaySpendChart,
+} from '../components/ReportCharts'
 import { fetchDetailedReport } from '../api'
 import type { DetailedReport } from '../types'
 import { formatDate, formatINR } from '../lib/format'
@@ -244,7 +245,7 @@ export function ReportsPage() {
       const data = await fetchDetailedReport({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        merchant_limit: 15,
+        merchant_limit: 25,
       })
       setReport(data)
       setError(null)
@@ -537,80 +538,95 @@ export function ReportsPage() {
 
           <section className="report-section">
             <SectionHeading
-              eyebrow="03 · Trend analysis"
-              title="Cash flow patterns"
-              description="Compare income and expenses over time and identify the days with highest spending."
+              eyebrow="03 · Visual performance"
+              title="Cash flow visualizations"
+              description="Interactive amCharts views of income, expenses, cumulative net, and weekday behaviour."
             />
             <div className="grid gap-4 lg:grid-cols-2">
-            <section className="panel p-4">
-              <h4 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
-                Monthly debit vs credit
-              </h4>
-              <div className="h-72">
-                {report.monthly.length === 0 ? (
-                  <p className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
-                    No monthly data
-                  </p>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={report.monthly}>
-                      <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="month" tick={{ fill: 'var(--muted)', fontSize: 12 }} />
-                      <YAxis
-                        tick={{ fill: 'var(--muted)', fontSize: 12 }}
-                        tickFormatter={(v: number) =>
-                          v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`
-                        }
-                        width={48}
-                      />
-                      <Tooltip formatter={(v) => formatINR(Number(v ?? 0))} />
-                      <Legend />
-                      <Bar dataKey="debit" name="Debit" fill="var(--chart-debit)" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="credit" name="Credit" fill="var(--chart-credit)" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </section>
-
-            <section className="panel p-4">
-              <h4 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
-                Spend by weekday
-              </h4>
-              <div className="h-72">
-                {report.weekday.length === 0 ? (
-                  <p className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
-                    No weekday data
-                  </p>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={report.weekday}>
-                      <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="day" tick={{ fill: 'var(--muted)', fontSize: 12 }} />
-                      <YAxis
-                        tick={{ fill: 'var(--muted)', fontSize: 12 }}
-                        tickFormatter={(v: number) =>
-                          v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`
-                        }
-                        width={48}
-                      />
-                      <Tooltip formatter={(v) => formatINR(Number(v ?? 0))} />
-                      <Bar dataKey="amount" name="Debit" fill="var(--accent)" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </div>
-            </section>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Monthly income vs expenses
+                </h4>
+                <p className="mb-2 text-xs text-[var(--muted)]">Clustered columns by calendar month</p>
+                <MonthlyCashflowChart data={report.monthly} />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Weekday spend intensity
+                </h4>
+                <p className="mb-2 text-xs text-[var(--muted)]">Where spending concentrates across the week</p>
+                <WeekdaySpendChart data={report.weekday} />
+              </article>
+              <article className="panel p-4 lg:col-span-2">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Daily cash-flow timeline
+                </h4>
+                <p className="mb-2 text-xs text-[var(--muted)]">
+                  Smoothed daily income, expenses, and net movement — scroll/zoom on the timeline
+                </p>
+                <DailyCashflowChart data={report.daily} />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Cumulative net position
+                </h4>
+                <p className="mb-2 text-xs text-[var(--muted)]">Running total of net cash flow over the period</p>
+                <CumulativeNetChart data={report.daily} />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Income / expense radar
+                </h4>
+                <p className="mb-2 text-xs text-[var(--muted)]">Relative strength of inflow vs outflow</p>
+                <IncomeExpenseRadarChart debit={o.total_debit} credit={o.total_credit} />
+              </article>
             </div>
           </section>
 
           <section className="report-section">
             <SectionHeading
-              eyebrow="04 · Account composition"
-              title="Source and payment breakdown"
-              description="Understand where transactions originate and how each payment method contributes."
+              eyebrow="04 · Composition analytics"
+              title="Structure of money movement"
+              description="Donut and gauge views that show how activity is split across banks, rails, sources, and savings."
             />
-            <div className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Expense by payment type
+                </h4>
+                <DonutBreakdownChart
+                  data={report.by_card_type.map((r) => ({ ...r, name: labelCardType(r.name) }))}
+                />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Expense by bank
+                </h4>
+                <DonutBreakdownChart data={report.by_bank} />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Capture source mix
+                </h4>
+                <DonutBreakdownChart data={report.by_source} />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Transaction mix
+                </h4>
+                <TransactionMixChart debitCount={o.debit_count} creditCount={o.credit_count} />
+              </article>
+              <article className="panel p-4 lg:col-span-2">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Savings-rate gauge
+                </h4>
+                <p className="mb-2 text-xs text-[var(--muted)]">
+                  Net cash flow as a percentage of income (−50% to 100% scale)
+                </p>
+                <SavingsGaugeChart rate={savingsRate} />
+              </article>
+            </div>
+            <div className="mt-4 space-y-4">
               <BreakdownTable title="By bank" rows={report.by_bank} nameLabel="Bank" />
               <BreakdownTable
                 title="By payment type"
@@ -625,42 +641,63 @@ export function ReportsPage() {
             <SectionHeading
               eyebrow="05 · Expense concentration"
               title="Merchant analysis"
-              description="Ranked view of where money was spent, including frequency and share of total expenses."
+              description="Ranked visual and tabular view of where money was spent, including frequency and share."
             />
-            <div className="panel overflow-hidden">
-            <div className="border-b border-[var(--border)] px-4 py-3 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
-              Top merchants
+            <div className="grid gap-4 lg:grid-cols-2">
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Top merchants by spend
+                </h4>
+                <MerchantHorizontalChart data={report.merchants.slice(0, 12)} />
+              </article>
+              <article className="panel p-4">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Merchant share of expenses
+                </h4>
+                <DonutBreakdownChart
+                  data={report.merchants.slice(0, 10).map((m) => ({
+                    name: m.merchant,
+                    debit: m.amount,
+                    credit: 0,
+                    count: m.count,
+                  }))}
+                />
+              </article>
             </div>
-            {report.merchants.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">No merchant data</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="text-xs uppercase tracking-wide text-[var(--muted)]">
-                    <tr>
-                      <th className="px-4 py-2 font-medium">Merchant</th>
-                      <th className="px-4 py-2 font-medium">Spend</th>
-                      <th className="px-4 py-2 font-medium">Txns</th>
-                      <th className="px-4 py-2 font-medium">Avg</th>
-                      <th className="px-4 py-2 font-medium">Share</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.merchants.map((m) => (
-                      <tr key={m.merchant} className="border-t border-[var(--border)]">
-                        <td className="px-4 py-2 font-medium">{m.merchant}</td>
-                        <td className="px-4 py-2 tabular-nums text-[var(--debit)]">
-                          {formatINR(m.amount)}
-                        </td>
-                        <td className="px-4 py-2 tabular-nums text-[var(--muted)]">{m.count}</td>
-                        <td className="px-4 py-2 tabular-nums">{formatINR(m.avg)}</td>
-                        <td className="px-4 py-2 tabular-nums text-[var(--muted)]">{m.share}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="panel mt-4 overflow-hidden">
+              <div className="border-b border-[var(--border)] px-4 py-3 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                Top merchants
               </div>
-            )}
+              {report.merchants.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">No merchant data</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-xs uppercase tracking-wide text-[var(--muted)]">
+                      <tr>
+                        <th className="px-4 py-2 font-medium">Merchant</th>
+                        <th className="px-4 py-2 font-medium">Spend</th>
+                        <th className="px-4 py-2 font-medium">Txns</th>
+                        <th className="px-4 py-2 font-medium">Avg</th>
+                        <th className="px-4 py-2 font-medium">Share</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.merchants.map((m) => (
+                        <tr key={m.merchant} className="border-t border-[var(--border)]">
+                          <td className="px-4 py-2 font-medium">{m.merchant}</td>
+                          <td className="px-4 py-2 tabular-nums text-[var(--debit)]">
+                            {formatINR(m.amount)}
+                          </td>
+                          <td className="px-4 py-2 tabular-nums text-[var(--muted)]">{m.count}</td>
+                          <td className="px-4 py-2 tabular-nums">{formatINR(m.avg)}</td>
+                          <td className="px-4 py-2 tabular-nums text-[var(--muted)]">{m.share}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </section>
 
