@@ -246,10 +246,16 @@ async def receive_sms(request: Request):
     body = fields["body"]
     timestamp = fields["timestamp"]
 
-    # Allow sender via query string (?sender=HDFCBK) and default it when the
-    # body clearly looks like a bank SMS — keeps the iOS Shortcut to one field.
+    # Allow sender via query string or header (iOS Shortcuts often puts it there)
     if not sender:
-        sender = (request.query_params.get("sender") or "").strip()
+        sender = (
+            (request.query_params.get("sender") or "").strip()
+            or (request.headers.get("sender") or "").strip()
+            or (request.headers.get("x-sender") or "").strip()
+        )
+    # Body in a header is fragile (newlines), but accept as last resort
+    if not body:
+        body = (request.headers.get("body") or request.headers.get("x-body") or "").strip()
     if not sender and body:
         sender = "SHORTCUT"
 
