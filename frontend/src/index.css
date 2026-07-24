@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --text: #1a1d23;
+  --muted: #5c6570;
+  --border: #e2e5ea;
+  --debit: #c0392b;
+  --credit: #1e7a46;
+  --accent: #2563eb;
+  --chart-debit: #e07a6a;
+  --chart-credit: #5bb88a;
+}
+
+.dark {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --text: #e8eaed;
+  --muted: #9aa3ad;
+  --border: #2a2f38;
+  --debit: #f07167;
+  --credit: #6dcb96;
+  --accent: #5b8def;
+  --chart-debit: #f07167;
+  --chart-credit: #6dcb96;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
