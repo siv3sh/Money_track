@@ -194,9 +194,15 @@ async def _extract_sms_fields(request: Request) -> dict[str, Any]:
     )
     timestamp = data.get("timestamp") or data.get("time") or data.get("date")
 
+    body_text = str(body or "").strip()
+    # If structured parsing found nothing but the request had raw text,
+    # treat the whole body as the SMS (Shortcuts "File" body sends plain text).
+    if not body_text and text and not text.startswith("{"):
+        body_text = text
+
     return {
         "sender": str(sender or "").strip(),
-        "body": str(body or "").strip(),
+        "body": body_text,
         "timestamp": timestamp,
         "raw_preview": text[:240],
         "content_type": content_type or "unknown",
@@ -239,6 +245,13 @@ async def receive_sms(request: Request):
     sender = fields["sender"]
     body = fields["body"]
     timestamp = fields["timestamp"]
+
+    # Allow sender via query string (?sender=HDFCBK) and default it when the
+    # body clearly looks like a bank SMS — keeps the iOS Shortcut to one field.
+    if not sender:
+        sender = (request.query_params.get("sender") or "").strip()
+    if not sender and body:
+        sender = "SHORTCUT"
 
     if not sender or not body:
         _log_webhook_event(
