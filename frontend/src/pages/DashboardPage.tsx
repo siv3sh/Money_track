@@ -6,6 +6,7 @@ import {
   fetchMerchants,
   fetchMonthly,
   fetchTransactions,
+  updateTransactionCategory,
 } from '../api'
 import {
   DailyCashflowChart,
@@ -17,7 +18,6 @@ import {
 import { TransactionTable, type Filters } from '../components/TransactionTable'
 import { formatINR } from '../lib/format'
 import type { DetailedReport, MerchantSpend, MonthlyBucket, Transaction } from '../types'
-import { CARD_TYPE_LABELS, type CardType } from '../types'
 
 const PAGE_SIZE = 25
 
@@ -54,11 +54,6 @@ function periodRange(period: Period): { from?: string; to?: string; label: strin
       return exhaustive
     }
   }
-}
-
-function labelCardType(name: string): string {
-  if (name in CARD_TYPE_LABELS) return CARD_TYPE_LABELS[name as CardType]
-  return name
 }
 
 function Kpi({
@@ -110,10 +105,11 @@ export function DashboardPage() {
   const [loadingTable, setLoadingTable] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [tableFilters, setTableFilters] = useState<
-    Pick<Filters, 'card_type' | 'type' | 'sort' | 'order'>
+    Pick<Filters, 'card_type' | 'type' | 'category' | 'sort' | 'order'>
   >({
     card_type: '',
     type: '',
+    category: '',
     sort: 'received_at',
     order: 'desc',
   })
@@ -161,6 +157,7 @@ export function DashboardPage() {
         limit: PAGE_SIZE + 1,
         skip: page * PAGE_SIZE,
         card_type: filters.card_type || undefined,
+        category: filters.category || undefined,
         type: filters.type || undefined,
         date_from: dateFrom,
         date_to: dateTo,
@@ -357,15 +354,10 @@ export function DashboardPage() {
 
             <section className="panel p-4">
               <h3 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
-                Payment mix
+                Spend by category
               </h3>
-              <p className="mb-2 text-xs text-[var(--muted)]">UPI / card / account share</p>
-              <DonutBreakdownChart
-                data={(report?.by_card_type || []).map((r) => ({
-                  ...r,
-                  name: labelCardType(r.name),
-                }))}
-              />
+              <p className="mb-2 text-xs text-[var(--muted)]">MCC + keyword classification</p>
+              <DonutBreakdownChart data={report?.by_category || []} />
             </section>
 
             <section className="panel p-4 xl:col-span-2">
@@ -400,6 +392,7 @@ export function DashboardPage() {
             setTableFilters({
               card_type: next.card_type,
               type: next.type,
+              category: next.category,
               sort: next.sort,
               order: next.order,
             })
@@ -412,6 +405,18 @@ export function DashboardPage() {
                 await Promise.all([loadDash(), loadTransactions()])
               } catch (err) {
                 setError(err instanceof Error ? err.message : 'Delete failed')
+              }
+            })()
+          }}
+          onCategoryChange={(id, category) => {
+            void (async () => {
+              try {
+                const res = await updateTransactionCategory(id, category, true)
+                setRows((prev) =>
+                  prev.map((row) => (row._id === id ? { ...row, ...res.transaction } : row)),
+                )
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Category update failed')
               }
             })()
           }}

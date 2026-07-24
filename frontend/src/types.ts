@@ -14,6 +14,9 @@ export interface Transaction {
   raw_text: string
   sender?: string
   received_at: string
+  category?: string | null
+  mcc?: string | null
+  category_source?: string | null
 }
 
 export interface Summary {
@@ -93,12 +96,30 @@ export interface DetailedReport {
   by_bank: ReportBreakdownRow[]
   by_card_type: ReportBreakdownRow[]
   by_source: ReportBreakdownRow[]
+  by_category?: ReportBreakdownRow[]
   merchants: ReportMerchantRow[]
   daily: ReportDailyRow[]
   weekday: ReportWeekdayRow[]
   monthly: MonthlyBucket[]
   largest: Transaction[]
+  categories?: string[]
 }
+
+export const DEFAULT_CATEGORIES = [
+  'Food & Dining',
+  'Groceries',
+  'Shopping',
+  'Travel & Transport',
+  'Bills & Utilities',
+  'Entertainment',
+  'Health & Wellness',
+  'Investments',
+  'Transfers',
+  'Education',
+  'Subscriptions',
+  'Income',
+  'Other',
+] as const
 
 export const CARD_TYPE_LABELS: Record<CardType, string> = {
   credit_card: 'Credit card',

@@ -15,6 +15,7 @@ from pymongo import DESCENDING, MongoClient
 
 from parser import parse_sms
 from statement_parser import parse_statement, parse_statement_file
+from categorizer import CATEGORIES, apply_category
 
 load_dotenv()
 
@@ -29,6 +30,7 @@ client = MongoClient(
 db = client["money_tracker"]
 transactions = db["transactions"]
 webhook_events = db["webhook_events"]
+category_memory = db["category_memory"]
 
 API_KEY = os.getenv("API_KEY", "")
 CORS_ORIGINS = [
@@ -53,8 +55,23 @@ try:
     transactions.create_index("card_type")
     transactions.create_index("bank")
     transactions.create_index("type")
+    transactions.create_index("category")
+    category_memory.create_index("merchant_key", unique=True)
 except Exception as exc:  # noqa: BLE001 — allow import/boot without Mongo during local checks
     print(f"Warning: could not create Mongo indexes yet: {exc}")
+
+
+def _load_merchant_memory() -> dict[str, str]:
+    memory: dict[str, str] = {}
+    try:
+        for row in category_memory.find({}, {"merchant_key": 1, "category": 1}):
+            key = (row.get("merchant_key") or "").strip().lower()
+            cat = row.get("category")
+            if key and cat:
+                memory[key] = str(cat)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not load category memory: {exc}")
+    return memory
 
 
 def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
@@ -368,6 +385,7 @@ async def receive_sms(request: Request):
             else datetime.now(timezone.utc)
         ),
     }
+    apply_category(doc, _load_merchant_memory())
 
     result = transactions.insert_one(doc)
 
@@ -381,11 +399,16 @@ async def receive_sms(request: Request):
             "sender": payload.sender,
             "amount": txn.get("amount"),
             "type": txn.get("type"),
+            "category": doc.get("category"),
             "body": payload.body[:240],
         }
     )
 
-    return {"stored": True, "id": str(result.inserted_id), "transaction": txn}
+    return {
+        "stored": True,
+        "id": str(result.inserted_id),
+        "transaction": {**txn, "category": doc.get("category"), "mcc": doc.get("mcc")},
+    }
 
 
 @app.get("/sms-webhook/debug")
@@ -412,6 +435,7 @@ def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
     for doc in transactions.find({}, {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1}).limit(5000):
         existing.add(_fingerprint(doc))
 
+    memory = _load_merchant_memory()
     to_insert: list[dict[str, Any]] = []
     skipped = 0
     for doc in docs:
@@ -420,6 +444,7 @@ def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
             skipped += 1
             continue
         existing.add(fp)
+        apply_category(doc, memory)
         to_insert.append(doc)
 
     ids: list[str] = []
@@ -484,6 +509,7 @@ def list_transactions(
     skip: int = Query(default=0, ge=0),
     card_type: str | None = None,
     bank: str | None = None,
+    category: str | None = None,
     type: str | None = Query(default=None, pattern="^(debit|credit)$"),
     date_from: str | None = None,
     date_to: str | None = None,
@@ -495,6 +521,8 @@ def list_transactions(
         query["card_type"] = card_type
     if bank:
         query["bank"] = {"$regex": f"^{bank}$", "$options": "i"}
+    if category:
+        query["category"] = category
     if type:
         query["type"] = type
 
@@ -520,6 +548,95 @@ def list_transactions(
         .limit(limit)
     )
     return [_serialize(doc) for doc in cursor]
+
+
+class CategoryUpdate(BaseModel):
+    category: str = Field(..., min_length=1, max_length=64)
+    remember_merchant: bool = True
+
+    @field_validator("category")
+    @classmethod
+    def valid_category(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned not in CATEGORIES:
+            raise ValueError(f"category must be one of: {', '.join(CATEGORIES)}")
+        return cleaned
+
+
+@app.get("/categories")
+def list_categories():
+    return {"categories": CATEGORIES}
+
+
+@app.patch("/transactions/{txn_id}/category")
+def update_transaction_category(txn_id: str, payload: CategoryUpdate):
+    try:
+        oid = ObjectId(txn_id)
+    except InvalidId as exc:
+        raise HTTPException(status_code=400, detail="Invalid transaction id") from exc
+
+    doc = transactions.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    transactions.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "category": payload.category,
+                "category_source": "manual",
+            }
+        },
+    )
+
+    merchant = (doc.get("merchant") or "").strip()
+    if payload.remember_merchant and merchant:
+        key = merchant.lower()
+        category_memory.update_one(
+            {"merchant_key": key},
+            {
+                "$set": {
+                    "merchant_key": key,
+                    "merchant": merchant,
+                    "category": payload.category,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+            upsert=True,
+        )
+
+    updated = transactions.find_one({"_id": oid})
+    return {"ok": True, "transaction": _serialize(updated or doc)}
+
+
+@app.post("/categories/backfill")
+def backfill_categories(force: bool = Query(default=False)):
+    """Categorize existing transactions missing a category (or all if force=true)."""
+    memory = _load_merchant_memory()
+    query: dict[str, Any] = {} if force else {"$or": [{"category": {"$exists": False}}, {"category": None}, {"category": ""}]}
+    updated = 0
+    scanned = 0
+    by_cat: dict[str, int] = {}
+    for doc in transactions.find(query):
+        scanned += 1
+        # Preserve manual overrides unless force
+        if not force and doc.get("category_source") == "manual" and doc.get("category"):
+            continue
+        apply_category(doc, memory)
+        transactions.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "category": doc.get("category"),
+                    "mcc": doc.get("mcc"),
+                    "category_source": doc.get("category_source"),
+                }
+            },
+        )
+        updated += 1
+        cat = str(doc.get("category") or "Other")
+        by_cat[cat] = by_cat.get(cat, 0) + 1
+    return {"scanned": scanned, "updated": updated, "by_category": by_cat}
 
 
 @app.delete("/transactions/{txn_id}")
@@ -896,9 +1013,11 @@ def reports_detailed(
         "by_bank": group_breakdown("bank"),
         "by_card_type": group_breakdown("card_type"),
         "by_source": group_breakdown("source"),
+        "by_category": group_breakdown("category"),
         "merchants": merchant_rows,
         "daily": daily_rows,
         "weekday": weekday_rows,
         "monthly": monthly_rows,
         "largest": [_serialize(doc) for doc in largest],
+        "categories": CATEGORIES,
     }

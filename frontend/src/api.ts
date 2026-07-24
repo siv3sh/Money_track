@@ -28,6 +28,7 @@ export interface TransactionQuery {
   skip?: number
   card_type?: CardType | ''
   bank?: string
+  category?: string
   type?: TxnType | ''
   date_from?: string
   date_to?: string
@@ -53,6 +54,7 @@ export function fetchTransactions(query: TransactionQuery = {}): Promise<Transac
   if (query.skip != null) params.set('skip', String(query.skip))
   if (query.card_type) params.set('card_type', query.card_type)
   if (query.bank) params.set('bank', query.bank)
+  if (query.category) params.set('category', query.category)
   if (query.type) params.set('type', query.type)
   if (query.date_from) params.set('date_from', query.date_from)
   if (query.date_to) params.set('date_to', query.date_to)
@@ -64,6 +66,32 @@ export function fetchTransactions(query: TransactionQuery = {}): Promise<Transac
 
 export function deleteTransaction(id: string): Promise<{ ok: boolean }> {
   return request(`/transactions/${id}`, { method: 'DELETE' })
+}
+
+export function fetchCategories(): Promise<{ categories: string[] }> {
+  return request('/categories')
+}
+
+export function updateTransactionCategory(
+  id: string,
+  category: string,
+  remember_merchant = true,
+): Promise<{ ok: boolean; transaction: Transaction }> {
+  return request(`/transactions/${id}/category`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category, remember_merchant }),
+  })
+}
+
+export function backfillCategories(force = false): Promise<{
+  scanned: number
+  updated: number
+  by_category: Record<string, number>
+}> {
+  return request(`/categories/backfill?force=${force ? 'true' : 'false'}`, {
+    method: 'POST',
+  })
 }
 
 export function fetchDetailedReport(params: {

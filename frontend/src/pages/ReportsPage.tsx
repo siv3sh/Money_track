@@ -591,9 +591,15 @@ export function ReportsPage() {
             <SectionHeading
               eyebrow="04 · Composition analytics"
               title="Structure of money movement"
-              description="Donut and gauge views that show how activity is split across banks, rails, sources, and savings."
+              description="Donut and gauge views that show how activity is split across categories, banks, rails, and sources."
             />
             <div className="grid gap-4 xl:grid-cols-3">
+              <article className="panel p-4 xl:col-span-2">
+                <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+                  Expense by category
+                </h4>
+                <DonutBreakdownChart data={report.by_category ?? []} />
+              </article>
               <article className="panel p-4">
                 <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
                   Expense by payment type
@@ -630,7 +636,12 @@ export function ReportsPage() {
                 <SavingsGaugeChart rate={savingsRate} />
               </article>
             </div>
-            <div className="mt-4 grid gap-4 xl:grid-cols-3">
+            <div className="mt-4 grid gap-4 xl:grid-cols-2 2xl:grid-cols-4">
+              <BreakdownTable
+                title="By category"
+                rows={report.by_category ?? []}
+                nameLabel="Category"
+              />
               <BreakdownTable title="By bank" rows={report.by_bank} nameLabel="Bank" />
               <BreakdownTable
                 title="By payment type"

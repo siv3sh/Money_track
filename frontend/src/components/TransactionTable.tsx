@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import type { CardType, Transaction, TxnType } from '../types'
-import { CARD_TYPE_LABELS } from '../types'
+import { CARD_TYPE_LABELS, DEFAULT_CATEGORIES } from '../types'
 import { bankLabel, formatDate, formatINR } from '../lib/format'
 
 export interface Filters {
   card_type: CardType | ''
   type: TxnType | ''
+  category: string
   date_from: string
   date_to: string
   sort: 'received_at' | 'amount'
@@ -20,9 +21,11 @@ interface Props {
   pageSize: number
   hasMore: boolean
   loading: boolean
+  categories?: string[]
   onFiltersChange: (next: Filters) => void
   onPageChange: (page: number) => void
   onDelete: (id: string) => void
+  onCategoryChange?: (id: string, category: string) => void
 }
 
 const selectClass =
@@ -32,12 +35,17 @@ const inputClass =
 
 function TransactionRow({
   txn,
+  categories,
   onDelete,
+  onCategoryChange,
 }: {
   txn: Transaction
+  categories: string[]
   onDelete: (id: string) => void
+  onCategoryChange?: (id: string, category: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
   const message = txn.raw_text || '—'
 
   return (
@@ -66,6 +74,11 @@ function TransactionRow({
                 <span className="rounded-md bg-[var(--surface-2)] px-1.5 py-0.5 text-xs capitalize text-[var(--muted)]">
                   {txn.type}
                 </span>
+                {txn.category ? (
+                  <span className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-xs font-medium text-[var(--accent)]">
+                    {txn.category}
+                  </span>
+                ) : null}
                 {txn.merchant ? (
                   <span className="truncate text-sm font-medium">{txn.merchant}</span>
                 ) : null}
@@ -101,6 +114,38 @@ function TransactionRow({
 
       {open ? (
         <div className="border-t border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 sm:pl-11">
+          <div className="mb-3 flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+              Category
+              <select
+                className={selectClass}
+                value={txn.category || 'Other'}
+                disabled={saving || !onCategoryChange}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  if (!onCategoryChange) return
+                  const next = e.target.value
+                  setSaving(true)
+                  void Promise.resolve(onCategoryChange(txn._id, next)).finally(() =>
+                    setSaving(false),
+                  )
+                }}
+              >
+                {categories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="pb-2 text-xs text-[var(--muted)]">
+              {saving
+                ? 'Saving…'
+                : txn.category_source
+                  ? `Detected via ${txn.category_source}${txn.mcc ? ` · MCC ${txn.mcc}` : ''}`
+                  : 'Change to remember this merchant'}
+            </p>
+          </div>
           <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
             SMS message
           </div>
@@ -128,13 +173,30 @@ export function TransactionTable({
   pageSize,
   hasMore,
   loading,
+  categories = [...DEFAULT_CATEGORIES],
   onFiltersChange,
   onPageChange,
   onDelete,
+  onCategoryChange,
 }: Props) {
   return (
     <div className="space-y-3">
       <div className="panel flex flex-wrap items-end gap-2 p-3">
+        <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+          Category
+          <select
+            className={selectClass}
+            value={filters.category}
+            onChange={(e) => onFiltersChange({ ...filters, category: e.target.value })}
+          >
+            <option value="">All</option>
+            {categories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
           Card type
           <select
@@ -214,7 +276,13 @@ export function TransactionTable({
           </p>
         ) : (
           rows.map((txn) => (
-            <TransactionRow key={txn._id} txn={txn} onDelete={onDelete} />
+            <TransactionRow
+              key={txn._id}
+              txn={txn}
+              categories={categories}
+              onDelete={onDelete}
+              onCategoryChange={onCategoryChange}
+            />
           ))
         )}
       </div>
