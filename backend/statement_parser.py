@@ -319,6 +319,140 @@ def parse_statement_text(
     return results
 
 
+def _cell_to_str(c: Any) -> str:
+    if c is None:
+        return ""
+    if isinstance(c, datetime):
+        return c.strftime("%Y-%m-%d")
+    if isinstance(c, float) and c == int(c) and 20000 < c < 60000:
+        # Likely Excel serial date left as float (rare with data_only)
+        try:
+            from datetime import timedelta
+
+            base = datetime(1899, 12, 30, tzinfo=timezone.utc)
+            return (base + timedelta(days=int(c))).strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001
+            pass
+    return str(c).strip()
+
+
+def _rows_to_csv_text(rows: list[list[Any]]) -> str:
+    """Serialize a 2D table to CSV text for reuse of parse_statement_csv."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    for row in rows:
+        writer.writerow([_cell_to_str(c) for c in row])
+    return buf.getvalue()
+
+
+def _find_header_row(rows: list[list[Any]], scan: int = 40) -> int:
+    """Pick the row that looks most like column headers (date + description)."""
+    best_idx, best_score = 0, -1
+    for i, row in enumerate(rows[:scan]):
+        cells = [_norm_header(str(c)) for c in row if c is not None and str(c).strip()]
+        if not cells:
+            continue
+        score = 0
+        joined = " ".join(cells)
+        for aliases in HEADER_ALIASES.values():
+            if any(a in cells or a in joined for a in aliases):
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_idx = i
+    return best_idx
+
+
+def parse_statement_excel(
+    raw: bytes,
+    *,
+    bank: Optional[str] = None,
+    filename: str = "",
+) -> list[tuple[Transaction, datetime]]:
+    """Parse .xlsx (openpyxl) or .xls (xlrd) into transactions."""
+    name = (filename or "").lower()
+    rows: list[list[Any]] = []
+
+    if name.endswith(".xls") and not name.endswith(".xlsx"):
+        import xlrd  # type: ignore
+
+        book = xlrd.open_workbook(file_contents=raw)
+        sheet = book.sheet_by_index(0)
+        for r in range(sheet.nrows):
+            rows.append([sheet.cell_value(r, c) for c in range(sheet.ncols)])
+    else:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        try:
+            ws = wb.active
+            for row in ws.iter_rows(values_only=True):
+                if row is None:
+                    continue
+                rows.append(list(row))
+        finally:
+            wb.close()
+
+    if not rows:
+        return []
+
+    header_idx = _find_header_row(rows)
+    table = rows[header_idx:]
+    # Drop fully empty rows
+    table = [r for r in table if any(c is not None and str(c).strip() for c in r)]
+    if len(table) < 2:
+        return []
+
+    csv_text = _rows_to_csv_text(table)
+    return parse_statement_csv(csv_text, bank=bank)
+
+
+def parse_statement_pdf(
+    raw: bytes,
+    *,
+    bank: Optional[str] = None,
+) -> list[tuple[Transaction, datetime]]:
+    """
+    Parse PDF bank statements:
+    1) extract tables → CSV path
+    2) fallback to plain text line parsing
+    """
+    import pdfplumber
+
+    all_pairs: list[tuple[Transaction, datetime]] = []
+    text_chunks: list[str] = []
+
+    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
+            for table in tables:
+                if not table or len(table) < 2:
+                    continue
+                cleaned = [
+                    [("" if c is None else str(c).replace("\n", " ").strip()) for c in row]
+                    for row in table
+                    if row and any(c is not None and str(c).strip() for c in row)
+                ]
+                if len(cleaned) < 2:
+                    continue
+                header_idx = _find_header_row(cleaned)
+                slice_rows = cleaned[header_idx:]
+                pairs = parse_statement_csv(_rows_to_csv_text(slice_rows), bank=bank)
+                all_pairs.extend(pairs)
+
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                text_chunks.append(page_text)
+
+    if all_pairs:
+        return all_pairs
+
+    combined = "\n".join(text_chunks)
+    if combined.strip():
+        return parse_statement_text(combined, bank=bank)
+    return []
+
+
 def parse_statement(
     content: str,
     *,
@@ -326,7 +460,7 @@ def parse_statement(
     fmt: str = "auto",
 ) -> list[dict[str, Any]]:
     """
-    Unified entry: returns docs ready for Mongo insert (txn fields + received_at + source).
+    Unified entry for text/CSV: returns docs ready for Mongo insert.
     """
     fmt = (fmt or "auto").lower()
     if fmt == "csv":
@@ -339,6 +473,44 @@ def parse_statement(
         if not pairs:
             pairs = parse_statement_text(content, bank=bank)
 
+    return _pairs_to_docs(pairs)
+
+
+def parse_statement_file(
+    raw: bytes,
+    filename: str,
+    *,
+    bank: Optional[str] = None,
+    fmt: str = "auto",
+) -> list[dict[str, Any]]:
+    """
+    Parse uploaded file bytes (.csv/.txt/.tsv/.xlsx/.xls/.pdf).
+    """
+    name = (filename or "").lower()
+    fmt = (fmt or "auto").lower()
+
+    if name.endswith(".pdf") or fmt == "pdf":
+        pairs = parse_statement_pdf(raw, bank=bank)
+        return _pairs_to_docs(pairs)
+
+    if name.endswith(".xlsx") or name.endswith(".xls") or fmt in {"xlsx", "xls", "excel"}:
+        pairs = parse_statement_excel(raw, bank=bank, filename=name)
+        return _pairs_to_docs(pairs)
+
+    # Text-like formats
+    try:
+        content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        content = raw.decode("latin-1")
+
+    if name.endswith(".csv") or fmt == "csv":
+        return parse_statement(content, bank=bank, fmt="csv")
+    if name.endswith(".txt") or name.endswith(".tsv") or fmt == "text":
+        return parse_statement(content, bank=bank, fmt="text" if name.endswith(".txt") else "auto")
+    return parse_statement(content, bank=bank, fmt="auto")
+
+
+def _pairs_to_docs(pairs: list[tuple[Transaction, datetime]]) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for txn, received_at in pairs:
         docs.append(

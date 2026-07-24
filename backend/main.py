@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 from pymongo import DESCENDING, MongoClient
 
 from parser import parse_sms
-from statement_parser import parse_statement
+from statement_parser import parse_statement, parse_statement_file
 
 load_dotenv()
 
@@ -80,16 +80,6 @@ class SmsPayload(BaseModel):
         if not cleaned:
             raise ValueError("must not be blank")
         return cleaned
-
-
-class ManualTransactionPayload(BaseModel):
-    type: str = Field(..., pattern="^(debit|credit)$")
-    amount: float = Field(..., gt=0)
-    merchant: str | None = Field(default=None, max_length=120)
-    bank: str | None = Field(default=None, max_length=64)
-    date: str | None = Field(default=None, description="YYYY-MM-DD")
-    note: str | None = Field(default=None, max_length=500)
-    card_type: str = Field(default="bank_account", pattern="^(credit_card|debit_card|upi|bank_account)$")
 
 
 class StatementImportPayload(BaseModel):
@@ -200,39 +190,6 @@ def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-@app.post("/transactions")
-def create_transaction(payload: ManualTransactionPayload):
-    """Simple manual add from the dashboard (easiest path)."""
-    received_at = datetime.now(timezone.utc)
-    if payload.date:
-        try:
-            received_at = datetime.strptime(payload.date.strip()[:10], "%Y-%m-%d").replace(
-                tzinfo=timezone.utc
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from exc
-
-    merchant = (payload.merchant or "").strip() or None
-    note = (payload.note or "").strip()
-    raw = note or (f"{payload.type} {payload.amount}" + (f" · {merchant}" if merchant else ""))
-
-    doc = {
-        "type": payload.type,
-        "amount": float(payload.amount),
-        "account_last4": None,
-        "card_type": payload.card_type,
-        "merchant": merchant,
-        "balance": None,
-        "bank": (payload.bank or "").strip() or None,
-        "raw_text": raw,
-        "sender": "MANUAL",
-        "source": "manual",
-        "received_at": received_at,
-    }
-    result = transactions.insert_one(doc)
-    return {"ok": True, "id": str(result.inserted_id), "transaction": _serialize({**doc, "_id": result.inserted_id})}
-
-
 @app.post("/statements/import")
 def import_statement(payload: StatementImportPayload):
     """Paste CSV or line-based statement text (for July history, etc.)."""
@@ -250,24 +207,28 @@ async def upload_statement(
     bank: str | None = Form(default=None),
     format: str = Form(default="auto"),
 ):
-    """Upload a .csv / .txt bank statement export."""
+    """Upload a bank statement: CSV, TXT, Excel (.xlsx/.xls), or PDF."""
     name = (file.filename or "").lower()
-    if not (name.endswith(".csv") or name.endswith(".txt") or name.endswith(".tsv")):
-        raise HTTPException(status_code=400, detail="Upload a .csv, .tsv, or .txt file")
+    allowed = (".csv", ".txt", ".tsv", ".xlsx", ".xls", ".pdf")
+    if not name.endswith(allowed):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a .csv, .tsv, .txt, .xlsx, .xls, or .pdf file",
+        )
 
     raw = await file.read()
-    if len(raw) > 2_000_000:
-        raise HTTPException(status_code=400, detail="File too large (max 2MB)")
+    # PDFs/Excel can be larger than plain CSV
+    max_bytes = 8_000_000 if name.endswith(".pdf") else 5_000_000
+    if len(raw) > max_bytes:
+        raise HTTPException(status_code=400, detail="File too large (max 5–8MB)")
 
     try:
-        content = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        content = raw.decode("latin-1")
-
-    try:
-        docs = parse_statement(content, bank=bank, fmt=format)
+        docs = parse_statement_file(raw, file.filename or name, bank=bank, fmt=format)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Failed to parse statement: {exc}") from exc
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to parse statement: {exc}",
+        ) from exc
 
     return _import_statement_docs(docs)
 

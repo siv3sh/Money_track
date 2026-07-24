@@ -5,3 +5,6 @@ certifi
 pydantic
 python-dotenv
 python-multipart
+openpyxl
+xlrd
+pdfplumber

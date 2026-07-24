@@ -135,7 +135,7 @@ export function EasyAdd({ onImported }: Props) {
       <div className="mb-4">
         <h2 className="text-lg font-semibold tracking-tight">Add money</h2>
         <p className="mt-0.5 text-sm text-[var(--muted)]">
-          Easiest: Quick add. Or paste one SMS. Or upload a bank CSV for July.
+          Quick add, paste an SMS, or upload CSV / Excel / PDF from your bank.
         </p>
       </div>
 
@@ -284,7 +284,7 @@ export function EasyAdd({ onImported }: Props) {
         <div className="space-y-3">
           <ol className="list-decimal space-y-1 pl-4 text-sm text-[var(--muted)]">
             <li>Open your bank app / net banking</li>
-            <li>Download account statement as CSV for July</li>
+            <li>Download statement as CSV, Excel, or PDF</li>
             <li>Upload that file below</li>
           </ol>
           <label className="text-xs text-[var(--muted)]">
@@ -303,11 +303,13 @@ export function EasyAdd({ onImported }: Props) {
           </label>
           <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-8 text-sm hover:border-[var(--accent)]">
             <FileUp size={22} className="text-[var(--accent)]" />
-            <span className="font-medium text-[var(--text)]">Tap to choose CSV / TXT</span>
-            <span className="text-xs text-[var(--muted)]">Max 2MB</span>
+            <span className="font-medium text-[var(--text)]">
+              Tap to choose CSV / Excel / PDF
+            </span>
+            <span className="text-xs text-[var(--muted)]">.csv .xlsx .xls .pdf · max ~8MB</span>
             <input
               type="file"
-              accept=".csv,.txt,.tsv,text/csv,text/plain"
+              accept=".csv,.txt,.tsv,.xlsx,.xls,.pdf,text/csv,text/plain,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               disabled={busy}
               onChange={(e) => void saveFile(e.target.files?.[0] ?? null)}
