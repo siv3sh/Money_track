@@ -66,4 +66,50 @@ export function deleteTransaction(id: string): Promise<{ ok: boolean }> {
   return request(`/transactions/${id}`, { method: 'DELETE' })
 }
 
+export interface StatementImportResult {
+  imported: number
+  skipped_duplicates: number
+  parsed: number
+  ids: string[]
+}
+
+export function importStatementText(payload: {
+  content: string
+  bank?: string
+  format?: 'auto' | 'csv' | 'text'
+}): Promise<StatementImportResult> {
+  return request('/statements/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function uploadStatementFile(
+  file: File,
+  bank?: string,
+  format: 'auto' | 'csv' | 'text' = 'auto',
+): Promise<StatementImportResult> {
+  const form = new FormData()
+  form.append('file', file)
+  if (bank) form.append('bank', bank)
+  form.append('format', format)
+
+  const res = await fetch(`${API_BASE}/statements/upload`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      if (body.detail) detail = body.detail
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `Upload failed (${res.status})`)
+  }
+  return res.json() as Promise<StatementImportResult>
+}
+
 export { API_BASE }

@@ -4,3 +4,4 @@ pymongo
 certifi
 pydantic
 python-dotenv
+python-multipart

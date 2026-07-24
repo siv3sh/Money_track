@@ -7,12 +7,13 @@ import certifi
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pymongo import DESCENDING, MongoClient
 
 from parser import parse_sms
+from statement_parser import parse_statement
 
 load_dotenv()
 
@@ -81,6 +82,22 @@ class SmsPayload(BaseModel):
         return cleaned
 
 
+class StatementImportPayload(BaseModel):
+    content: str = Field(..., min_length=1, max_length=2_000_000)
+    bank: str | None = Field(default=None, max_length=64)
+    format: str = Field(default="auto", pattern="^(auto|csv|text)$")
+
+
+def _fingerprint(doc: dict[str, Any]) -> str:
+    """Cheap dedupe key for re-imports."""
+    ts = doc.get("received_at")
+    if isinstance(ts, datetime):
+        day = ts.strftime("%Y-%m-%d")
+    else:
+        day = str(ts)[:10]
+    return f"{doc.get('type')}|{doc.get('amount')}|{day}|{(doc.get('raw_text') or '')[:80]}"
+
+
 def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
     out = {**doc, "_id": str(doc["_id"])}
     received = out.get("received_at")
@@ -120,11 +137,12 @@ def receive_sms(payload: SmsPayload):
         ) from exc
 
     if txn is None:
-        return {"stored": False, "reason": "not a transaction SMS"}
+        return {"stored": False, "reason": "not a transaction SMS (spam, OTP, or unparseable)"}
 
     doc = {
         **txn,
         "sender": payload.sender,
+        "source": "sms",
         "received_at": (
             datetime.fromtimestamp(payload.timestamp / 1000, tz=timezone.utc)
             if payload.timestamp
@@ -138,6 +156,77 @@ def receive_sms(payload: SmsPayload):
         raise HTTPException(status_code=500, detail="Failed to store transaction")
 
     return {"stored": True, "id": str(result.inserted_id), "transaction": txn}
+
+
+def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
+    if not docs:
+        return {"imported": 0, "skipped_duplicates": 0, "parsed": 0, "ids": []}
+
+    # Load recent fingerprints to skip obvious duplicates
+    existing: set[str] = set()
+    for doc in transactions.find({}, {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1}).limit(5000):
+        existing.add(_fingerprint(doc))
+
+    to_insert: list[dict[str, Any]] = []
+    skipped = 0
+    for doc in docs:
+        fp = _fingerprint(doc)
+        if fp in existing:
+            skipped += 1
+            continue
+        existing.add(fp)
+        to_insert.append(doc)
+
+    ids: list[str] = []
+    if to_insert:
+        result = transactions.insert_many(to_insert)
+        ids = [str(i) for i in result.inserted_ids]
+
+    return {
+        "imported": len(ids),
+        "skipped_duplicates": skipped,
+        "parsed": len(docs),
+        "ids": ids,
+    }
+
+
+@app.post("/statements/import")
+def import_statement(payload: StatementImportPayload):
+    """Paste CSV or line-based statement text (for July history, etc.)."""
+    try:
+        docs = parse_statement(payload.content, bank=payload.bank, fmt=payload.format)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Failed to parse statement: {exc}") from exc
+
+    return _import_statement_docs(docs)
+
+
+@app.post("/statements/upload")
+async def upload_statement(
+    file: UploadFile = File(...),
+    bank: str | None = Form(default=None),
+    format: str = Form(default="auto"),
+):
+    """Upload a .csv / .txt bank statement export."""
+    name = (file.filename or "").lower()
+    if not (name.endswith(".csv") or name.endswith(".txt") or name.endswith(".tsv")):
+        raise HTTPException(status_code=400, detail="Upload a .csv, .tsv, or .txt file")
+
+    raw = await file.read()
+    if len(raw) > 2_000_000:
+        raise HTTPException(status_code=400, detail="File too large (max 2MB)")
+
+    try:
+        content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        content = raw.decode("latin-1")
+
+    try:
+        docs = parse_statement(content, bank=bank, fmt=format)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Failed to parse statement: {exc}") from exc
+
+    return _import_statement_docs(docs)
 
 
 @app.get("/transactions")

@@ -8,6 +8,7 @@ import {
   fetchTransactions,
   API_BASE,
 } from './api'
+import { StatementImport } from './components/StatementImport'
 import { MerchantChart } from './components/MerchantChart'
 import { MonthlyChart } from './components/MonthlyChart'
 import { SummaryHeader } from './components/SummaryHeader'
@@ -165,6 +166,15 @@ export default function App() {
       ) : summary ? (
         <SummaryHeader summary={summary} />
       ) : null}
+
+      <div className="mt-6">
+        <StatementImport
+          onImported={() => {
+            void loadDashboard()
+            void loadTransactions()
+          }}
+        />
+      </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <section className="panel p-4">
