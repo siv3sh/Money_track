@@ -275,10 +275,10 @@ async def receive_sms(request: Request):
             "reason": "missing sender or body",
             "hint": (
                 "Your POST reached the server, but the body was empty. "
-                "In Get Contents of URL: set Request Body to Form (easier than JSON). "
-                "Add field sender = Sender variable, field body = Message Contents variable. "
-                "Do not type those words — tap the blue Magic Variable chips. "
-                "Test by receiving a real bank SMS (Play often has empty input)."
+                "Do NOT use Request Body = File. Use Form instead: "
+                "add one field named body = Shortcut Input (blue chip). "
+                "Put sender in the URL: .../sms-webhook?sender=VM-HDFCBK. "
+                "Pressing Play in the editor sends empty input — test with a real bank SMS."
             ),
             "received": {
                 "sender": sender,
