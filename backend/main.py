@@ -1,4 +1,5 @@
 import os
+import json
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -7,7 +8,7 @@ import certifi
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pymongo import DESCENDING, MongoClient
@@ -27,6 +28,7 @@ client = MongoClient(
 )
 db = client["money_tracker"]
 transactions = db["transactions"]
+webhook_events = db["webhook_events"]
 
 API_KEY = os.getenv("API_KEY", "")
 CORS_ORIGINS = [
@@ -126,18 +128,182 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _log_webhook_event(event: dict[str, Any]) -> None:
+    try:
+        webhook_events.insert_one(
+            {
+                **event,
+                "received_at": datetime.now(timezone.utc),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not log webhook event: {exc}")
+
+
+async def _extract_sms_fields(request: Request) -> dict[str, Any]:
+    """Accept JSON, form-urlencoded, multipart, or raw text JSON from iOS Shortcuts."""
+    content_type = (request.headers.get("content-type") or "").lower()
+    raw = await request.body()
+    text = raw.decode("utf-8", errors="replace").strip() if raw else ""
+
+    data: dict[str, Any] = {}
+    if "application/json" in content_type or (text.startswith("{") and text.endswith("}")):
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    data = parsed
+            except Exception:
+                data = {}
+    elif (
+        "application/x-www-form-urlencoded" in content_type
+        or "multipart/form-data" in content_type
+    ):
+        form = await request.form()
+        data = {str(k): form.get(k) for k in form.keys()}
+    elif text:
+        # Last resort: try JSON, else treat entire body as SMS text
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                data = parsed
+            else:
+                data = {"body": text}
+        except Exception:
+            data = {"body": text}
+
+    sender = (
+        data.get("sender")
+        or data.get("from")
+        or data.get("Sender")
+        or data.get("From")
+        or ""
+    )
+    body = (
+        data.get("body")
+        or data.get("message")
+        or data.get("text")
+        or data.get("content")
+        or data.get("Message")
+        or data.get("Body")
+        or ""
+    )
+    timestamp = data.get("timestamp") or data.get("time") or data.get("date")
+
+    return {
+        "sender": str(sender or "").strip(),
+        "body": str(body or "").strip(),
+        "timestamp": timestamp,
+        "raw_preview": text[:240],
+        "content_type": content_type or "unknown",
+    }
+
+
 @app.post("/sms-webhook", dependencies=[Depends(require_api_key)])
-def receive_sms(payload: SmsPayload):
+async def receive_sms(request: Request):
+    fields = await _extract_sms_fields(request)
+    sender = fields["sender"]
+    body = fields["body"]
+    timestamp = fields["timestamp"]
+
+    if not sender or not body:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "missing_sender_or_body",
+                "content_type": fields["content_type"],
+                "raw_preview": fields["raw_preview"],
+                "sender": sender,
+                "body": body,
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "missing sender or body",
+            "hint": (
+                "In Shortcuts, set Request Body to JSON and use Message variables "
+                "for sender + Message Contents for body (not typed text)."
+            ),
+            "received": {
+                "sender": sender,
+                "body": body,
+                "content_type": fields["content_type"],
+            },
+        }
+
+    # Classic Shortcuts bug: literal placeholder text instead of Message Contents
+    if body.lower() in {"shortcut input", "shortcut input.", "text", "message contents"}:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "placeholder_body",
+                "sender": sender,
+                "body": body,
+                "content_type": fields["content_type"],
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "body is placeholder text, not the real SMS",
+            "hint": (
+                "Delete the body value and insert the Magic Variable "
+                "'Message Contents' from the Message automation trigger."
+            ),
+            "received_body": body,
+        }
+
+    try:
+        ts_int: int | None = None
+        if timestamp is not None and str(timestamp).strip():
+            ts_int = int(float(str(timestamp)))
+        payload = SmsPayload(sender=sender, body=body, timestamp=ts_int)
+    except Exception as exc:  # noqa: BLE001
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "invalid_payload",
+                "error": str(exc),
+                "sender": sender,
+                "body": body[:200],
+            }
+        )
+        raise HTTPException(status_code=422, detail=f"Invalid SMS payload: {exc}") from exc
+
     try:
         txn = parse_sms(payload.sender, payload.body)
     except Exception as exc:  # noqa: BLE001
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "parse_error",
+                "error": str(exc),
+                "sender": payload.sender,
+                "body": payload.body[:200],
+            }
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse SMS: {exc}",
         ) from exc
 
     if txn is None:
-        return {"stored": False, "reason": "not a transaction SMS (spam, OTP, or unparseable)"}
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "not_a_transaction",
+                "sender": payload.sender,
+                "body": payload.body[:240],
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "not a transaction SMS (spam, OTP, or unparseable)",
+            "received": {"sender": payload.sender, "body": payload.body[:240]},
+        }
 
     doc = {
         **txn,
@@ -155,7 +321,33 @@ def receive_sms(payload: SmsPayload):
     if not result.inserted_id:
         raise HTTPException(status_code=500, detail="Failed to store transaction")
 
+    _log_webhook_event(
+        {
+            "stored": True,
+            "id": str(result.inserted_id),
+            "sender": payload.sender,
+            "amount": txn.get("amount"),
+            "type": txn.get("type"),
+            "body": payload.body[:240],
+        }
+    )
+
     return {"stored": True, "id": str(result.inserted_id), "transaction": txn}
+
+
+@app.get("/sms-webhook/debug")
+def sms_webhook_debug(limit: int = Query(default=20, ge=1, le=100)):
+    """Recent webhook attempts — use this to see why phone automations failed."""
+    rows = list(webhook_events.find().sort("received_at", DESCENDING).limit(limit))
+    out = []
+    for row in rows:
+        item = {k: v for k, v in row.items() if k != "_id"}
+        item["id"] = str(row["_id"])
+        received = item.get("received_at")
+        if isinstance(received, datetime):
+            item["received_at"] = received.isoformat()
+        out.append(item)
+    return {"count": len(out), "events": out}
 
 
 def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
