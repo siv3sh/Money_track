@@ -386,3 +386,274 @@ def summary_merchants(limit: int = Query(default=10, ge=1, le=50)):
         }
         for row in transactions.aggregate(pipeline)
     ]
+
+
+def _parse_optional_date(value: str | None, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            dt = datetime.strptime(value.strip()[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid date: {value}") from exc
+    if end_of_day and dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999000)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+@app.get("/reports/detailed")
+def reports_detailed(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    merchant_limit: int = Query(default=15, ge=1, le=50),
+):
+    """Rich report payload for the Reports page."""
+    start = _parse_optional_date(date_from)
+    end = _parse_optional_date(date_to, end_of_day=True)
+
+    match: dict[str, Any] = {}
+    if start or end:
+        received: dict[str, Any] = {}
+        if start:
+            received["$gte"] = start
+        if end:
+            received["$lte"] = end
+        match["received_at"] = received
+
+    base = [{"$match": match}] if match else []
+
+    totals_rows = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": "$type",
+                        "total": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                        "avg": {"$avg": "$amount"},
+                        "max": {"$max": "$amount"},
+                        "min": {"$min": "$amount"},
+                    }
+                }
+            ]
+        )
+    )
+    by_type = {r["_id"]: r for r in totals_rows}
+    debit = by_type.get("debit", {})
+    credit = by_type.get("credit", {})
+    total_debit = float(debit.get("total") or 0)
+    total_credit = float(credit.get("total") or 0)
+    debit_count = int(debit.get("count") or 0)
+    credit_count = int(credit.get("count") or 0)
+    count = debit_count + credit_count
+
+    def group_breakdown(field: str) -> list[dict[str, Any]]:
+        rows = list(
+            transactions.aggregate(
+                base
+                + [
+                    {
+                        "$group": {
+                            "_id": f"${field}",
+                            "debit": {
+                                "$sum": {
+                                    "$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]
+                                }
+                            },
+                            "credit": {
+                                "$sum": {
+                                    "$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]
+                                }
+                            },
+                            "count": {"$sum": 1},
+                        }
+                    },
+                    {"$sort": {"debit": -1}},
+                ]
+            )
+        )
+        return [
+            {
+                "name": str(r["_id"] or "Unknown"),
+                "debit": float(r.get("debit") or 0),
+                "credit": float(r.get("credit") or 0),
+                "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
+                "count": int(r.get("count") or 0),
+                "debit_share": (
+                    round(float(r.get("debit") or 0) / total_debit * 100, 1)
+                    if total_debit
+                    else 0.0
+                ),
+            }
+            for r in rows
+        ]
+
+    merchants = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
+                {
+                    "$group": {
+                        "_id": "$merchant",
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                        "avg": {"$avg": "$amount"},
+                    }
+                },
+                {"$sort": {"amount": -1}},
+                {"$limit": merchant_limit},
+            ]
+        )
+    )
+    merchant_rows = [
+        {
+            "merchant": str(r["_id"]),
+            "amount": float(r.get("amount") or 0),
+            "count": int(r.get("count") or 0),
+            "avg": round(float(r.get("avg") or 0), 2),
+            "share": (
+                round(float(r.get("amount") or 0) / total_debit * 100, 1)
+                if total_debit
+                else 0.0
+            ),
+        }
+        for r in merchants
+    ]
+
+    daily = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": {
+                            "$dateToString": {"format": "%Y-%m-%d", "date": "$received_at"}
+                        },
+                        "debit": {
+                            "$sum": {
+                                "$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]
+                            }
+                        },
+                        "credit": {
+                            "$sum": {
+                                "$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]
+                            }
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    daily_rows = [
+        {
+            "date": r["_id"],
+            "debit": float(r.get("debit") or 0),
+            "credit": float(r.get("credit") or 0),
+            "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in daily
+        if r.get("_id")
+    ]
+
+    weekday = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit"}},
+                {
+                    "$group": {
+                        "_id": {"$dayOfWeek": "$received_at"},
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    weekday_names = {1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat"}
+    weekday_rows = [
+        {
+            "day": weekday_names.get(int(r["_id"]), str(r["_id"])),
+            "amount": float(r.get("amount") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in weekday
+    ]
+
+    monthly = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": {
+                            "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
+                        },
+                        "debit": {
+                            "$sum": {
+                                "$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]
+                            }
+                        },
+                        "credit": {
+                            "$sum": {
+                                "$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]
+                            }
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    monthly_rows = [
+        {
+            "month": r["_id"],
+            "debit": float(r.get("debit") or 0),
+            "credit": float(r.get("credit") or 0),
+            "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in monthly
+        if r.get("_id")
+    ]
+
+    largest = list(transactions.find(match).sort("amount", DESCENDING).limit(10))
+    active_days = len(daily_rows)
+    avg_daily_debit = round(total_debit / active_days, 2) if active_days else 0.0
+
+    return {
+        "range": {"date_from": date_from, "date_to": date_to},
+        "overview": {
+            "total_debit": total_debit,
+            "total_credit": total_credit,
+            "net": total_credit - total_debit,
+            "count": count,
+            "debit_count": debit_count,
+            "credit_count": credit_count,
+            "avg_debit": round(float(debit.get("avg") or 0), 2),
+            "avg_credit": round(float(credit.get("avg") or 0), 2),
+            "max_debit": float(debit.get("max") or 0),
+            "max_credit": float(credit.get("max") or 0),
+            "active_days": active_days,
+            "avg_daily_debit": avg_daily_debit,
+        },
+        "by_bank": group_breakdown("bank"),
+        "by_card_type": group_breakdown("card_type"),
+        "by_source": group_breakdown("source"),
+        "merchants": merchant_rows,
+        "daily": daily_rows,
+        "weekday": weekday_rows,
+        "monthly": monthly_rows,
+        "largest": [_serialize(doc) for doc in largest],
+    }

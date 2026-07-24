@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: money-track-api
+    name: siv3sh-money-track-api
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free

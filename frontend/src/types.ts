@@ -43,6 +43,63 @@ export interface MerchantSpend {
   count: number
 }
 
+export interface ReportBreakdownRow {
+  name: string
+  debit: number
+  credit: number
+  net: number
+  count: number
+  debit_share: number
+}
+
+export interface ReportMerchantRow {
+  merchant: string
+  amount: number
+  count: number
+  avg: number
+  share: number
+}
+
+export interface ReportDailyRow {
+  date: string
+  debit: number
+  credit: number
+  net: number
+  count: number
+}
+
+export interface ReportWeekdayRow {
+  day: string
+  amount: number
+  count: number
+}
+
+export interface DetailedReport {
+  range: { date_from: string | null; date_to: string | null }
+  overview: {
+    total_debit: number
+    total_credit: number
+    net: number
+    count: number
+    debit_count: number
+    credit_count: number
+    avg_debit: number
+    avg_credit: number
+    max_debit: number
+    max_credit: number
+    active_days: number
+    avg_daily_debit: number
+  }
+  by_bank: ReportBreakdownRow[]
+  by_card_type: ReportBreakdownRow[]
+  by_source: ReportBreakdownRow[]
+  merchants: ReportMerchantRow[]
+  daily: ReportDailyRow[]
+  weekday: ReportWeekdayRow[]
+  monthly: MonthlyBucket[]
+  largest: Transaction[]
+}
+
 export const CARD_TYPE_LABELS: Record<CardType, string> = {
   credit_card: 'Credit card',
   debit_card: 'Debit card',

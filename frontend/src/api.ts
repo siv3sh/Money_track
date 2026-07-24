@@ -1,4 +1,4 @@
-import type { CardType, MerchantSpend, MonthlyBucket, Summary, Transaction, TxnType } from './types'
+import type { CardType, DetailedReport, MerchantSpend, MonthlyBucket, Summary, Transaction, TxnType } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:8000'
 
@@ -66,20 +66,17 @@ export function deleteTransaction(id: string): Promise<{ ok: boolean }> {
   return request(`/transactions/${id}`, { method: 'DELETE' })
 }
 
-export function createManualTransaction(payload: {
-  type: 'debit' | 'credit'
-  amount: number
-  merchant?: string
-  bank?: string
-  date?: string
-  note?: string
-  card_type?: 'credit_card' | 'debit_card' | 'upi' | 'bank_account'
-}): Promise<{ ok: boolean; id: string }> {
-  return request('/transactions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
+export function fetchDetailedReport(params: {
+  date_from?: string
+  date_to?: string
+  merchant_limit?: number
+} = {}): Promise<DetailedReport> {
+  const qs = new URLSearchParams()
+  if (params.date_from) qs.set('date_from', params.date_from)
+  if (params.date_to) qs.set('date_to', params.date_to)
+  if (params.merchant_limit != null) qs.set('merchant_limit', String(params.merchant_limit))
+  const q = qs.toString()
+  return request(`/reports/detailed${q ? `?${q}` : ''}`)
 }
 
 export interface StatementImportResult {
@@ -87,18 +84,6 @@ export interface StatementImportResult {
   skipped_duplicates: number
   parsed: number
   ids: string[]
-}
-
-export function importStatementText(payload: {
-  content: string
-  bank?: string
-  format?: 'auto' | 'csv' | 'text'
-}): Promise<StatementImportResult> {
-  return request('/statements/import', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
 }
 
 export async function uploadStatementFile(
