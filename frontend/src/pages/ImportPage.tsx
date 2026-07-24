@@ -50,7 +50,7 @@ export function ImportPage() {
   }
 
   return (
-    <div className="mx-auto max-w-xl space-y-4">
+    <div className="mx-auto max-w-2xl space-y-4 xl:max-w-3xl">
       <section className="panel p-5">
         <h2 className="text-lg font-semibold tracking-tight">Import statement</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">

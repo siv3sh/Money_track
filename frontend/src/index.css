@@ -62,6 +62,17 @@ body {
   box-shadow: var(--shadow);
 }
 
+.app-shell {
+  width: 100%;
+}
+
+@media (min-width: 1600px) {
+  .app-shell {
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+  }
+}
+
 .btn {
   display: inline-flex;
   align-items: center;

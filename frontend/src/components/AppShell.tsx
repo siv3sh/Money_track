@@ -1,13 +1,13 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { FileSpreadsheet, LayoutDashboard, Moon, PieChart, RefreshCw, Sun } from 'lucide-react'
+import { FileSpreadsheet, LayoutDashboard, Moon, PieChart, Sun } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 const THEME_KEY = 'money-track-theme'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `rounded-lg px-3 py-1.5 text-sm ${
+  `inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
     isActive
-      ? 'bg-[var(--accent)] text-white'
+      ? 'bg-[var(--accent)] text-white shadow-sm'
       : 'text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]'
   }`
 
@@ -27,59 +27,45 @@ function useDarkMode() {
   return { dark, toggle: () => setDark((d) => !d) }
 }
 
-interface Props {
-  onRefresh?: () => void
-}
-
-export function AppShell({ onRefresh }: Props) {
+export function AppShell() {
   const { dark, toggle } = useDarkMode()
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6">
-      <header className="app-header mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--muted)]">
-            Personal finance
-          </p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">Money Track</h1>
+    <div className="app-shell mx-auto min-h-screen w-full max-w-[1800px] px-4 py-5 sm:px-6 lg:px-8 xl:px-10">
+      <header className="app-header mb-5 flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border)] pb-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Money Track</h1>
+            <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+              Cash-flow control
+            </span>
+          </div>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            SMS capture · statements · detailed reports
+            Live activity · spend patterns · actionable reports
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {onRefresh ? (
-            <button type="button" onClick={onRefresh} className="btn">
-              <RefreshCw size={14} />
-              Refresh
-            </button>
-          ) : null}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <nav className="app-nav flex flex-wrap gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
+            <NavLink to="/" end className={linkClass}>
+              <LayoutDashboard size={14} />
+              Dashboard
+            </NavLink>
+            <NavLink to="/reports" className={linkClass}>
+              <PieChart size={14} />
+              Reports
+            </NavLink>
+            <NavLink to="/import" className={linkClass}>
+              <FileSpreadsheet size={14} />
+              Import
+            </NavLink>
+          </nav>
           <button type="button" onClick={toggle} aria-label="Toggle dark mode" className="btn">
             {dark ? <Sun size={14} /> : <Moon size={14} />}
             {dark ? 'Light' : 'Dark'}
           </button>
         </div>
       </header>
-
-      <nav className="app-nav mb-6 flex flex-wrap gap-2 border-b border-[var(--border)] pb-3">
-        <NavLink to="/" end className={linkClass}>
-          <span className="inline-flex items-center gap-1.5">
-            <LayoutDashboard size={14} />
-            Dashboard
-          </span>
-        </NavLink>
-        <NavLink to="/reports" className={linkClass}>
-          <span className="inline-flex items-center gap-1.5">
-            <PieChart size={14} />
-            Reports
-          </span>
-        </NavLink>
-        <NavLink to="/import" className={linkClass}>
-          <span className="inline-flex items-center gap-1.5">
-            <FileSpreadsheet size={14} />
-            Import
-          </span>
-        </NavLink>
-      </nav>
 
       <Outlet />
     </div>

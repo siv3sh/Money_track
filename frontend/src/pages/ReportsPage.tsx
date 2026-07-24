@@ -299,7 +299,7 @@ export function ReportsPage() {
                 Financial performance report
               </div>
               <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-                Income &amp; Expense Analysis
+                Cash-flow control report
               </h2>
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--muted)]">
                 <span className="inline-flex items-center gap-1.5">
@@ -308,6 +308,10 @@ export function ReportsPage() {
                 </span>
                 <span>Generated {new Date().toLocaleDateString('en-IN')}</span>
               </div>
+              <p className="mt-2 max-w-3xl text-sm text-[var(--muted)]">
+                Use this page to see where money comes from, where it goes, and which habits to
+                change first.
+              </p>
             </div>
             <div className="report-actions flex gap-2">
               <button
@@ -407,7 +411,7 @@ export function ReportsPage() {
               title="Financial position"
               description="A high-level view of cash inflow, outflow, activity, and spending behaviour."
             />
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
               <StatCard
                 label="Total income"
                 value={formatINR(o.total_credit)}
@@ -460,9 +464,9 @@ export function ReportsPage() {
 
           <section className="report-section">
             <SectionHeading
-              eyebrow="02 · Management insights"
-              title="Key observations"
-              description="Automatically calculated indicators that highlight notable patterns in this period."
+              eyebrow="02 · Control signals"
+              title="What to act on first"
+              description="Four signals that explain how money is moving and where control is weakest."
             />
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <article className="panel p-5">
@@ -542,8 +546,8 @@ export function ReportsPage() {
               title="Cash flow visualizations"
               description="Interactive amCharts views of income, expenses, cumulative net, and weekday behaviour."
             />
-            <div className="grid gap-4 lg:grid-cols-2">
-              <article className="panel p-4">
+            <div className="grid gap-4 xl:grid-cols-3">
+              <article className="panel p-4 xl:col-span-2">
                 <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
                   Monthly income vs expenses
                 </h4>
@@ -557,7 +561,7 @@ export function ReportsPage() {
                 <p className="mb-2 text-xs text-[var(--muted)]">Where spending concentrates across the week</p>
                 <WeekdaySpendChart data={report.weekday} />
               </article>
-              <article className="panel p-4 lg:col-span-2">
+              <article className="panel p-4 xl:col-span-2">
                 <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
                   Daily cash-flow timeline
                 </h4>
@@ -589,7 +593,7 @@ export function ReportsPage() {
               title="Structure of money movement"
               description="Donut and gauge views that show how activity is split across banks, rails, sources, and savings."
             />
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 xl:grid-cols-3">
               <article className="panel p-4">
                 <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
                   Expense by payment type
@@ -616,7 +620,7 @@ export function ReportsPage() {
                 </h4>
                 <TransactionMixChart debitCount={o.debit_count} creditCount={o.credit_count} />
               </article>
-              <article className="panel p-4 lg:col-span-2">
+              <article className="panel p-4 xl:col-span-2">
                 <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
                   Savings-rate gauge
                 </h4>
@@ -626,7 +630,7 @@ export function ReportsPage() {
                 <SavingsGaugeChart rate={savingsRate} />
               </article>
             </div>
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 grid gap-4 xl:grid-cols-3">
               <BreakdownTable title="By bank" rows={report.by_bank} nameLabel="Bank" />
               <BreakdownTable
                 title="By payment type"
@@ -643,7 +647,7 @@ export function ReportsPage() {
               title="Merchant analysis"
               description="Ranked visual and tabular view of where money was spent, including frequency and share."
             />
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 xl:grid-cols-2">
               <article className="panel p-4">
                 <h4 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
                   Top merchants by spend
