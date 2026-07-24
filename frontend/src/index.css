@@ -83,3 +83,97 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+.report-page table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.report-page table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.report-page table thead {
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+}
+
+.report-section {
+  scroll-margin-top: 1rem;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  :root,
+  .dark {
+    --bg: #ffffff;
+    --bg-accent: #ffffff;
+    --surface: #ffffff;
+    --surface-2: #f6f7f9;
+    --text: #111827;
+    --muted: #596273;
+    --border: #d8dde5;
+    --debit: #a92f26;
+    --credit: #176b42;
+    --accent: #1759b8;
+    --shadow: none;
+  }
+
+  body {
+    background: #ffffff;
+    font-size: 10pt;
+  }
+
+  .app-header,
+  .app-nav,
+  .report-actions,
+  .report-filters {
+    display: none !important;
+  }
+
+  #root > div,
+  #root > div > div {
+    max-width: none;
+    min-height: auto;
+    padding: 0;
+  }
+
+  .report-page {
+    display: block;
+  }
+
+  .report-page .panel {
+    box-shadow: none;
+  }
+
+  .report-cover {
+    break-inside: avoid;
+  }
+
+  .report-section {
+    break-before: auto;
+    break-inside: avoid-page;
+    margin-top: 10mm;
+  }
+
+  .report-page table {
+    font-size: 8.5pt;
+  }
+
+  .report-page table th,
+  .report-page table td {
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+
+  .report-page .max-h-80 {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .report-footer {
+    margin-top: 10mm;
+  }
+}

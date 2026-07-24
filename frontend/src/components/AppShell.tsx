@@ -36,7 +36,7 @@ export function AppShell({ onRefresh }: Props) {
 
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <header className="app-header mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--muted)]">
             Personal finance
@@ -60,7 +60,7 @@ export function AppShell({ onRefresh }: Props) {
         </div>
       </header>
 
-      <nav className="mb-6 flex flex-wrap gap-2 border-b border-[var(--border)] pb-3">
+      <nav className="app-nav mb-6 flex flex-wrap gap-2 border-b border-[var(--border)] pb-3">
         <NavLink to="/" end className={linkClass}>
           <span className="inline-flex items-center gap-1.5">
             <LayoutDashboard size={14} />
