@@ -130,29 +130,24 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-6xl px-4 py-6 sm:px-6">
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto min-h-screen max-w-6xl px-4 py-8 sm:px-6">
+      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Money Track</h1>
-          <p className="text-sm text-[var(--muted)]">
-            SMS → parse → MongoDB · API {API_BASE}
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--muted)]">
+            Personal finance
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight">Money Track</h1>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Bank SMS parsed into spend · connected to{' '}
+            <span className="text-[var(--text)]">{API_BASE.replace(/^https?:\/\//, '')}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={refresh}
-            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm"
-          >
+          <button type="button" onClick={refresh} className="btn">
             <RefreshCw size={14} />
             Refresh
           </button>
-          <button
-            type="button"
-            onClick={toggle}
-            aria-label="Toggle dark mode"
-            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm"
-          >
+          <button type="button" onClick={toggle} aria-label="Toggle dark mode" className="btn">
             {dark ? <Sun size={14} /> : <Moon size={14} />}
             {dark ? 'Light' : 'Dark'}
           </button>
@@ -160,7 +155,7 @@ export default function App() {
       </header>
 
       {error ? (
-        <div className="mb-4 rounded-md border border-[var(--debit)]/40 bg-[var(--debit)]/10 px-3 py-2 text-sm text-[var(--debit)]">
+        <div className="mb-4 rounded-xl border border-[var(--debit)]/35 bg-[var(--debit)]/10 px-4 py-3 text-sm text-[var(--debit)]">
           {error}
         </div>
       ) : null}
@@ -172,24 +167,27 @@ export default function App() {
       ) : null}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
-          <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+        <section className="panel p-4">
+          <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
             Monthly trend
           </h2>
           <MonthlyChart data={monthly} />
         </section>
-        <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
-          <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
+        <section className="panel p-4">
+          <h2 className="mb-3 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
             Spend by merchant
           </h2>
           <MerchantChart data={merchants} />
         </section>
       </div>
 
-      <section className="mt-6">
-        <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-[var(--muted)]">
-          Transactions
-        </h2>
+      <section className="mt-8">
+        <div className="mb-3 flex items-baseline justify-between gap-2">
+          <h2 className="text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+            Transactions
+          </h2>
+          <p className="text-xs text-[var(--muted)]">Tap a row to read the full SMS</p>
+        </div>
         <TransactionTable
           rows={rows}
           filters={filters}

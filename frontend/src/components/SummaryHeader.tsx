@@ -10,12 +10,10 @@ function Stat({
   label,
   value,
   tone,
-  hint,
 }: {
   label: string
   value: string
   tone?: 'debit' | 'credit' | 'neutral'
-  hint?: string | null
 }) {
   const color =
     tone === 'debit'
@@ -25,10 +23,13 @@ function Stat({
         : 'text-[var(--text)]'
 
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-[var(--muted)]">{label}</div>
-      <div className={`mt-1 text-xl font-semibold tabular-nums ${color}`}>{value}</div>
-      {hint ? <div className="mt-1 text-xs text-[var(--muted)]">{hint}</div> : null}
+    <div className="panel px-4 py-4">
+      <div className="text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+        {label}
+      </div>
+      <div className={`mt-2 text-2xl font-semibold tracking-tight tabular-nums ${color}`}>
+        {value}
+      </div>
     </div>
   )
 }
@@ -52,12 +53,12 @@ export function SummaryHeader({ summary }: Props) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <div className="flex items-center gap-1 text-xs uppercase tracking-wide text-[var(--muted)]">
+        <div className="panel px-4 py-3">
+          <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
             <ArrowDownRight size={14} className="text-[var(--debit)]" />
             This month debit
           </div>
-          <div className="mt-1 text-lg font-semibold tabular-nums text-[var(--debit)]">
+          <div className="mt-1.5 text-xl font-semibold tabular-nums text-[var(--debit)]">
             {formatINR(summary.this_month_debit)}
           </div>
           <div className="mt-1 text-xs text-[var(--muted)]">
@@ -65,12 +66,12 @@ export function SummaryHeader({ summary }: Props) {
             {debitDelta ? ` · ${debitDelta}` : ''}
           </div>
         </div>
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <div className="flex items-center gap-1 text-xs uppercase tracking-wide text-[var(--muted)]">
+        <div className="panel px-4 py-3">
+          <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
             <ArrowUpRight size={14} className="text-[var(--credit)]" />
             This month credit
           </div>
-          <div className="mt-1 text-lg font-semibold tabular-nums text-[var(--credit)]">
+          <div className="mt-1.5 text-xl font-semibold tabular-nums text-[var(--credit)]">
             {formatINR(summary.this_month_credit)}
           </div>
           <div className="mt-1 text-xs text-[var(--muted)]">
@@ -78,10 +79,12 @@ export function SummaryHeader({ summary }: Props) {
             {creditDelta ? ` · ${creditDelta}` : ''}
           </div>
         </div>
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-          <div className="text-xs uppercase tracking-wide text-[var(--muted)]">This month net</div>
+        <div className="panel px-4 py-3">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-[var(--muted)]">
+            This month net
+          </div>
           <div
-            className={`mt-1 text-lg font-semibold tabular-nums ${
+            className={`mt-1.5 text-xl font-semibold tabular-nums ${
               summary.this_month_net >= 0 ? 'text-[var(--credit)]' : 'text-[var(--debit)]'
             }`}
           >

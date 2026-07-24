@@ -1,4 +1,5 @@
-import { Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import type { CardType, Transaction, TxnType } from '../types'
 import { CARD_TYPE_LABELS } from '../types'
 import { formatDate, formatINR } from '../lib/format'
@@ -25,9 +26,100 @@ interface Props {
 }
 
 const selectClass =
-  'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]'
+  'rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm text-[var(--text)]'
 const inputClass =
-  'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm text-[var(--text)]'
+  'rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm text-[var(--text)]'
+
+function TransactionRow({
+  txn,
+  onDelete,
+}: {
+  txn: Transaction
+  onDelete: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const message = txn.raw_text || '—'
+
+  return (
+    <article className="border-b border-[var(--border)] last:border-0">
+      <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 text-[var(--muted)]">
+              {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </span>
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span
+                  className={`text-base font-semibold tabular-nums ${
+                    txn.type === 'debit' ? 'text-[var(--debit)]' : 'text-[var(--credit)]'
+                  }`}
+                >
+                  {txn.type === 'debit' ? '−' : '+'}
+                  {formatINR(txn.amount)}
+                </span>
+                <span className="rounded-md bg-[var(--surface-2)] px-1.5 py-0.5 text-xs capitalize text-[var(--muted)]">
+                  {txn.type}
+                </span>
+                {txn.merchant ? (
+                  <span className="truncate text-sm font-medium">{txn.merchant}</span>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs text-[var(--muted)]">
+                <span>{formatDate(txn.received_at)}</span>
+                <span>·</span>
+                <span>{txn.bank || 'Unknown bank'}</span>
+                <span>·</span>
+                <span>
+                  {txn.card_type ? CARD_TYPE_LABELS[txn.card_type] : '—'}
+                  {txn.account_last4 ? ` ·••${txn.account_last4}` : ''}
+                </span>
+              </div>
+              {!open ? (
+                <p className="line-clamp-1 text-sm text-[var(--muted)]">{message}</p>
+              ) : null}
+            </div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          title="Delete"
+          className="self-end rounded-lg p-2 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--debit)] sm:self-start"
+          onClick={() => {
+            if (window.confirm('Delete this transaction?')) onDelete(txn._id)
+          }}
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+
+      {open ? (
+        <div className="border-t border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 sm:pl-11">
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
+            SMS message
+          </div>
+          <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-[var(--text)]">
+            {message}
+          </pre>
+          {txn.balance != null ? (
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              Available balance: {formatINR(txn.balance)}
+            </p>
+          ) : null}
+          {txn.sender ? (
+            <p className="mt-1 text-xs text-[var(--muted)]">Sender: {txn.sender}</p>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  )
+}
 
 export function TransactionTable({
   rows,
@@ -42,7 +134,7 @@ export function TransactionTable({
 }: Props) {
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="panel flex flex-wrap items-end gap-2 p-3">
         <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
           Card type
           <select
@@ -113,86 +205,29 @@ export function TransactionTable({
         </label>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface)]">
-        <table className="min-w-full text-left text-sm">
-          <thead className="border-b border-[var(--border)] text-xs uppercase tracking-wide text-[var(--muted)]">
-            <tr>
-              <th className="px-3 py-2 font-medium">Date</th>
-              <th className="px-3 py-2 font-medium">Bank</th>
-              <th className="px-3 py-2 font-medium">Type</th>
-              <th className="px-3 py-2 font-medium">Amount</th>
-              <th className="px-3 py-2 font-medium">Merchant</th>
-              <th className="px-3 py-2 font-medium">Card</th>
-              <th className="px-3 py-2 font-medium" />
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-[var(--muted)]">
-                  Loading…
-                </td>
-              </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-[var(--muted)]">
-                  No transactions match these filters
-                </td>
-              </tr>
-            ) : (
-              rows.map((txn) => (
-                <tr key={txn._id} className="border-b border-[var(--border)] last:border-0">
-                  <td className="whitespace-nowrap px-3 py-2 text-[var(--muted)]">
-                    {formatDate(txn.received_at)}
-                  </td>
-                  <td className="px-3 py-2">{txn.bank || '—'}</td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={
-                        txn.type === 'debit' ? 'text-[var(--debit)]' : 'text-[var(--credit)]'
-                      }
-                    >
-                      {txn.type}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 font-medium tabular-nums">
-                    {formatINR(txn.amount)}
-                  </td>
-                  <td className="max-w-[180px] truncate px-3 py-2" title={txn.merchant || undefined}>
-                    {txn.merchant || '—'}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-[var(--muted)]">
-                    {txn.card_type ? CARD_TYPE_LABELS[txn.card_type] : '—'}
-                    {txn.account_last4 ? ` ·••${txn.account_last4}` : ''}
-                  </td>
-                  <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      title="Delete"
-                      className="rounded p-1 text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--debit)]"
-                      onClick={() => {
-                        if (window.confirm('Delete this transaction?')) onDelete(txn._id)
-                      }}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      <div className="panel overflow-hidden">
+        {loading ? (
+          <p className="px-4 py-10 text-center text-sm text-[var(--muted)]">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="px-4 py-10 text-center text-sm text-[var(--muted)]">
+            No transactions match these filters
+          </p>
+        ) : (
+          rows.map((txn) => (
+            <TransactionRow key={txn._id} txn={txn} onDelete={onDelete} />
+          ))
+        )}
       </div>
 
       <div className="flex items-center justify-between text-sm text-[var(--muted)]">
         <span>
           Page {page + 1}
-          {rows.length ? ` · showing ${rows.length} of up to ${pageSize}` : ''}
+          {rows.length ? ` · ${rows.length} of up to ${pageSize}` : ''}
         </span>
         <div className="flex gap-2">
           <button
             type="button"
-            className="rounded-md border border-[var(--border)] px-3 py-1 disabled:opacity-40"
+            className="btn"
             disabled={page === 0 || loading}
             onClick={() => onPageChange(page - 1)}
           >
@@ -200,7 +235,7 @@ export function TransactionTable({
           </button>
           <button
             type="button"
-            className="rounded-md border border-[var(--border)] px-3 py-1 disabled:opacity-40"
+            className="btn"
             disabled={!hasMore || loading}
             onClick={() => onPageChange(page + 1)}
           >
