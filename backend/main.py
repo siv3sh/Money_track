@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import certifi
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
@@ -18,7 +19,11 @@ load_dotenv()
 app = FastAPI(title="SMS Money Tracker")
 
 MONGO_URI = os.environ["MONGO_URI"]
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=10000,
+    tlsCAFile=certifi.where(),
+)
 db = client["money_tracker"]
 transactions = db["transactions"]
 
