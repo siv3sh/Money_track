@@ -26,10 +26,16 @@ def build_finance_context(analytics: dict[str, Any]) -> dict[str, Any]:
             "debit": o.get("total_debit"),
             "credit": o.get("total_credit"),
             "net": o.get("net"),
+            "lifestyle_spend": o.get("lifestyle_spend"),
+            "transfers_debit": o.get("transfers_debit"),
+            "investments_debit": o.get("investments_debit"),
             "debit_count": o.get("debit_count"),
             "credit_count": o.get("credit_count"),
             "avg_daily_debit": o.get("avg_daily_debit"),
+            "avg_daily_lifestyle": o.get("avg_daily_lifestyle"),
             "liquid_total": o.get("liquid_total"),
+            "sms_liquid_total": o.get("sms_liquid_total"),
+            "liquid_source": o.get("liquid_source"),
             "net_worth_estimate": o.get("net_worth_estimate"),
             "investment_to_income_pct": o.get("investment_to_income"),
         },
@@ -37,6 +43,10 @@ def build_finance_context(analytics: dict[str, Any]) -> dict[str, Any]:
         "by_category": [
             {"name": r["name"], "debit": r["debit"], "credit": r["credit"], "count": r["count"]}
             for r in (analytics.get("by_category") or [])[:15]
+        ],
+        "by_category_lifestyle": [
+            {"name": r["name"], "debit": r["debit"], "credit": r["credit"], "count": r["count"]}
+            for r in (analytics.get("by_category_lifestyle") or [])[:12]
         ],
         "by_bank": [
             {"name": r["name"], "debit": r["debit"], "credit": r["credit"], "net": r["net"]}

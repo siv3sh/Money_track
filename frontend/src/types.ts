@@ -77,6 +77,12 @@ export interface AnalyticsPayload {
     active_days: number
     avg_daily_debit: number
     liquid_total: number
+    sms_liquid_total: number
+    liquid_source: 'sms' | 'indmoney' | string
+    lifestyle_spend: number
+    transfers_debit: number
+    investments_debit: number
+    avg_daily_lifestyle: number
     total_invested: number
     net_worth_estimate: number
     investment_to_income: number
@@ -100,7 +106,9 @@ export interface AnalyticsPayload {
   by_card_type: BreakdownRow[]
   by_source: BreakdownRow[]
   by_category: BreakdownRow[]
+  by_category_lifestyle: BreakdownRow[]
   category_monthly: Array<Record<string, string | number>>
+  lifestyle_category_monthly: Array<Record<string, string | number>>
   source_monthly: Array<{
     month: string
     source: string
@@ -120,6 +128,9 @@ export interface AnalyticsPayload {
     account_last4: string
     balance: number
     as_of: string | null
+    source?: string
+    incomplete?: boolean
+    note?: string
   }>
   income_sources: Array<{ name: string; amount: number; count: number }>
   investments: {
@@ -144,6 +155,14 @@ export interface AnalyticsPayload {
     }>
     note: string
   }
+  indmoney_snapshot?: {
+    total_networth: number
+    total_invested: number
+    total_current_value: number
+    liabilities: number
+    captured_at: string | null
+    source?: string
+  } | null
   alerts: AnalyticsAlert[]
   filters: { banks: string[] }
 }

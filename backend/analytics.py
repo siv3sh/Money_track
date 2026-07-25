@@ -92,6 +92,10 @@ def _instrument_for(merchant: str | None, raw_text: str | None) -> tuple[str, st
     return label, "Other Investments"
 
 
+# Debits that move money but are not lifestyle consumption
+NON_LIFESTYLE_CATEGORIES = frozenset({"Transfers", "Investments", "Income"})
+
+
 def _match_range(
     date_from: datetime | None,
     date_to: datetime | None,
@@ -477,16 +481,28 @@ def build_analytics(
     for r in transactions.aggregate(bal_pipeline):
         key = r.get("_id") or {}
         as_of = r.get("as_of")
+        bank = str(key.get("bank") or "Unknown")
+        last4 = str(key.get("last4") or "????")
+        incomplete = bank.lower() == "unknown" or last4 in {"????", "", "none", "null"}
         accounts.append(
             {
-                "bank": str(key.get("bank") or "Unknown"),
-                "account_last4": str(key.get("last4") or "????"),
+                "bank": bank,
+                "account_last4": last4,
                 "balance": float(r.get("balance") or 0),
                 "as_of": as_of.isoformat() if isinstance(as_of, datetime) else None,
+                "source": "sms",
+                "incomplete": incomplete,
+                "note": (
+                    "Last balance from SMS — may be incomplete or stale"
+                    if incomplete
+                    else "Last balance parsed from SMS"
+                ),
             }
         )
     accounts.sort(key=lambda x: -x["balance"])
-    liquid_total = sum(a["balance"] for a in accounts)
+    sms_liquid_total = sum(a["balance"] for a in accounts)
+    liquid_total = sms_liquid_total
+    liquid_source = "sms"
 
     # Investments inferred — group by canonical instrument, not raw narration
     inv_match = {**match, "category": "Investments"}
@@ -610,6 +626,28 @@ def build_analytics(
         for name, vals in sorted(income_totals.items(), key=lambda kv: -kv[1]["amount"])[:12]
     ]
 
+    by_category = group_breakdown("category")
+    transfers_debit = next(
+        (float(r["debit"]) for r in by_category if r.get("name") == "Transfers"), 0.0
+    )
+    investments_debit = next(
+        (float(r["debit"]) for r in by_category if r.get("name") == "Investments"), 0.0
+    )
+    lifestyle_rows = [
+        r
+        for r in by_category
+        if r.get("name") not in NON_LIFESTYLE_CATEGORIES and float(r.get("debit") or 0) > 0
+    ]
+    lifestyle_spend = round(sum(float(r["debit"]) for r in lifestyle_rows), 2)
+    lifestyle_category_monthly = []
+    for row in category_monthly_rows:
+        filtered = {"month": row["month"]}
+        for k, v in row.items():
+            if k == "month" or k in NON_LIFESTYLE_CATEGORIES:
+                continue
+            filtered[k] = v
+        lifestyle_category_monthly.append(filtered)
+
     # Alerts / insights
     alerts = _build_alerts(
         transactions,
@@ -617,7 +655,7 @@ def build_analytics(
         total_debit=total_debit,
         debit_count=debit_count,
         avg_debit=float(debit.get("avg") or 0),
-        by_category=group_breakdown("category"),
+        by_category=by_category,
         recurring_merchants=recurring_merchants[:8],
         monthly_rows=monthly_rows,
         total_credit=total_credit,
@@ -658,6 +696,7 @@ def build_analytics(
                 for row in snap.get("investments") or []:
                     if row.get("asset_type") == "SA":
                         liquid_total = float(row.get("current_value") or liquid_total)
+                        liquid_source = "indmoney"
                         break
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load networth snapshot: {exc}")
@@ -680,7 +719,15 @@ def build_analytics(
             "max_credit": float(credit.get("max") or 0),
             "active_days": active_days,
             "avg_daily_debit": round(total_debit / active_days, 2) if active_days else 0.0,
+            "lifestyle_spend": lifestyle_spend,
+            "transfers_debit": round(transfers_debit, 2),
+            "investments_debit": round(investments_debit, 2),
+            "avg_daily_lifestyle": round(lifestyle_spend / active_days, 2)
+            if active_days
+            else 0.0,
             "liquid_total": liquid_total,
+            "sms_liquid_total": round(sms_liquid_total, 2),
+            "liquid_source": liquid_source,
             "total_invested": total_invested,
             "net_worth_estimate": net_worth_estimate,
             "investment_to_income": round(total_invested / total_credit * 100, 1)
@@ -696,8 +743,10 @@ def build_analytics(
         "by_bank": group_breakdown("bank"),
         "by_card_type": group_breakdown("card_type"),
         "by_source": group_breakdown("source"),
-        "by_category": group_breakdown("category"),
+        "by_category": by_category,
+        "by_category_lifestyle": lifestyle_rows,
         "category_monthly": category_monthly_rows,
+        "lifestyle_category_monthly": lifestyle_category_monthly,
         "source_monthly": source_monthly,
         "merchants": merchant_rows,
         "recurring": {

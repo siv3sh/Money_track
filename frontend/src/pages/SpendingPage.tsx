@@ -15,23 +15,35 @@ export function SpendingPage() {
   const { data, loading, error } = useFilters()
   const o = data?.overview
 
+  const lifestyleCats = data?.by_category_lifestyle?.length
+    ? data.by_category_lifestyle
+    : (data?.by_category || []).filter(
+        (c) => !['Transfers', 'Investments', 'Income'].includes(c.name) && c.debit > 0,
+      )
+
+  const lifestyleMonthly = data?.lifestyle_category_monthly?.length
+    ? data.lifestyle_category_monthly
+    : data?.category_monthly || []
+
   const categoryKeys = useMemo(() => {
     const keys = new Set<string>()
-    for (const row of data?.category_monthly || []) {
+    for (const row of lifestyleMonthly) {
       for (const k of Object.keys(row)) {
-        if (k !== 'month') keys.add(k)
+        if (k !== 'month' && !['Transfers', 'Investments', 'Income'].includes(k)) {
+          keys.add(k)
+        }
       }
     }
     return [...keys].slice(0, 8)
-  }, [data?.category_monthly])
+  }, [lifestyleMonthly])
 
-  const topCat = data?.by_category?.[0]
+  const topCat = lifestyleCats[0]
 
   return (
     <div className="fade-in">
       <PageHeader
         title="Spending Analysis"
-        description="Category mix, merchant concentration, recurring charges, and calendar patterns."
+        description="Lifestyle spend excludes Transfers and Investments so self-moves and SIPs don’t look like shopping."
       />
       <FilterBar />
 
@@ -46,34 +58,40 @@ export function SpendingPage() {
       ) : o && data ? (
         <>
           <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Total spent" value={formatINR(o.total_debit)} tone="debit" />
             <KpiCard
-              label="Top category"
+              label="Lifestyle spend"
+              value={formatINR(o.lifestyle_spend ?? o.total_debit)}
+              tone="debit"
+              hint="Excludes transfers & investments"
+            />
+            <KpiCard
+              label="All bank debits"
+              value={formatINR(o.total_debit)}
+              hint={`Transfers ${formatINR(o.transfers_debit ?? 0)} · Invest ${formatINR(o.investments_debit ?? 0)}`}
+            />
+            <KpiCard
+              label="Top lifestyle category"
               value={topCat?.name || '—'}
               hint={topCat ? formatINR(topCat.debit) : undefined}
             />
             <KpiCard
-              label="Recurring spend"
-              value={formatINR(data.recurring.recurring_amount)}
-              hint="Merchants with 3+ debits"
-            />
-            <KpiCard
-              label="One-time spend"
-              value={formatINR(data.recurring.onetime_amount)}
-              hint="Everything else"
+              label="Avg daily lifestyle"
+              value={formatINR(o.avg_daily_lifestyle ?? o.avg_daily_debit)}
+              hint={`${o.active_days} active days`}
             />
           </div>
 
           <div className="mb-5 grid gap-4 xl:grid-cols-2">
-            <ChartCard title="Category-wise expenses" subtitle="Donut of debit spend">
+            <ChartCard
+              title="Lifestyle categories"
+              subtitle="Transfers & Investments excluded"
+            >
               <DonutChart
-                data={data.by_category
-                  .filter((c) => c.name !== 'Income')
-                  .map((c) => ({ name: c.name, value: c.debit }))}
+                data={lifestyleCats.map((c) => ({ name: c.name, value: c.debit }))}
               />
             </ChartCard>
-            <ChartCard title="Category trend" subtitle="Stacked monthly spend">
-              <StackedAreaChart data={data.category_monthly} keys={categoryKeys} />
+            <ChartCard title="Lifestyle category trend" subtitle="Stacked monthly (excludes transfers & investments)">
+              <StackedAreaChart data={lifestyleMonthly} keys={categoryKeys} />
             </ChartCard>
           </div>
 

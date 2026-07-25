@@ -55,9 +55,9 @@ export function CashFlowPage() {
               hint="Credit − debit"
             />
             <KpiCard
-              label="Avg daily spend"
-              value={formatINR(o.avg_daily_debit)}
-              hint={`${o.active_days} active days`}
+              label="Avg daily lifestyle"
+              value={formatINR(o.avg_daily_lifestyle ?? o.avg_daily_debit)}
+              hint={`Lifestyle ${formatINR(o.lifestyle_spend ?? 0)} · ${o.active_days} days`}
             />
           </div>
 
@@ -84,10 +84,13 @@ export function CashFlowPage() {
                 }))}
               />
             </ChartCard>
-            <ChartCard title="Running balances" subtitle="Latest known account balances">
+            <ChartCard
+              title="SMS account balances"
+              subtitle="Last balance from SMS — may be incomplete"
+            >
               <HorizontalBars
                 data={data.accounts.map((a) => ({
-                  name: `${a.bank} ••${a.account_last4}`,
+                  name: `${a.bank}${a.incomplete ? ' (incomplete)' : ''} ••${a.account_last4}`,
                   value: a.balance,
                 }))}
                 color="var(--credit)"

@@ -13,6 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pymongo import DESCENDING, MongoClient
 
+# Load .env before local modules that read os.getenv at import time (e.g. llm).
+load_dotenv()
+
 from parser import parse_sms
 from statement_parser import parse_statement, parse_statement_file
 from categorizer import CATEGORIES, apply_category
@@ -26,8 +29,6 @@ from indmoney_import import (
 )
 from ai_insights import ask, categorize_batch, explain_anomalies, monthly_summary
 from llm import LLMError, provider_status
-
-load_dotenv()
 
 app = FastAPI(title="SMS Money Tracker")
 
