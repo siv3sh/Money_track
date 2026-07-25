@@ -75,6 +75,41 @@ export function fetchCategories(): Promise<{ categories: string[] }> {
   return request('/categories')
 }
 
+export interface PortfolioHolding {
+  name: string
+  asset_class: string
+  invested: number
+  current_value: number
+  pnl?: number
+  pnl_pct?: number
+  updated_at?: string | null
+}
+
+export interface PortfolioResponse {
+  holdings: PortfolioHolding[]
+  total_invested: number
+  total_current: number
+}
+
+export function fetchPortfolio(): Promise<PortfolioResponse> {
+  return request('/portfolio')
+}
+
+export function savePortfolio(holdings: PortfolioHolding[]): Promise<PortfolioResponse> {
+  return request('/portfolio', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      holdings: holdings.map((h) => ({
+        name: h.name,
+        asset_class: h.asset_class,
+        invested: h.invested,
+        current_value: h.current_value,
+      })),
+    }),
+  })
+}
+
 export function updateTransactionCategory(
   id: string,
   category: string,

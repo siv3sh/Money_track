@@ -32,6 +32,7 @@ db = client["money_tracker"]
 transactions = db["transactions"]
 webhook_events = db["webhook_events"]
 category_memory = db["category_memory"]
+portfolio = db["portfolio"]
 
 API_KEY = os.getenv("API_KEY", "")
 CORS_ORIGINS = [
@@ -1034,4 +1035,64 @@ def analytics(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
-    return build_analytics(transactions, date_from=start, date_to=end, banks=banks)
+    return build_analytics(
+        transactions, date_from=start, date_to=end, banks=banks, portfolio=portfolio
+    )
+
+
+class PortfolioHolding(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    asset_class: str = Field(default="Other Investments", max_length=60)
+    invested: float = Field(..., ge=0)
+    current_value: float = Field(..., ge=0)
+
+
+class PortfolioPayload(BaseModel):
+    holdings: list[PortfolioHolding]
+
+
+def _serialize_holding(doc: dict[str, Any]) -> dict[str, Any]:
+    invested = float(doc.get("invested") or 0)
+    current = float(doc.get("current_value") or 0)
+    pnl = current - invested
+    updated = doc.get("updated_at")
+    return {
+        "name": str(doc.get("name") or ""),
+        "asset_class": str(doc.get("asset_class") or "Other Investments"),
+        "invested": invested,
+        "current_value": current,
+        "pnl": round(pnl, 2),
+        "pnl_pct": round(pnl / invested * 100, 2) if invested else 0.0,
+        "updated_at": updated.isoformat() if isinstance(updated, datetime) else None,
+    }
+
+
+@app.get("/portfolio")
+def get_portfolio():
+    rows = [_serialize_holding(doc) for doc in portfolio.find().sort("current_value", DESCENDING)]
+    return {
+        "holdings": rows,
+        "total_invested": round(sum(r["invested"] for r in rows), 2),
+        "total_current": round(sum(r["current_value"] for r in rows), 2),
+    }
+
+
+@app.put("/portfolio")
+def put_portfolio(payload: PortfolioPayload):
+    """Replace all manually tracked holdings (market values from your broker apps)."""
+    now = datetime.now(timezone.utc)
+    portfolio.delete_many({})
+    if payload.holdings:
+        portfolio.insert_many(
+            [
+                {
+                    "name": h.name.strip(),
+                    "asset_class": h.asset_class.strip() or "Other Investments",
+                    "invested": h.invested,
+                    "current_value": h.current_value,
+                    "updated_at": now,
+                }
+                for h in payload.holdings
+            ]
+        )
+    return get_portfolio()

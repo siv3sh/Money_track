@@ -148,6 +148,7 @@ def build_analytics(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     banks: list[str] | None = None,
+    portfolio: Collection | None = None,
 ) -> dict[str, Any]:
     match = _match_range(date_from, date_to, banks=banks)
     base = [{"$match": match}] if match else []
@@ -523,7 +524,7 @@ def build_analytics(
         )
     )
     total_invested = sum(v["invested"] for v in instrument_totals.values())
-    # Without market values, treat cost basis as current value (P&L = 0)
+    # Inferred holdings from transactions (cost basis, P&L 0)
     holdings = [
         {
             "name": name,
@@ -538,9 +539,39 @@ def build_analytics(
             instrument_totals.items(), key=lambda kv: -kv[1]["invested"]
         )
     ]
+    total_current = total_invested
+    total_pnl = 0.0
+    inv_note = "Current value equals cost basis until you add market prices."
+
+    # If a manual portfolio exists (market values from broker apps), it wins
+    if portfolio is not None:
+        manual = list(portfolio.find())
+        if manual:
+            holdings = []
+            for doc in manual:
+                invested = float(doc.get("invested") or 0)
+                current = float(doc.get("current_value") or 0)
+                pnl = current - invested
+                holdings.append(
+                    {
+                        "name": str(doc.get("name") or "Unknown"),
+                        "asset_class": str(doc.get("asset_class") or "Other Investments"),
+                        "invested": invested,
+                        "current_value": current,
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": round(pnl / invested * 100, 2) if invested else 0.0,
+                        "count": 0,
+                    }
+                )
+            holdings.sort(key=lambda h: -h["current_value"])
+            total_invested = sum(h["invested"] for h in holdings)
+            total_current = sum(h["current_value"] for h in holdings)
+            total_pnl = round(total_current - total_invested, 2)
+            inv_note = "Market values from your portfolio — update them on this page."
+
     by_asset: dict[str, float] = defaultdict(float)
     for h in holdings:
-        by_asset[h["asset_class"]] += h["invested"]
+        by_asset[h["asset_class"]] += h["current_value"]
     asset_allocation = [
         {"name": k, "value": v} for k, v in sorted(by_asset.items(), key=lambda x: -x[1])
     ]
@@ -624,7 +655,7 @@ def build_analytics(
             "avg_daily_debit": round(total_debit / active_days, 2) if active_days else 0.0,
             "liquid_total": liquid_total,
             "total_invested": total_invested,
-            "net_worth_estimate": liquid_total + total_invested,
+            "net_worth_estimate": liquid_total + total_current,
             "investment_to_income": round(total_invested / total_credit * 100, 1)
             if total_credit
             else 0.0,
@@ -650,12 +681,12 @@ def build_analytics(
         "income_sources": income_rows,
         "investments": {
             "total_invested": total_invested,
-            "total_current": total_invested,
-            "pnl": 0.0,
+            "total_current": total_current,
+            "pnl": total_pnl,
             "holdings": holdings,
             "asset_allocation": asset_allocation,
             "monthly": inv_monthly_rows,
-            "note": "Current value equals cost basis until you add market prices.",
+            "note": inv_note,
         },
         "alerts": alerts,
         "filters": {"banks": banks_list},

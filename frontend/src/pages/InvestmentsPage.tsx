@@ -1,11 +1,12 @@
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
+import { PortfolioEditor } from '../components/PortfolioEditor'
 import { DonutChart, HorizontalBars, NetTrendLine, StackedAreaChart } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
 
 export function InvestmentsPage() {
-  const { data, loading, error } = useFilters()
+  const { data, loading, error, refresh } = useFilters()
   const inv = data?.investments
   const o = data?.overview
 
@@ -33,9 +34,10 @@ export function InvestmentsPage() {
     <div className="fade-in">
       <PageHeader
         title="Investments"
-        description="Inferred from Investment-category transactions. Market values aren't linked yet — P&L shows cost basis."
+        description="SIP flows from transactions plus market values you sync from broker apps."
       />
       <FilterBar />
+      <PortfolioEditor onSaved={refresh} />
 
       {error ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
