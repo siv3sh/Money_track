@@ -35,6 +35,16 @@ MERCHANT_FROM_RE = re.compile(
     r"([A-Za-z0-9][A-Za-z0-9&_.\-@ ]{1,40}?)(?=\s+(?:on\b|via\b|ref\b|upi\b|avl|bal|a/?c|xx|\*|INR|Rs\.?|₹|\.|$))",
     re.IGNORECASE,
 )
+# "Digital Gold India Private Limited has received Rs 20.00 from your A/c ..."
+MERCHANT_SUBJECT_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9&_.\-@ ]{1,60}?)\s+has\s+received\b",
+    re.IGNORECASE,
+)
+# Money leaving the user's account even though the verb is "received"
+DEBIT_RECEIVED_RE = re.compile(
+    r"received\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d{1,2})?\s+from\s+your\s+a/?c",
+    re.IGNORECASE,
+)
 UPI_VPA_RE = re.compile(r"\b([\w.\-]+@[\w]+)\b")
 
 DEBIT_KEYWORDS = [
@@ -68,6 +78,9 @@ BANK_SENDER_MAP = {
     "YESBNK": "Yes Bank",
     "PAYTMB": "Paytm",
     "PHONEPE": "PhonePe",
+    "FEDBNK": "Federal Bank",
+    "FEDBK": "Federal Bank",
+    "FEDERAL": "Federal Bank",
 }
 
 _BAD_MERCHANT = re.compile(
@@ -139,6 +152,10 @@ def _detect_bank(sender: str) -> Optional[str]:
 
 
 def _detect_type(text_lower: str) -> Optional[str]:
+    # "<merchant> has received Rs X from your A/c" is money going OUT
+    if DEBIT_RECEIVED_RE.search(text_lower):
+        return "debit"
+
     debit_hits = [text_lower.find(k) for k in DEBIT_KEYWORDS if k in text_lower]
     credit_hits = [text_lower.find(k) for k in CREDIT_KEYWORDS if k in text_lower]
     debit_pos = min(debit_hits) if debit_hits else None
@@ -182,6 +199,12 @@ def _clean_merchant(name: Optional[str]) -> Optional[str]:
 
 
 def _extract_merchant(body: str, txn_type: str) -> Optional[str]:
+    subject = MERCHANT_SUBJECT_RE.search(body)
+    if txn_type == "debit" and subject:
+        cleaned = _clean_merchant(subject.group(1))
+        if cleaned:
+            return cleaned
+
     upi = UPI_VPA_RE.search(body)
     at = MERCHANT_AT_RE.search(body)
     to = MERCHANT_TO_RE.search(body)
