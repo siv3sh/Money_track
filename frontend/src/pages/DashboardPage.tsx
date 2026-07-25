@@ -8,6 +8,7 @@ import {
   fetchTransactions,
   updateTransactionCategory,
 } from '../api'
+import { CreditDebitCompareTable } from '../components/CreditDebitCompareTable'
 import {
   DailyCashflowChart,
   DonutBreakdownChart,
@@ -289,6 +290,13 @@ export function DashboardPage() {
               icon={<CalendarDays size={18} />}
             />
           </div>
+
+          <CreditDebitCompareTable
+            overview={o}
+            byCategory={report?.by_category}
+            title={`${range.label} · Credited vs Debited`}
+            subtitle="Compare money in and money out for the selected period"
+          />
 
           <div className="grid gap-3 lg:grid-cols-3">
             <article className="panel px-5 py-4">

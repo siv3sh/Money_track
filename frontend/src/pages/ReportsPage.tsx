@@ -8,6 +8,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
+import { CreditDebitCompareTable } from '../components/CreditDebitCompareTable'
 import {
   CumulativeNetChart,
   DailyCashflowChart,
@@ -460,6 +461,15 @@ export function ReportsPage() {
                 hint={`${o.active_days} active days · ${o.count} total transactions`}
               />
             </div>
+          </section>
+
+          <section className="report-section">
+            <SectionHeading
+              eyebrow="01b · Credit vs debit"
+              title="Side-by-side comparison"
+              description="Total amounts, averages, and category splits — credited money in vs debited money out."
+            />
+            <CreditDebitCompareTable overview={o} byCategory={report.by_category} />
           </section>
 
           <section className="report-section">
