@@ -1253,7 +1253,7 @@ def ai_monthly_summary(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio
+        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots
     )
     try:
         return monthly_summary(analytics_data, provider_name=provider)
@@ -1270,7 +1270,7 @@ def ai_anomalies(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio
+        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots
     )
     try:
         return explain_anomalies(analytics_data, provider_name=provider)
