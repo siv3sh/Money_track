@@ -29,7 +29,7 @@ import { axisTick, formatTooltipValue, gridStroke, inrAxis, tooltipStyle } from 
 import { EmptyState } from '../components/ui/EmptyState'
 
 export function SourcesPage() {
-  const { report, transactions, loading, error, reload } = useFinanceReport({ txnLimit: 1000 })
+  const { report, transactions, loading, error, reload } = useFinanceReport({ txnLimit: 500 })
   const { sources } = useFilters()
 
   const cross = useMemo(() => sourceMonthlyCrossTab(transactions), [transactions])

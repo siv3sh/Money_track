@@ -1,41 +1,52 @@
 import { useMemo } from 'react'
-import { ChartLine, Percent, PiggyBank, TrendingUp } from 'lucide-react'
+import { CalendarDays, PiggyBank, Store, TrendingUp } from 'lucide-react'
 import {
   DonutChart,
-  DualBarCompare,
+  HorizontalRankBars,
   NetTrendLine,
-  StackedAreaChart,
+  SimpleBars,
 } from '../components/charts/FinanceCharts'
 import { FilterBar } from '../components/layout/FilterBar'
 import { ChartCard } from '../components/ui/ChartCard'
+import { EmptyState, LoadingBlock } from '../components/ui/EmptyState'
 import { KpiCard } from '../components/ui/KpiCard'
 import { PageHeader } from '../components/ui/PageHeader'
 import { useFinanceReport } from '../hooks/useFinanceReport'
-import { buildDemoPortfolio } from '../lib/investments'
-import { formatINR } from '../lib/format'
+import { pctDelta } from '../lib/analytics'
+import { buildInvestmentSnapshot } from '../lib/investments'
+import { formatDate, formatINR } from '../lib/format'
 
 export function InvestmentsPage() {
-  const { summary, report, loading, error, reload } = useFinanceReport({ txnLimit: 50 })
+  const { summary, report, monthly, transactions, loading, error, reload } = useFinanceReport({
+    txnLimit: 500,
+  })
+
   const portfolio = useMemo(
-    () => buildDemoPortfolio(summary?.this_month_credit || report?.overview.total_credit || 120000),
-    [summary?.this_month_credit, report?.overview.total_credit],
+    () => buildInvestmentSnapshot(transactions, monthly),
+    [transactions, monthly],
   )
 
-  const pnl = portfolio.totalCurrent - portfolio.totalInvested
-  const pnlPct =
-    portfolio.totalInvested > 0 ? (pnl / portfolio.totalInvested) * 100 : 0
+  const income = summary?.this_month_credit || 0
+  const investRatio =
+    income > 0 ? (portfolio.thisMonthInvested / income) * 100 : null
+  const monthDelta =
+    portfolio.byMonth.length >= 2
+      ? pctDelta(
+          portfolio.byMonth[portfolio.byMonth.length - 1]?.invested || 0,
+          portfolio.byMonth[portfolio.byMonth.length - 2]?.invested || 0,
+        )
+      : null
 
-  const sipBars = portfolio.sips.map((s) => ({
-    label: s.name.split(' ').slice(0, 2).join(' '),
-    invested: s.invested,
-    current: s.current,
+  const merchantDonut = portfolio.merchants.slice(0, 8).map((m) => ({
+    name: m.name.length > 28 ? `${m.name.slice(0, 26)}…` : m.name,
+    value: m.amount,
   }))
 
   return (
     <div>
       <PageHeader
         title="Investments"
-        description="Portfolio allocation, SIP tracker, equity P&L, and investment-to-income ratio. Demo holdings until a broker sync is connected."
+        description="Tracked from your real Investment-category transactions and known investment merchants — no demo holdings."
       />
       <FilterBar
         availableSources={(report?.by_bank || []).map((r) => r.name)}
@@ -51,155 +62,135 @@ export function InvestmentsPage() {
         </div>
       ) : null}
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          label="Portfolio value"
-          value={formatINR(portfolio.totalCurrent)}
-          tone="credit"
-          delta={pnlPct}
-          icon={<PiggyBank size={18} />}
-          hint={`Invested ${formatINR(portfolio.totalInvested)}`}
-        />
-        <KpiCard
-          label="Unrealized P&L"
-          value={formatINR(pnl)}
-          tone={pnl >= 0 ? 'credit' : 'debit'}
-          icon={<TrendingUp size={18} />}
-        />
-        <KpiCard
-          label="Overall XIRR"
-          value={`${portfolio.overallXirr.toFixed(1)}%`}
-          tone="credit"
-          icon={<Percent size={18} />}
-        />
-        <KpiCard
-          label="Overall CAGR"
-          value={`${portfolio.overallCagr.toFixed(1)}%`}
-          tone="credit"
-          icon={<ChartLine size={18} />}
-        />
-      </div>
-
-      <div className="mb-4 grid gap-4 xl:grid-cols-3">
-        <ChartCard title="Allocation by asset class" subtitle="Current market value mix">
-          <DonutChart
-            data={portfolio.allocation.map((a) => ({ name: a.name, value: a.value }))}
-          />
-        </ChartCard>
-        <ChartCard
-          title="SIP tracker"
-          subtitle="Invested vs current value"
-          className="xl:col-span-2"
-        >
-          <DualBarCompare data={sipBars} />
-        </ChartCard>
-      </div>
-
-      <div className="mb-4 grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Investment-to-income ratio" subtitle="% of income invested each month">
-          <NetTrendLine
-            data={portfolio.investmentToIncome}
-            dataKey="ratio"
-            name="Invested / income %"
-            color="var(--chart-4)"
-          />
-        </ChartCard>
-        <ChartCard title="Asset class growth" subtitle="Stacked value over time">
-          <StackedAreaChart
-            data={portfolio.growth}
-            series={['Equity', 'Debt', 'Gold', 'International', 'Cash']}
-          />
-        </ChartCard>
-      </div>
-
-      <div className="mb-4 grid gap-4 xl:grid-cols-2">
-        <section className="panel overflow-hidden fade-up">
-          <div className="border-b border-[var(--border)] px-4 py-3">
-            <h3 className="text-sm font-semibold">SIP performance</h3>
-            <p className="text-xs text-[var(--muted)]">XIRR per instrument</p>
+      {loading && !report ? (
+        <LoadingBlock />
+      ) : (
+        <>
+          <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard
+              label="Total invested"
+              value={formatINR(portfolio.totalInvested)}
+              tone="credit"
+              delta={monthDelta}
+              icon={<PiggyBank size={18} />}
+              hint="Outflows tagged as investments"
+            />
+            <KpiCard
+              label="This month"
+              value={formatINR(portfolio.thisMonthInvested)}
+              tone="credit"
+              icon={<CalendarDays size={18} />}
+              hint={
+                investRatio != null
+                  ? `${investRatio.toFixed(1)}% of this month's income`
+                  : 'No income recorded this month'
+              }
+            />
+            <KpiCard
+              label="Investment txns"
+              value={String(portfolio.txnCount)}
+              icon={<TrendingUp size={18} />}
+            />
+            <KpiCard
+              label="Platforms / merchants"
+              value={String(portfolio.merchants.length)}
+              icon={<Store size={18} />}
+              hint={portfolio.merchants[0]?.name || 'None yet'}
+            />
           </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-[var(--muted)]">
-                <tr>
-                  <th className="px-4 py-2 font-medium">Fund</th>
-                  <th className="px-4 py-2 font-medium">Class</th>
-                  <th className="px-4 py-2 text-right font-medium">Invested</th>
-                  <th className="px-4 py-2 text-right font-medium">Current</th>
-                  <th className="px-4 py-2 text-right font-medium">XIRR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {portfolio.sips.map((s) => (
-                  <tr key={s.id} className="border-t border-[var(--border)]">
-                    <td className="px-4 py-2.5 font-medium">{s.name}</td>
-                    <td className="px-4 py-2.5 text-[var(--muted)]">{s.assetClass}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{formatINR(s.invested)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-[var(--credit)]">
-                      {formatINR(s.current)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-[var(--credit)]">
-                      {s.xirr.toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
 
-        <section className="panel overflow-hidden fade-up">
-          <div className="border-b border-[var(--border)] px-4 py-3">
-            <h3 className="text-sm font-semibold">Direct equity holdings</h3>
-            <p className="text-xs text-[var(--muted)]">P&L color-coded green / red</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-[var(--muted)]">
-                <tr>
-                  <th className="px-4 py-2 font-medium">Stock</th>
-                  <th className="px-4 py-2 text-right font-medium">Qty</th>
-                  <th className="px-4 py-2 text-right font-medium">Avg</th>
-                  <th className="px-4 py-2 text-right font-medium">LTP</th>
-                  <th className="px-4 py-2 text-right font-medium">P&L</th>
-                  <th className="px-4 py-2 text-right font-medium">CAGR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {portfolio.equities.map((e) => (
-                  <tr key={e.symbol} className="border-t border-[var(--border)]">
-                    <td className="px-4 py-2.5">
-                      <div className="font-semibold">{e.symbol}</div>
-                      <div className="text-xs text-[var(--muted)]">{e.name}</div>
-                    </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{e.qty}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{formatINR(e.avgPrice)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{formatINR(e.ltp)}</td>
-                    <td
-                      className={`px-4 py-2.5 text-right font-semibold tabular-nums ${
-                        e.pnl >= 0 ? 'text-[var(--credit)]' : 'text-[var(--debit)]'
-                      }`}
-                    >
-                      {formatINR(e.pnl)}
-                      <div className="text-xs font-medium">
-                        {e.pnlPct >= 0 ? '+' : ''}
-                        {e.pnlPct.toFixed(1)}%
-                      </div>
-                    </td>
-                    <td
-                      className={`px-4 py-2.5 text-right tabular-nums ${
-                        e.cagr >= 0 ? 'text-[var(--credit)]' : 'text-[var(--debit)]'
-                      }`}
-                    >
-                      {e.cagr.toFixed(1)}%
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
+          {portfolio.txnCount === 0 ? (
+            <div className="panel p-8 fade-up">
+              <EmptyState message="No investment transactions in this range. Categorize buys as Investments or import statements that include SIPs / broker outflows." />
+            </div>
+          ) : (
+            <>
+              <div className="mb-4 grid gap-4 xl:grid-cols-3">
+                <ChartCard title="By platform / merchant" subtitle="Where investment outflows went">
+                  <DonutChart data={merchantDonut} />
+                </ChartCard>
+                <ChartCard
+                  title="Invested by month"
+                  subtitle="Cash deployed into investments"
+                  className="xl:col-span-2"
+                >
+                  <SimpleBars
+                    data={portfolio.byMonth.map((m) => ({
+                      label: m.label,
+                      value: m.invested,
+                    }))}
+                    dataKey="value"
+                    name="Invested"
+                    color="var(--chart-credit)"
+                  />
+                </ChartCard>
+              </div>
+
+              <div className="mb-4 grid gap-4 xl:grid-cols-2">
+                <ChartCard
+                  title="Investment-to-income ratio"
+                  subtitle="% of monthly income invested (from real cash flow)"
+                >
+                  <NetTrendLine
+                    data={portfolio.byMonth}
+                    dataKey="ratio"
+                    name="Invested / income %"
+                    color="var(--chart-4)"
+                  />
+                </ChartCard>
+                <ChartCard title="Top investment destinations" subtitle="Ranked by amount">
+                  <HorizontalRankBars
+                    data={portfolio.merchants.slice(0, 10).map((m) => ({
+                      name: m.name.length > 22 ? `${m.name.slice(0, 20)}…` : m.name,
+                      value: m.amount,
+                    }))}
+                    color="var(--chart-2)"
+                  />
+                </ChartCard>
+              </div>
+
+              <section className="panel overflow-hidden fade-up">
+                <div className="border-b border-[var(--border)] px-4 py-3">
+                  <h3 className="text-sm font-semibold">Investment transactions</h3>
+                  <p className="text-xs text-[var(--muted)]">
+                    Debits categorized as Investments or matching known brokers
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-xs uppercase tracking-wide text-[var(--muted)]">
+                      <tr>
+                        <th className="px-4 py-2 font-medium">Date</th>
+                        <th className="px-4 py-2 font-medium">Merchant</th>
+                        <th className="px-4 py-2 font-medium">Category</th>
+                        <th className="px-4 py-2 text-right font-medium">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {portfolio.transactions.slice(0, 40).map((t) => (
+                        <tr key={t._id} className="border-t border-[var(--border)]">
+                          <td className="whitespace-nowrap px-4 py-2.5 text-[var(--muted)]">
+                            {formatDate(t.received_at)}
+                          </td>
+                          <td className="max-w-[260px] truncate px-4 py-2.5 font-medium">
+                            {t.merchant || '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-[var(--muted)]">
+                            {t.category || '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-[var(--debit)]">
+                            {formatINR(t.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }

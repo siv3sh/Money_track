@@ -14,6 +14,37 @@ function resolveApiBase(): string {
   return import.meta.env.DEV ? 'http://localhost:8000' : '/api'
 }
 
+function formatErrorDetail(detail: unknown, fallback: string): string {
+  if (detail == null) return fallback
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === 'string') return item
+      if (item && typeof item === 'object' && 'msg' in item) {
+        const loc = Array.isArray((item as { loc?: unknown }).loc)
+          ? (item as { loc: unknown[] }).loc.join('.')
+          : ''
+        const msg = String((item as { msg: unknown }).msg)
+        return loc ? `${loc}: ${msg}` : msg
+      }
+      try {
+        return JSON.stringify(item)
+      } catch {
+        return String(item)
+      }
+    })
+    return parts.filter(Boolean).join('; ') || fallback
+  }
+  if (typeof detail === 'object') {
+    try {
+      return JSON.stringify(detail)
+    } catch {
+      return fallback
+    }
+  }
+  return String(detail)
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${resolveApiBase()}${path}`, {
     ...init,
@@ -23,14 +54,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   if (!res.ok) {
-    let detail = res.statusText
+    let detail: unknown = res.statusText
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      const body = (await res.json()) as { detail?: unknown }
+      if (body.detail !== undefined) detail = body.detail
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Request failed (${res.status})`)
+    throw new Error(formatErrorDetail(detail, `Request failed (${res.status})`))
   }
   return res.json() as Promise<T>
 }
@@ -141,14 +172,14 @@ export async function uploadStatementFile(
     body: form,
   })
   if (!res.ok) {
-    let detail = res.statusText
+    let detail: unknown = res.statusText
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      const body = (await res.json()) as { detail?: unknown }
+      if (body.detail !== undefined) detail = body.detail
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Upload failed (${res.status})`)
+    throw new Error(formatErrorDetail(detail, `Upload failed (${res.status})`))
   }
   return res.json() as Promise<StatementImportResult>
 }

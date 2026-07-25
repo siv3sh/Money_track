@@ -13,52 +13,51 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { useFinanceReport } from '../hooks/useFinanceReport'
 import { useFilters } from '../context/FilterContext'
 import { latestBalancesByAccount, pctDelta, runningBalanceSeries } from '../lib/analytics'
-import { buildDemoPortfolio } from '../lib/investments'
+import { buildInvestmentSnapshot } from '../lib/investments'
 import { formatINR } from '../lib/format'
 import { monthLabel } from '../lib/dates'
 
 export function NetWorthPage() {
   const { report, monthly, summary, transactions, loading, error, reload } = useFinanceReport()
   const { sources } = useFilters()
-  const portfolio = useMemo(
-    () => buildDemoPortfolio(summary?.this_month_credit || 120000),
-    [summary?.this_month_credit],
+  const investments = useMemo(
+    () => buildInvestmentSnapshot(transactions, monthly),
+    [transactions, monthly],
   )
 
   const balances = useMemo(() => latestBalancesByAccount(transactions), [transactions])
   const liquid = balances.reduce((s, b) => s + Math.max(0, b.balance), 0)
-  const invested = portfolio.totalCurrent
-  const debtEstimate = Math.max(
-    0,
-    (report?.by_card_type.find((r) => r.name === 'credit_card')?.debit || 0) * 0.35,
-  )
+  const invested = investments.totalInvested
+  // Only known liability: negative account balances from SMS (if any)
+  const liabilities = balances.reduce((s, b) => s + Math.max(0, -b.balance), 0)
   const assets = liquid + invested
-  const liabilities = debtEstimate
   const netWorth = assets - liabilities
 
   const netWorthTrend = useMemo(() => {
-    const base = runningBalanceSeries(monthly, Math.max(0, liquid - monthly.reduce((s, m) => s + m.net, 0)))
-    // Blend cumulative cash with growing portfolio
-    return base.map((row, i) => {
-      const growth = portfolio.growth[Math.min(i, portfolio.growth.length - 1)]
-      const investedAt =
-        (growth?.Equity || 0) +
-        (growth?.Debt || 0) +
-        (growth?.Gold || 0) +
-        (growth?.International || 0) +
-        (growth?.Cash || 0)
+    const start = Math.max(0, liquid - monthly.reduce((s, m) => s + m.net, 0))
+    const cash = runningBalanceSeries(monthly, start)
+    let investedToDate = 0
+    const investMap = new Map(investments.byMonth.map((m) => [m.month, m.invested]))
+    return cash.map((row) => {
+      investedToDate += investMap.get(row.month) || 0
       return {
         ...row,
         label: monthLabel(row.month),
-        netWorth: row.balance + investedAt * 0.15 + invested * (0.7 + i / (base.length || 1) * 0.3),
+        netWorth: row.balance + investedToDate,
       }
     })
-  }, [monthly, liquid, invested, portfolio.growth])
+  }, [monthly, liquid, investments.byMonth])
 
   const savingsDelta = summary
     ? pctDelta(summary.this_month_net, summary.last_month_net)
     : null
-  const investDelta = pctDelta(portfolio.totalCurrent, portfolio.totalInvested)
+  const investDelta =
+    investments.byMonth.length >= 2
+      ? pctDelta(
+          investments.byMonth[investments.byMonth.length - 1]?.invested || 0,
+          investments.byMonth[investments.byMonth.length - 2]?.invested || 0,
+        )
+      : null
 
   const sourcesList = (report?.by_bank || []).map((r) => r.name)
   const categories = report?.categories || []
@@ -72,7 +71,7 @@ export function NetWorthPage() {
     <div>
       <PageHeader
         title="Net worth"
-        description="Your complete financial position — liquid cash, investments, and liabilities at a glance."
+        description="Built from your account balances and real investment outflows — no seeded portfolio data."
       />
       <FilterBar
         availableSources={sourcesList}
@@ -94,12 +93,12 @@ export function NetWorthPage() {
         <>
           <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
-              label="Total net worth"
+              label="Estimated net worth"
               value={formatINR(netWorth)}
               delta={savingsDelta}
               tone="neutral"
               icon={<Landmark size={18} />}
-              hint="Assets − liabilities"
+              hint="Balances + invested − liabilities"
               className="fade-up-delay-1"
             />
             <KpiCard
@@ -117,15 +116,15 @@ export function NetWorthPage() {
               delta={investDelta}
               tone="credit"
               icon={<TrendingUp size={18} />}
-              hint="Portfolio market value"
+              hint="Investment outflows (cost basis)"
               className="fade-up-delay-3"
             />
             <KpiCard
-              label="Total debt"
+              label="Liabilities"
               value={formatINR(liabilities)}
               tone={liabilities > 0 ? 'debit' : 'neutral'}
               icon={<Wallet size={18} />}
-              hint="Estimated card liability"
+              hint="Negative balances only"
               className="fade-up-delay-4"
             />
           </div>
@@ -133,7 +132,7 @@ export function NetWorthPage() {
           <div className="mb-4 grid gap-4 xl:grid-cols-3">
             <ChartCard
               title="Net worth trend"
-              subtitle="Estimated wealth trajectory across recent months"
+              subtitle="Running cash position + cumulative investment outflows"
               className="xl:col-span-2"
               tall
             >
@@ -148,19 +147,19 @@ export function NetWorthPage() {
                 <EmptyState />
               )}
             </ChartCard>
-            <ChartCard title="Liquid vs invested" subtitle="Where your assets sit today">
+            <ChartCard title="Liquid vs invested" subtitle="Latest balances vs investment outflows">
               <DonutChart
                 data={[
                   { name: 'Liquid', value: Math.max(liquid, 0) },
-                  { name: 'Invested', value: invested },
-                ]}
+                  { name: 'Invested', value: Math.max(invested, 0) },
+                ].filter((d) => d.value > 0)}
                 colors={['var(--chart-1)', 'var(--chart-2)']}
               />
             </ChartCard>
           </div>
 
           <div className="grid gap-4 xl:grid-cols-3">
-            <ChartCard title="Assets vs liabilities" subtitle="Balance sheet snapshot">
+            <ChartCard title="Assets vs liabilities" subtitle="From known balances and outflows">
               <AssetsLiabilitiesBars assets={assets} liabilities={liabilities} />
             </ChartCard>
             <ChartCard

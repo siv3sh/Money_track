@@ -47,7 +47,7 @@ export function NetTrendLine({
   name = 'Net savings',
   color = 'var(--accent)',
 }: {
-  data: Array<Record<string, string | number>>
+  data: Array<Record<string, string | number> | object>
   dataKey?: string
   name?: string
   color?: string

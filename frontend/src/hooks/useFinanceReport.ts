@@ -22,6 +22,7 @@ export function useFinanceReport(opts: { txnLimit?: number } = {}): FinanceData 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
+  const txnLimit = Math.min(Math.max(opts.txnLimit ?? 500, 1), 500)
 
   const reload = useCallback(() => setTick((t) => t + 1), [])
 
@@ -41,7 +42,7 @@ export function useFinanceReport(opts: { txnLimit?: number } = {}): FinanceData 
           fetchMonthly(12),
           fetchSummary(),
           fetchTransactions({
-            limit: opts.txnLimit ?? 500,
+            limit: txnLimit,
             date_from: dateFromIso,
             date_to: dateToIso,
             category: category || undefined,
@@ -65,11 +66,7 @@ export function useFinanceReport(opts: { txnLimit?: number } = {}): FinanceData 
       } catch (err) {
         if (!cancelled) {
           const msg = err instanceof Error ? err.message : 'Failed to load data'
-          const friendly =
-            msg === 'Failed to fetch' || msg.includes('NetworkError')
-              ? 'Could not reach the API. Check that the backend is up and VITE_API_URL /api proxy is configured.'
-              : msg
-          setError(friendly)
+          setError(msg === '[object Object]' ? 'Failed to load data from API' : msg)
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -79,7 +76,7 @@ export function useFinanceReport(opts: { txnLimit?: number } = {}): FinanceData 
     return () => {
       cancelled = true
     }
-  }, [dateFrom, dateTo, sources, category, opts.txnLimit, tick])
+  }, [dateFrom, dateTo, sources, category, txnLimit, tick])
 
   return { report, monthly, summary, transactions, loading, error, reload }
 }

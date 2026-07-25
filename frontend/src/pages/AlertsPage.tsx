@@ -10,7 +10,7 @@ import { budgetVsActual, detectAnomalies, upcomingSubscriptions } from '../lib/a
 import { formatDate, formatINR } from '../lib/format'
 
 export function AlertsPage() {
-  const { report, transactions, loading, error, reload } = useFinanceReport({ txnLimit: 800 })
+  const { report, transactions, loading, error, reload } = useFinanceReport({ txnLimit: 500 })
 
   const budgets = useMemo(
     () => (report ? budgetVsActual(report) : []),

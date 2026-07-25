@@ -31,7 +31,7 @@ function labelCard(name: string): string {
 
 export function SpendingPage() {
   const { report, summary, transactions, loading, error, reload } = useFinanceReport({
-    txnLimit: 800,
+    txnLimit: 500,
   })
 
   const categories = useMemo(
