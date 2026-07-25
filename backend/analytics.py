@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pymongo.collection import Collection
+
+from merchant_label import clean_merchant_label
 
 # Canonical instrument names for investment vehicles
 INSTRUMENT_RULES: list[tuple[str, str, str]] = [
@@ -27,59 +28,10 @@ INSTRUMENT_RULES: list[tuple[str, str, str]] = [
     ("nse", "NSE", "Equity / Brokerage"),
 ]
 
-# Long alphanumeric transaction references (NEFT/UPI ids) that make merchants unique per txn
-_REF_RUN = re.compile(r"\b[A-Z]*\d{6,}[A-Z0-9]*\b")
-_TXN_PREFIX = re.compile(
-    r"^(?:NFT|NEFT|IMPS|RTGS|UPIOUT|UPI\s*IN|TO\s+ECM|POS|ACHDR|INTL\.?\s*ECM\s*MRK)\b[/ :-]*",
-    re.IGNORECASE,
-)
 
-# Known merchants → friendly display names (checked against the cleaned lowercase label)
-_PRETTY_RULES: list[tuple[str, str]] = [
-    ("digital gold", "Digital Gold"),
-    ("indian clearing", "Indian Clearing Corp (MF)"),
-    ("appleservices", "Apple Services"),
-    ("cursor", "Cursor"),
-    ("spotify", "Spotify"),
-    ("netflix", "Netflix"),
-    ("swiggy", "Swiggy"),
-    ("zomato", "Zomato"),
-    ("myntra", "Myntra"),
-    ("amazon", "Amazon"),
-    ("makemytrip", "MakeMyTrip"),
-    ("redbus", "Redbus"),
-    ("groww", "Groww"),
-    ("indmoney", "INDmoney"),
-    ("indstocks", "INDmoney (INDstocks)"),
-    ("finzoomers", "INDmoney"),
-]
-
-
-def _clean_merchant_label(name: str | None) -> str:
+def _clean_merchant_label(name: str | None, raw_text: str | None = None) -> str:
     """Collapse statement narrations into a stable merchant label."""
-    s = re.sub(r"\s+", " ", (name or "").replace("\n", " ")).strip()
-    if not s:
-        return "Unknown"
-    s = _TXN_PREFIX.sub("", s)
-
-    # UPI VPAs: keep only the handle and repair OCR spaces inside it
-    if "@" in s:
-        for segment in s.split("/"):
-            if "@" in segment:
-                s = re.sub(r"\s+", "", segment)
-                break
-
-    s = _REF_RUN.sub("", s)
-    s = re.sub(r"[/\\]+[A-Za-z]{0,2}$", "", s)  # trailing "/S", "//" remnants
-    s = re.sub(r"\s+", " ", s).strip(" /\\-_.,")
-    if not s:
-        return "Unknown"
-
-    lower = s.lower()
-    for keyword, pretty in _PRETTY_RULES:
-        if keyword in lower:
-            return pretty
-    return s
+    return clean_merchant_label(name, fallback=raw_text)
 
 
 def _instrument_for(merchant: str | None, raw_text: str | None) -> tuple[str, str]:
@@ -88,7 +40,7 @@ def _instrument_for(merchant: str | None, raw_text: str | None) -> tuple[str, st
     for keyword, instrument, asset_class in INSTRUMENT_RULES:
         if keyword in blob:
             return instrument, asset_class
-    label = _clean_merchant_label(merchant)
+    label = _clean_merchant_label(merchant, raw_text)
     return label, "Other Investments"
 
 
@@ -421,9 +373,9 @@ def build_analytics(
     )
     for doc in transactions.find(
         {**match, "type": "debit", "merchant": {"$nin": [None, ""]}},
-        {"merchant": 1, "amount": 1},
+        {"merchant": 1, "raw_text": 1, "amount": 1},
     ):
-        label = _clean_merchant_label(doc.get("merchant"))
+        label = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
         merchant_totals[label]["amount"] += float(doc.get("amount") or 0)
         merchant_totals[label]["count"] += 1
 
@@ -614,10 +566,12 @@ def build_analytics(
         lambda: {"amount": 0.0, "count": 0.0}
     )
     for doc in transactions.find(
-        {**match, "type": "credit"}, {"merchant": 1, "category": 1, "amount": 1}
+        {**match, "type": "credit"}, {"merchant": 1, "raw_text": 1, "category": 1, "amount": 1}
     ):
-        label = _clean_merchant_label(doc.get("merchant")) if doc.get("merchant") else str(
-            doc.get("category") or "Other income"
+        label = (
+            _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
+            if doc.get("merchant")
+            else str(doc.get("category") or "Other income")
         )
         income_totals[label]["amount"] += float(doc.get("amount") or 0)
         income_totals[label]["count"] += 1
@@ -850,13 +804,13 @@ def _build_alerts(
         unusual = list(
             transactions.find(
                 {**match, "type": "debit", "amount": {"$gte": threshold}},
-                {"amount": 1, "merchant": 1, "received_at": 1, "category": 1},
+                {"amount": 1, "merchant": 1, "raw_text": 1, "received_at": 1, "category": 1},
             )
             .sort("amount", -1)
             .limit(5)
         )
         for u in unusual:
-            merch = u.get("merchant") or "Unknown"
+            merch = _clean_merchant_label(u.get("merchant"), u.get("raw_text"))
             amt = float(u.get("amount") or 0)
             alerts.append(
                 {

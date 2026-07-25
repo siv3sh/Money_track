@@ -20,6 +20,7 @@ from parser import parse_sms
 from statement_parser import parse_statement, parse_statement_file
 from categorizer import CATEGORIES, apply_category
 from analytics import build_analytics
+from merchant_label import clean_merchant_label
 from indmoney_import import (
     TARGET_FIELDS,
     apply_mapping,
@@ -137,6 +138,10 @@ def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
     received = out.get("received_at")
     if isinstance(received, datetime):
         out["received_at"] = received.isoformat()
+    raw_merchant = out.get("merchant")
+    if raw_merchant:
+        out["merchant_raw"] = raw_merchant
+        out["merchant"] = clean_merchant_label(raw_merchant, fallback=out.get("raw_text"))
     return out
 
 
@@ -743,25 +748,23 @@ def summary_monthly(months: int = Query(default=12, ge=1, le=36)):
 
 @app.get("/summary/merchants")
 def summary_merchants(limit: int = Query(default=10, ge=1, le=50)):
-    pipeline = [
-        {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
-        {
-            "$group": {
-                "_id": "$merchant",
-                "amount": {"$sum": "$amount"},
-                "count": {"$sum": 1},
-            }
-        },
-        {"$sort": {"amount": -1}},
-        {"$limit": limit},
-    ]
+    totals: dict[str, dict[str, float]] = {}
+    for doc in transactions.find(
+        {"type": "debit", "merchant": {"$nin": [None, ""]}},
+        {"merchant": 1, "raw_text": 1, "amount": 1},
+    ):
+        label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text"))
+        bucket = totals.setdefault(label, {"amount": 0.0, "count": 0.0})
+        bucket["amount"] += float(doc.get("amount") or 0)
+        bucket["count"] += 1
+    ranked = sorted(totals.items(), key=lambda kv: -kv[1]["amount"])[:limit]
     return [
         {
-            "merchant": str(row["_id"]),
-            "amount": float(row.get("amount") or 0),
-            "count": int(row.get("count") or 0),
+            "merchant": name,
+            "amount": vals["amount"],
+            "count": int(vals["count"]),
         }
-        for row in transactions.aggregate(pipeline)
+        for name, vals in ranked
     ]
 
 
@@ -870,37 +873,26 @@ def reports_detailed(
             for r in rows
         ]
 
-    merchants = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
-                {
-                    "$group": {
-                        "_id": "$merchant",
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                        "avg": {"$avg": "$amount"},
-                    }
-                },
-                {"$sort": {"amount": -1}},
-                {"$limit": merchant_limit},
-            ]
-        )
-    )
+    merchant_q = {**match, "type": "debit", "merchant": {"$nin": [None, ""]}}
+    merchant_totals: dict[str, dict[str, float]] = {}
+    for doc in transactions.find(merchant_q, {"merchant": 1, "raw_text": 1, "amount": 1}):
+        label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text"))
+        bucket = merchant_totals.setdefault(label, {"amount": 0.0, "count": 0.0})
+        bucket["amount"] += float(doc.get("amount") or 0)
+        bucket["count"] += 1
     merchant_rows = [
         {
-            "merchant": str(r["_id"]),
-            "amount": float(r.get("amount") or 0),
-            "count": int(r.get("count") or 0),
-            "avg": round(float(r.get("avg") or 0), 2),
+            "merchant": name,
+            "amount": vals["amount"],
+            "count": int(vals["count"]),
+            "avg": round(vals["amount"] / max(vals["count"], 1), 2),
             "share": (
-                round(float(r.get("amount") or 0) / total_debit * 100, 1)
-                if total_debit
-                else 0.0
+                round(vals["amount"] / total_debit * 100, 1) if total_debit else 0.0
             ),
         }
-        for r in merchants
+        for name, vals in sorted(merchant_totals.items(), key=lambda kv: -kv[1]["amount"])[
+            :merchant_limit
+        ]
     ]
 
     daily = list(

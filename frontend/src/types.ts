@@ -8,6 +8,7 @@ export interface Transaction {
   account_last4: string | null
   card_type: CardType | null
   merchant: string | null
+  merchant_raw?: string | null
   balance: number | null
   bank: string | null
   raw_text: string
