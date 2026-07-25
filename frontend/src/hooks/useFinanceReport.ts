@@ -64,7 +64,12 @@ export function useFinanceReport(opts: { txnLimit?: number } = {}): FinanceData 
         setError(null)
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load data')
+          const msg = err instanceof Error ? err.message : 'Failed to load data'
+          const friendly =
+            msg === 'Failed to fetch' || msg.includes('NetworkError')
+              ? 'Could not reach the API. Check that the backend is up and VITE_API_URL /api proxy is configured.'
+              : msg
+          setError(friendly)
         }
       } finally {
         if (!cancelled) setLoading(false)
