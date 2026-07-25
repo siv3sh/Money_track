@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 import { pctChangeLabel } from '../lib/format'
 
@@ -58,6 +59,8 @@ export function KpiCard({
   tone = 'neutral',
   change,
   icon,
+  to,
+  linkLabel = 'View transactions',
 }: {
   label: string
   value: string
@@ -65,6 +68,8 @@ export function KpiCard({
   tone?: 'neutral' | 'credit' | 'debit'
   change?: number | null
   icon?: ReactNode
+  to?: string
+  linkLabel?: string
 }) {
   const toneClass =
     tone === 'credit'
@@ -107,6 +112,11 @@ export function KpiCard({
           </span>
         ) : null}
         {hint ? <span className="text-[var(--muted)]">{hint}</span> : null}
+        {to ? (
+          <Link to={to} className="font-medium text-[var(--accent)] hover:underline">
+            {linkLabel}
+          </Link>
+        ) : null}
       </div>
     </article>
   )

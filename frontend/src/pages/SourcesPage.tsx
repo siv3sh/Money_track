@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
 import {
@@ -8,10 +9,21 @@ import {
 } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { formatINR, formatMonth } from '../lib/format'
+import { transactionsHref } from '../lib/transactionsLink'
 
 export function SourcesPage() {
-  const { data, loading, error, banks } = useFilters()
+  const navigate = useNavigate()
+  const { data, loading, error, banks, dateFrom, dateTo } = useFilters()
   const o = data?.overview
+
+  const goSource = (source: string) =>
+    navigate(
+      transactionsHref({
+        source,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      }),
+    )
 
   const sourceNet = useMemo(
     () =>
@@ -92,8 +104,8 @@ export function SourcesPage() {
           </div>
 
           <div className="mb-5 grid gap-4 xl:grid-cols-2">
-            <ChartCard title="Credit vs debit per source" subtitle="Grouped bars">
-              <GroupedSourceBars data={sourceNet} />
+            <ChartCard title="Credit vs debit per source" subtitle="Click a bank to open transactions">
+              <GroupedSourceBars data={sourceNet} onSourceClick={goSource} />
             </ChartCard>
             <ChartCard title="Source-wise net flow" subtitle="Credit − debit">
               <GroupedSourceBars
@@ -103,6 +115,7 @@ export function SourcesPage() {
                   credit: s.net >= 0 ? s.net : 0,
                   net: s.net,
                 }))}
+                onSourceClick={goSource}
               />
             </ChartCard>
           </div>
@@ -111,11 +124,13 @@ export function SourcesPage() {
             <ChartCard title="Source → total credit" subtitle="Contribution donut">
               <DonutChart
                 data={data.by_bank.map((r) => ({ name: r.name, value: r.credit }))}
+                onSliceClick={goSource}
               />
             </ChartCard>
             <ChartCard title="Source → total debit" subtitle="Contribution donut">
               <DonutChart
                 data={data.by_bank.map((r) => ({ name: r.name, value: r.debit }))}
+                onSliceClick={goSource}
               />
             </ChartCard>
           </div>

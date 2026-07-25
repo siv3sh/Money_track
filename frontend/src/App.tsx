@@ -9,6 +9,7 @@ import { InvestmentsPage } from './pages/InvestmentsPage'
 import { NetWorthPage } from './pages/NetWorthPage'
 import { SourcesPage } from './pages/SourcesPage'
 import { SpendingPage } from './pages/SpendingPage'
+import { TransactionsPage } from './pages/TransactionsPage'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
           <Route index element={<NetWorthPage />} />
           <Route path="cash-flow" element={<CashFlowPage />} />
           <Route path="spending" element={<SpendingPage />} />
+          <Route path="transactions" element={<TransactionsPage />} />
           <Route path="sources" element={<SourcesPage />} />
           <Route path="investments" element={<InvestmentsPage />} />
           <Route path="investments/indmoney" element={<IndmoneyImportPage />} />

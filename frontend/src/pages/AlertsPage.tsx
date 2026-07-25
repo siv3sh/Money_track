@@ -1,6 +1,8 @@
 import { AlertTriangle, Bell, Info, RefreshCw } from 'lucide-react'
+import { useMemo } from 'react'
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
+import { BudgetEditor } from '../components/BudgetEditor'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
 import type { AnalyticsAlert } from '../types'
@@ -28,6 +30,12 @@ export function AlertsPage() {
   const subscriptions = alerts.filter((a) => a.type === 'subscription')
   const anomalies = alerts.filter((a) => a.type === 'anomaly' || a.type === 'trend' || a.type === 'insight')
 
+  const actuals = useMemo(() => {
+    const map: Record<string, number> = {}
+    for (const row of data?.by_category || []) map[row.name] = row.debit
+    return map
+  }, [data?.by_category])
+
   return (
     <div className="fade-in">
       <PageHeader
@@ -41,6 +49,8 @@ export function AlertsPage() {
         }
       />
       <FilterBar />
+
+      <BudgetEditor onSaved={refresh} actuals={actuals} />
 
       {error ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">

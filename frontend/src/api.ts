@@ -49,6 +49,7 @@ export interface TransactionQuery {
   date_to?: string
   sort?: 'received_at' | 'amount'
   order?: 'asc' | 'desc'
+  q?: string
 }
 
 export function fetchTransactions(query: TransactionQuery = {}): Promise<Transaction[]> {
@@ -63,6 +64,7 @@ export function fetchTransactions(query: TransactionQuery = {}): Promise<Transac
   if (query.date_to) params.set('date_to', query.date_to)
   if (query.sort) params.set('sort', query.sort)
   if (query.order) params.set('order', query.order)
+  if (query.q) params.set('q', query.q)
   const qs = params.toString()
   return request(`/transactions${qs ? `?${qs}` : ''}`)
 }
@@ -125,8 +127,18 @@ export function updateTransactionCategory(
 export interface StatementImportResult {
   imported: number
   skipped_duplicates: number
+  skipped_likely_duplicates?: number
   parsed: number
   ids: string[]
+  likely_duplicates?: Array<{
+    incoming_merchant: string
+    amount: number
+    type: string
+    received_at: string | null
+    matched_existing_source?: string
+    matched_existing_merchant?: string
+    reason: string
+  }>
 }
 
 export async function uploadStatementFile(
@@ -300,6 +312,47 @@ export function aiCategorize(opts: {
   if (opts.provider) qs.set('provider', opts.provider)
   const q = qs.toString()
   return request(`/ai/categorize${q ? `?${q}` : ''}`, { method: 'POST' })
+}
+
+export interface LiabilityItem {
+  id?: string
+  name: string
+  type: string
+  outstanding: number
+  updated_at?: string | null
+  last_updated?: string | null
+}
+
+export function fetchLiabilities(): Promise<{ items: LiabilityItem[]; total: number }> {
+  return request('/liabilities')
+}
+
+export function saveLiabilities(
+  items: Array<{ name: string; type: string; outstanding: number; last_updated?: string | null }>,
+): Promise<{ items: LiabilityItem[]; total: number }> {
+  return request('/liabilities', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  })
+}
+
+export function fetchBudgets(): Promise<{ budgets: Array<{ category: string; amount: number }> }> {
+  return request('/budgets')
+}
+
+export function saveBudgets(
+  budgets: Array<{ category: string; amount: number }>,
+): Promise<{ budgets: Array<{ category: string; amount: number }> }> {
+  return request('/budgets', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ budgets }),
+  })
+}
+
+export function exportDataUrl(format: 'json' | 'csv' = 'json'): string {
+  return `${API_BASE}/export?format=${format}`
 }
 
 export { API_BASE }

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { FileUp } from 'lucide-react'
-import { uploadStatementFile } from '../api'
+import { uploadStatementFile, type StatementImportResult } from '../api'
 import { PageHeader } from '../components/ui'
+import { formatINR } from '../lib/format'
 
 const BANKS = [
   'HDFC Bank',
@@ -19,25 +20,32 @@ export function ImportPage() {
   const [busy, setBusy] = useState(false)
   const [ok, setOk] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [result, setResult] = useState<StatementImportResult | null>(null)
 
   const saveFile = async (file: File | null) => {
     if (!file) return
     setBusy(true)
     setOk(null)
     setErr(null)
+    setResult(null)
     try {
-      const result = await uploadStatementFile(file, bank)
-      if (result.imported === 0) {
+      const res = await uploadStatementFile(file, bank)
+      setResult(res)
+      if (res.imported === 0) {
         setErr(
-          result.parsed === 0
+          res.parsed === 0
             ? 'No transactions found in that file'
-            : `Nothing new (${result.skipped_duplicates} already imported)`,
+            : `Nothing new imported · exact dups ${res.skipped_duplicates}` +
+                (res.skipped_likely_duplicates
+                  ? ` · cross-source likely dups ${res.skipped_likely_duplicates}`
+                  : ''),
         )
       } else {
         setOk(
-          `Imported ${result.imported} of ${result.parsed} rows` +
-            (result.skipped_duplicates
-              ? ` · skipped ${result.skipped_duplicates} duplicates`
+          `Imported ${res.imported} of ${res.parsed} rows` +
+            (res.skipped_duplicates ? ` · skipped ${res.skipped_duplicates} exact duplicates` : '') +
+            (res.skipped_likely_duplicates
+              ? ` · skipped ${res.skipped_likely_duplicates} likely SMS duplicates`
               : ''),
         )
       }
@@ -52,7 +60,7 @@ export function ImportPage() {
     <div className="fade-in">
       <PageHeader
         title="Import"
-        description="Upload bank statements (CSV, Excel, PDF) to backfill history alongside live SMS."
+        description="Upload bank statements (CSV, Excel, PDF). Exact and cross-source SMS duplicates are skipped so Cash Flow is not double-counted."
       />
 
       <section className="panel max-w-xl p-5">
@@ -61,7 +69,8 @@ export function ImportPage() {
         </div>
         <h2 className="text-base font-semibold">Statement upload</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Pick the bank, then drop a file. Duplicates are skipped automatically.
+          Pick the bank, then drop a file. Matches on amount + date + similar merchant against
+          existing SMS rows are flagged below.
         </p>
 
         <label className="mt-5 flex flex-col gap-1.5 text-xs font-medium text-[var(--muted)]">
@@ -98,6 +107,36 @@ export function ImportPage() {
           </p>
         ) : null}
       </section>
+
+      {result?.likely_duplicates?.length ? (
+        <section className="panel mt-5 max-w-3xl overflow-hidden">
+          <div className="border-b border-[var(--border)] px-4 py-3">
+            <h3 className="text-sm font-semibold">Likely cross-source duplicates (skipped)</h3>
+            <p className="text-xs text-[var(--muted)]">
+              Same amount, date, type, and similar merchant as an existing SMS/statement row
+            </p>
+          </div>
+          <ul className="divide-y divide-[var(--border)] text-sm">
+            {result.likely_duplicates.map((d, i) => (
+              <li key={i} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3">
+                <div>
+                  <p className="font-medium">{d.incoming_merchant}</p>
+                  <p className="text-xs text-[var(--muted)]">
+                    Matched {d.matched_existing_merchant || 'existing'} · source{' '}
+                    {d.matched_existing_source || 'unknown'}
+                  </p>
+                </div>
+                <div className="text-right text-xs text-[var(--muted)]">
+                  <p className="font-medium tabular-nums text-[var(--text)]">
+                    {formatINR(Number(d.amount) || 0)} · {d.type}
+                  </p>
+                  <p>{d.received_at ? String(d.received_at).slice(0, 10) : '—'}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   )
 }

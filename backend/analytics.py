@@ -106,6 +106,8 @@ def build_analytics(
     banks: list[str] | None = None,
     portfolio: Collection | None = None,
     networth_snapshots: Collection | None = None,
+    liabilities: Collection | None = None,
+    budgets: Collection | None = None,
 ) -> dict[str, Any]:
     match = _match_range(date_from, date_to, banks=banks)
     base = [{"$match": match}] if match else []
@@ -616,20 +618,6 @@ def build_analytics(
             filtered[k] = v
         lifestyle_category_monthly.append(filtered)
 
-    # Alerts / insights
-    alerts = _build_alerts(
-        transactions,
-        match,
-        total_debit=total_debit,
-        debit_count=debit_count,
-        avg_debit=float(debit.get("avg") or 0),
-        by_category=by_category,
-        recurring_merchants=recurring_merchants[:8],
-        monthly_rows=monthly_rows,
-        total_credit=total_credit,
-        total_invested=total_invested,
-    )
-
     # MoM change for KPIs
     mom = _mom_change(monthly_rows)
 
@@ -643,6 +631,29 @@ def build_analytics(
     )
 
     net_worth_estimate = liquid_total + total_current
+    liabilities_total = 0.0
+    liability_rows: list[dict[str, Any]] = []
+    if liabilities is not None:
+        try:
+            for doc in liabilities.find().sort("outstanding", -1):
+                amt = float(doc.get("outstanding") or 0)
+                liabilities_total += amt
+                updated = doc.get("updated_at") or doc.get("last_updated")
+                liability_rows.append(
+                    {
+                        "id": str(doc["_id"]),
+                        "name": str(doc.get("name") or "Liability"),
+                        "type": str(doc.get("type") or "other"),
+                        "outstanding": amt,
+                        "updated_at": updated.isoformat()
+                        if isinstance(updated, datetime)
+                        else updated,
+                    }
+                )
+            liabilities_total = round(liabilities_total, 2)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load liabilities: {exc}")
+
     indmoney_snapshot = None
     if networth_snapshots is not None:
         try:
@@ -659,6 +670,7 @@ def build_analytics(
                     "source": snap.get("source"),
                 }
                 if indmoney_snapshot["total_networth"] > 0:
+                    # Prefer INDmoney assets, then subtract manual liabilities if tracked
                     net_worth_estimate = indmoney_snapshot["total_networth"]
                 # Prefer savings/liquid from snapshot investments SA bucket if present
                 for row in snap.get("investments") or []:
@@ -668,6 +680,68 @@ def build_analytics(
                         break
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load networth snapshot: {exc}")
+
+    # Assets − liabilities (manual liabilities always reduce displayed net worth)
+    assets_total = round(liquid_total + total_current, 2)
+    if liabilities_total > 0:
+        if indmoney_snapshot and indmoney_snapshot.get("total_networth"):
+            # INDmoney net worth already nets its own liabilities; only subtract app-tracked ones
+            net_worth_estimate = round(float(indmoney_snapshot["total_networth"]) - liabilities_total, 2)
+        else:
+            net_worth_estimate = round(assets_total - liabilities_total, 2)
+
+    budget_map: dict[str, float] = {}
+    if budgets is not None:
+        try:
+            for doc in budgets.find():
+                cat = str(doc.get("category") or "").strip()
+                amt = float(doc.get("amount") or 0)
+                if cat and amt > 0:
+                    budget_map[cat] = amt
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load budgets: {exc}")
+
+    # Freshness timestamps
+    freshness: dict[str, Any] = {
+        "last_sms_at": None,
+        "last_statement_at": None,
+        "last_portfolio_at": None,
+        "last_indmoney_at": indmoney_snapshot.get("captured_at") if indmoney_snapshot else None,
+    }
+    try:
+        sms_doc = transactions.find_one(
+            {"source": "sms"}, sort=[("received_at", -1)], projection={"received_at": 1}
+        )
+        if sms_doc and isinstance(sms_doc.get("received_at"), datetime):
+            freshness["last_sms_at"] = sms_doc["received_at"].isoformat()
+        stmt_doc = transactions.find_one(
+            {"source": "statement"}, sort=[("received_at", -1)], projection={"received_at": 1}
+        )
+        if stmt_doc and isinstance(stmt_doc.get("received_at"), datetime):
+            freshness["last_statement_at"] = stmt_doc["received_at"].isoformat()
+        if portfolio is not None:
+            port_doc = portfolio.find_one(sort=[("updated_at", -1)], projection={"updated_at": 1, "import_date": 1})
+            if port_doc:
+                ts = port_doc.get("updated_at") or port_doc.get("import_date")
+                if isinstance(ts, datetime):
+                    freshness["last_portfolio_at"] = ts.isoformat()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not compute freshness: {exc}")
+
+    # Alerts / insights (rebuild with budgets)
+    alerts = _build_alerts(
+        transactions,
+        match,
+        total_debit=total_debit,
+        debit_count=debit_count,
+        avg_debit=float(debit.get("avg") or 0),
+        by_category=by_category,
+        recurring_merchants=recurring_merchants[:8],
+        monthly_rows=monthly_rows,
+        total_credit=total_credit,
+        total_invested=total_invested,
+        budgets=budget_map,
+    )
 
     return {
         "range": {
@@ -703,12 +777,17 @@ def build_analytics(
             "sms_liquid_total": round(sms_liquid_total, 2),
             "liquid_source": liquid_source,
             "total_invested": total_invested,
+            "liabilities_total": liabilities_total,
+            "assets_total": assets_total,
             "net_worth_estimate": net_worth_estimate,
             "investment_to_income": round(total_invested / total_credit * 100, 1)
             if total_credit
             else 0.0,
         },
         "indmoney_snapshot": indmoney_snapshot,
+        "liabilities": liability_rows,
+        "budgets": budget_map,
+        "freshness": freshness,
         "mom": mom,
         "monthly": monthly_rows,
         "daily": daily_rows,
@@ -786,11 +865,12 @@ def _build_alerts(
     monthly_rows: list[dict[str, Any]],
     total_credit: float,
     total_invested: float,
+    budgets: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     alerts: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
 
-    # Budget vs actual — soft defaults for expense categories
+    # Budget vs actual — user-defined targets, else soft defaults
     default_budgets = {
         "Food & Dining": 8000,
         "Shopping": 10000,
@@ -799,8 +879,15 @@ def _build_alerts(
         "Groceries": 6000,
         "Entertainment": 3000,
     }
+    active_budgets = {**default_budgets, **(budgets or {})}
+    # Drop zeroed-out user overrides (explicitly disabled)
+    if budgets is not None:
+        for cat, amt in budgets.items():
+            if amt <= 0:
+                active_budgets.pop(cat, None)
+
     cat_map = {r["name"]: r["debit"] for r in by_category}
-    for cat, budget in default_budgets.items():
+    for cat, budget in active_budgets.items():
         actual = cat_map.get(cat, 0)
         if actual <= 0 and budget:
             continue
@@ -815,6 +902,7 @@ def _build_alerts(
                 "budget": budget,
                 "actual": actual,
                 "pct": pct,
+                "user_defined": bool(budgets and cat in budgets),
             }
         )
 

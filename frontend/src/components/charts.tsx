@@ -77,15 +77,27 @@ function Tip({
 
 export function CashflowBars({
   data,
+  onMonthClick,
 }: {
   data: Array<{ month: string; debit: number; credit: number; net: number }>
+  onMonthClick?: (month: string) => void
 }) {
   const theme = useChartTheme()
   if (!data.length) return <EmptyState message="No cash-flow data yet" />
   const rows = data.map((d) => ({ ...d, label: formatMonth(d.month) }))
   return (
     <ResponsiveContainer width="100%" height={280}>
-      <BarChart data={rows} barGap={4} barCategoryGap="18%">
+      <BarChart
+        data={rows}
+        barGap={4}
+        barCategoryGap="18%"
+        style={{ cursor: onMonthClick ? 'pointer' : undefined }}
+        onClick={(state) => {
+          const payload = state as { activePayload?: Array<{ payload?: { month?: string } }> }
+          const month = payload.activePayload?.[0]?.payload?.month
+          if (month && onMonthClick) onMonthClick(month)
+        }}
+      >
         <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="label" tick={{ fill: theme.text, fontSize: 11 }} axisLine={false} tickLine={false} />
         <YAxis
@@ -108,10 +120,12 @@ export function NetTrendLine({
   data,
   dataKey = 'running_net',
   name = 'Running net',
+  onMonthClick,
 }: {
   data: Array<Record<string, string | number>>
   dataKey?: string
   name?: string
+  onMonthClick?: (month: string) => void
 }) {
   const theme = useChartTheme()
   if (!data.length) return <EmptyState message="No trend data yet" />
@@ -121,7 +135,15 @@ export function NetTrendLine({
   }))
   return (
     <ResponsiveContainer width="100%" height={280}>
-      <AreaChart data={rows}>
+      <AreaChart
+        data={rows}
+        style={{ cursor: onMonthClick ? 'pointer' : undefined }}
+        onClick={(state) => {
+          const payload = state as { activePayload?: Array<{ payload?: { month?: string } }> }
+          const month = String(payload.activePayload?.[0]?.payload?.month || '')
+          if (month && onMonthClick) onMonthClick(month)
+        }}
+      >
         <defs>
           <linearGradient id="netFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={theme.accent} stopOpacity={0.28} />
@@ -157,10 +179,12 @@ export function DonutChart({
   data,
   nameKey = 'name',
   valueKey = 'value',
+  onSliceClick,
 }: {
   data: Array<Record<string, string | number>>
   nameKey?: string
   valueKey?: string
+  onSliceClick?: (name: string) => void
 }) {
   const theme = useChartTheme()
   const cleaned = data.filter((d) => Number(d[valueKey]) > 0)
@@ -176,6 +200,11 @@ export function DonutChart({
           outerRadius="82%"
           paddingAngle={2}
           strokeWidth={0}
+          cursor={onSliceClick ? 'pointer' : undefined}
+          onClick={(_, index) => {
+            const name = String(cleaned[index]?.[nameKey] ?? '')
+            if (name && onSliceClick) onSliceClick(name)
+          }}
         >
           {cleaned.map((_, i) => (
             <Cell key={i} fill={theme.colors[i % theme.colors.length]} />
@@ -193,17 +222,31 @@ export function HorizontalBars({
   nameKey = 'name',
   valueKey = 'value',
   color,
+  onBarClick,
 }: {
   data: Array<Record<string, string | number>>
   nameKey?: string
   valueKey?: string
   color?: string
+  onBarClick?: (name: string) => void
 }) {
   const theme = useChartTheme()
   if (!data.length) return <EmptyState message="No ranking data yet" />
   return (
     <ResponsiveContainer width="100%" height={Math.max(240, data.length * 32)}>
-      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 12 }}>
+      <BarChart
+        data={data}
+        layout="vertical"
+        margin={{ left: 8, right: 12 }}
+        style={{ cursor: onBarClick ? 'pointer' : undefined }}
+        onClick={(state) => {
+          const payload = state as {
+            activePayload?: Array<{ payload?: Record<string, string | number> }>
+          }
+          const name = String(payload.activePayload?.[0]?.payload?.[nameKey] ?? '')
+          if (name && onBarClick) onBarClick(name)
+        }}
+      >
         <CartesianGrid stroke={theme.border} strokeDasharray="3 3" horizontal={false} />
         <XAxis
           type="number"
@@ -311,14 +354,26 @@ export function MultiLineChart({
 
 export function GroupedSourceBars({
   data,
+  onSourceClick,
 }: {
   data: Array<{ source: string; debit: number; credit: number; net: number }>
+  onSourceClick?: (source: string) => void
 }) {
   const theme = useChartTheme()
   if (!data.length) return <EmptyState message="No source breakdown yet" />
   return (
     <ResponsiveContainer width="100%" height={Math.max(260, data.length * 48)}>
-      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 12 }}>
+      <BarChart
+        data={data}
+        layout="vertical"
+        margin={{ left: 8, right: 12 }}
+        style={{ cursor: onSourceClick ? 'pointer' : undefined }}
+        onClick={(state) => {
+          const payload = state as { activePayload?: Array<{ payload?: { source?: string } }> }
+          const source = String(payload.activePayload?.[0]?.payload?.source || '')
+          if (source && onSourceClick) onSourceClick(source)
+        }}
+      >
         <CartesianGrid stroke={theme.border} strokeDasharray="3 3" horizontal={false} />
         <XAxis
           type="number"

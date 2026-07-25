@@ -12,6 +12,8 @@ export interface Filters {
   date_to: string
   sort: 'received_at' | 'amount'
   order: 'asc' | 'desc'
+  bank?: string
+  q?: string
 }
 
 interface Props {
@@ -22,6 +24,8 @@ interface Props {
   hasMore: boolean
   loading: boolean
   categories?: string[]
+  banks?: string[]
+  showSearch?: boolean
   onFiltersChange: (next: Filters) => void
   onPageChange: (page: number) => void
   onDelete: (id: string) => void
@@ -174,6 +178,8 @@ export function TransactionTable({
   hasMore,
   loading,
   categories = [...DEFAULT_CATEGORIES],
+  banks = [],
+  showSearch = false,
   onFiltersChange,
   onPageChange,
   onDelete,
@@ -182,6 +188,18 @@ export function TransactionTable({
   return (
     <div className="space-y-3">
       <div className="panel flex flex-wrap items-end gap-2 p-3">
+        {showSearch ? (
+          <label className="flex min-w-[160px] flex-1 flex-col gap-1 text-xs text-[var(--muted)]">
+            Search
+            <input
+              type="search"
+              className={inputClass}
+              placeholder="Merchant or description"
+              value={filters.q || ''}
+              onChange={(e) => onFiltersChange({ ...filters, q: e.target.value })}
+            />
+          </label>
+        ) : null}
         <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
           Category
           <select
@@ -197,6 +215,23 @@ export function TransactionTable({
             ))}
           </select>
         </label>
+        {banks.length || filters.bank !== undefined ? (
+          <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+            Source / bank
+            <select
+              className={selectClass}
+              value={filters.bank || ''}
+              onChange={(e) => onFiltersChange({ ...filters, bank: e.target.value })}
+            >
+              <option value="">All</option>
+              {(banks.length ? banks : filters.bank ? [filters.bank] : []).map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
           Card type
           <select

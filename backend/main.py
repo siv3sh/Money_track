@@ -1,5 +1,8 @@
 import os
+import csv
+import io
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -10,6 +13,7 @@ from bson.errors import InvalidId
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from pymongo import DESCENDING, MongoClient
 
@@ -45,6 +49,9 @@ webhook_events = db["webhook_events"]
 category_memory = db["category_memory"]
 portfolio = db["portfolio"]
 networth_snapshots = db["networth_snapshots"]
+liabilities_col = db["liabilities"]
+budgets_col = db["budgets"]
+import_events = db["import_events"]
 
 API_KEY = os.getenv("API_KEY", "")
 CORS_ORIGINS = [
@@ -131,6 +138,117 @@ def _fingerprint(doc: dict[str, Any]) -> str:
     else:
         day = str(ts)[:10]
     return f"{doc.get('type')}|{doc.get('amount')}|{day}|{(doc.get('raw_text') or '')[:80]}"
+
+
+def _soft_fingerprint(doc: dict[str, Any]) -> str:
+    """Cross-source soft match: amount + day + type + cleaned merchant prefix."""
+    ts = doc.get("received_at")
+    if isinstance(ts, datetime):
+        day = ts.strftime("%Y-%m-%d")
+    else:
+        day = str(ts)[:10]
+    label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text")).lower()
+    label = re.sub(r"[^a-z0-9]", "", label)[:18]
+    try:
+        amount = f"{float(doc.get('amount') or 0):.2f}"
+    except (TypeError, ValueError):
+        amount = str(doc.get("amount"))
+    return f"{doc.get('type')}|{amount}|{day}|{label}"
+
+
+def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
+    if not docs:
+        return {
+            "imported": 0,
+            "skipped_duplicates": 0,
+            "skipped_likely_duplicates": 0,
+            "parsed": 0,
+            "ids": [],
+            "likely_duplicates": [],
+        }
+
+    exact: set[str] = set()
+    soft: set[str] = set()
+    soft_examples: dict[str, dict[str, Any]] = {}
+    for doc in transactions.find(
+        {},
+        {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1, "merchant": 1, "source": 1},
+    ).limit(8000):
+        exact.add(_fingerprint(doc))
+        sk = _soft_fingerprint(doc)
+        soft.add(sk)
+        soft_examples.setdefault(
+            sk,
+            {
+                "existing_source": doc.get("source") or "unknown",
+                "merchant": clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text")),
+                "amount": doc.get("amount"),
+                "type": doc.get("type"),
+            },
+        )
+
+    memory = _load_merchant_memory()
+    to_insert: list[dict[str, Any]] = []
+    skipped = 0
+    skipped_likely = 0
+    likely_duplicates: list[dict[str, Any]] = []
+    for doc in docs:
+        fp = _fingerprint(doc)
+        sk = _soft_fingerprint(doc)
+        if fp in exact:
+            skipped += 1
+            continue
+        if sk in soft:
+            skipped_likely += 1
+            example = soft_examples.get(sk) or {}
+            if len(likely_duplicates) < 25:
+                likely_duplicates.append(
+                    {
+                        "incoming_merchant": clean_merchant_label(
+                            doc.get("merchant"), fallback=doc.get("raw_text")
+                        ),
+                        "amount": doc.get("amount"),
+                        "type": doc.get("type"),
+                        "received_at": doc.get("received_at").isoformat()
+                        if isinstance(doc.get("received_at"), datetime)
+                        else doc.get("received_at"),
+                        "matched_existing_source": example.get("existing_source"),
+                        "matched_existing_merchant": example.get("merchant"),
+                        "reason": "Same amount, date, type, and similar merchant across sources",
+                    }
+                )
+            continue
+        exact.add(fp)
+        soft.add(sk)
+        apply_category(doc, memory)
+        to_insert.append(doc)
+
+    ids: list[str] = []
+    if to_insert:
+        result = transactions.insert_many(to_insert)
+        ids = [str(i) for i in result.inserted_ids]
+        try:
+            import_events.insert_one(
+                {
+                    "kind": "statement",
+                    "imported": len(ids),
+                    "skipped_duplicates": skipped,
+                    "skipped_likely_duplicates": skipped_likely,
+                    "parsed": len(docs),
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not log import event: {exc}")
+
+    return {
+        "imported": len(ids),
+        "skipped_duplicates": skipped,
+        "skipped_likely_duplicates": skipped_likely,
+        "parsed": len(docs),
+        "ids": ids,
+        "likely_duplicates": likely_duplicates,
+    }
 
 
 def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
@@ -446,40 +564,6 @@ def sms_webhook_debug(limit: int = Query(default=20, ge=1, le=100)):
     return {"count": len(out), "events": out}
 
 
-def _import_statement_docs(docs: list[dict[str, Any]]) -> dict[str, Any]:
-    if not docs:
-        return {"imported": 0, "skipped_duplicates": 0, "parsed": 0, "ids": []}
-
-    # Load recent fingerprints to skip obvious duplicates
-    existing: set[str] = set()
-    for doc in transactions.find({}, {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1}).limit(5000):
-        existing.add(_fingerprint(doc))
-
-    memory = _load_merchant_memory()
-    to_insert: list[dict[str, Any]] = []
-    skipped = 0
-    for doc in docs:
-        fp = _fingerprint(doc)
-        if fp in existing:
-            skipped += 1
-            continue
-        existing.add(fp)
-        apply_category(doc, memory)
-        to_insert.append(doc)
-
-    ids: list[str] = []
-    if to_insert:
-        result = transactions.insert_many(to_insert)
-        ids = [str(i) for i in result.inserted_ids]
-
-    return {
-        "imported": len(ids),
-        "skipped_duplicates": skipped,
-        "parsed": len(docs),
-        "ids": ids,
-    }
-
-
 @app.post("/statements/import")
 def import_statement(payload: StatementImportPayload):
     """Paste CSV or line-based statement text (for July history, etc.)."""
@@ -535,28 +619,36 @@ def list_transactions(
     date_to: str | None = None,
     sort: str = Query(default="received_at", pattern="^(received_at|amount)$"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    q: str | None = Query(default=None, max_length=120),
 ):
     query: dict[str, Any] = {}
     if card_type:
         query["card_type"] = card_type
     if bank:
-        query["bank"] = {"$regex": f"^{bank}$", "$options": "i"}
+        query["bank"] = {"$regex": f"^{re.escape(bank)}$", "$options": "i"}
     if category:
         query["category"] = category
     if type:
         query["type"] = type
+    if q and q.strip():
+        needle = re.escape(q.strip())
+        query["$or"] = [
+            {"merchant": {"$regex": needle, "$options": "i"}},
+            {"raw_text": {"$regex": needle, "$options": "i"}},
+            {"merchant_raw": {"$regex": needle, "$options": "i"}},
+        ]
 
     received_filter: dict[str, Any] = {}
     if date_from:
-        try:
-            received_filter["$gte"] = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid date_from") from exc
+        start = _parse_optional_date(date_from)
+        if start is None:
+            raise HTTPException(status_code=400, detail="Invalid date_from")
+        received_filter["$gte"] = start
     if date_to:
-        try:
-            received_filter["$lte"] = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid date_to") from exc
+        end = _parse_optional_date(date_to, end_of_day=True)
+        if end is None:
+            raise HTTPException(status_code=400, detail="Invalid date_to")
+        received_filter["$lte"] = end
     if received_filter:
         query["received_at"] = received_filter
 
@@ -1047,6 +1139,8 @@ def analytics(
         banks=banks,
         portfolio=portfolio,
         networth_snapshots=networth_snapshots,
+        liabilities=liabilities_col,
+        budgets=budgets_col,
     )
 
 
@@ -1210,6 +1304,187 @@ async def indmoney_commit(
     }
 
 
+# ── Liabilities ──────────────────────────────────────────────────────────────
+
+LIABILITY_TYPES = ("credit_card", "loan", "emi", "bnpl", "other")
+
+
+class LiabilityItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    type: str = Field(default="other", max_length=32)
+    outstanding: float = Field(..., ge=0)
+    last_updated: str | None = None
+
+    @field_validator("type")
+    @classmethod
+    def valid_type(cls, value: str) -> str:
+        cleaned = value.strip().lower().replace(" ", "_")
+        if cleaned not in LIABILITY_TYPES:
+            raise ValueError(f"type must be one of: {', '.join(LIABILITY_TYPES)}")
+        return cleaned
+
+
+class LiabilitiesPayload(BaseModel):
+    items: list[LiabilityItem] = Field(default_factory=list)
+
+
+def _serialize_liability(doc: dict[str, Any]) -> dict[str, Any]:
+    updated = doc.get("updated_at") or doc.get("last_updated")
+    return {
+        "id": str(doc["_id"]),
+        "name": doc.get("name"),
+        "type": doc.get("type") or "other",
+        "outstanding": float(doc.get("outstanding") or 0),
+        "updated_at": updated.isoformat() if isinstance(updated, datetime) else updated,
+    }
+
+
+@app.get("/liabilities")
+def get_liabilities():
+    rows = [_serialize_liability(d) for d in liabilities_col.find().sort("outstanding", DESCENDING)]
+    return {
+        "items": rows,
+        "total": round(sum(r["outstanding"] for r in rows), 2),
+    }
+
+
+@app.put("/liabilities")
+def put_liabilities(payload: LiabilitiesPayload):
+    now = datetime.now(timezone.utc)
+    liabilities_col.delete_many({})
+    docs = []
+    for item in payload.items:
+        updated = now
+        if item.last_updated:
+            parsed = _parse_optional_date(item.last_updated)
+            if parsed:
+                updated = parsed
+        docs.append(
+            {
+                "name": item.name.strip(),
+                "type": item.type,
+                "outstanding": float(item.outstanding),
+                "updated_at": updated,
+            }
+        )
+    if docs:
+        liabilities_col.insert_many(docs)
+    return get_liabilities()
+
+
+# ── Budgets ──────────────────────────────────────────────────────────────────
+
+class BudgetItem(BaseModel):
+    category: str = Field(..., min_length=1, max_length=64)
+    amount: float = Field(..., ge=0)
+
+    @field_validator("category")
+    @classmethod
+    def valid_category(cls, value: str) -> str:
+        cleaned = value.strip()
+        if cleaned not in CATEGORIES:
+            raise ValueError(f"category must be one of: {', '.join(CATEGORIES)}")
+        return cleaned
+
+
+class BudgetsPayload(BaseModel):
+    budgets: list[BudgetItem] = Field(default_factory=list)
+
+
+@app.get("/budgets")
+def get_budgets():
+    rows = []
+    for doc in budgets_col.find():
+        rows.append(
+            {
+                "category": doc.get("category"),
+                "amount": float(doc.get("amount") or 0),
+            }
+        )
+    rows.sort(key=lambda r: r["category"] or "")
+    return {"budgets": rows}
+
+
+@app.put("/budgets")
+def put_budgets(payload: BudgetsPayload):
+    budgets_col.delete_many({})
+    docs = [
+        {"category": b.category, "amount": float(b.amount), "updated_at": datetime.now(timezone.utc)}
+        for b in payload.budgets
+        if b.amount > 0
+    ]
+    if docs:
+        budgets_col.insert_many(docs)
+    return get_budgets()
+
+
+# ── Export ───────────────────────────────────────────────────────────────────
+
+@app.get("/export")
+def export_data(format: str = Query(default="json", pattern="^(json|csv)$")):
+    """Download transactions, investments, and liabilities."""
+    txns = [_serialize(d) for d in transactions.find().sort("received_at", DESCENDING).limit(20000)]
+    holdings = [_serialize_holding(d) for d in portfolio.find()]
+    liabs = [_serialize_liability(d) for d in liabilities_col.find()]
+    payload = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "transactions": txns,
+        "investments": holdings,
+        "liabilities": liabs,
+    }
+    if format == "json":
+        return JSONResponse(
+            content=payload,
+            headers={"Content-Disposition": "attachment; filename=money-track-export.json"},
+        )
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["section", "field1", "field2", "field3", "field4", "field5", "field6"])
+    for t in txns:
+        writer.writerow(
+            [
+                "transaction",
+                t.get("received_at"),
+                t.get("type"),
+                t.get("amount"),
+                t.get("merchant"),
+                t.get("category"),
+                t.get("bank"),
+            ]
+        )
+    for h in holdings:
+        writer.writerow(
+            [
+                "investment",
+                h.get("name"),
+                h.get("asset_class"),
+                h.get("invested"),
+                h.get("current_value"),
+                h.get("pnl"),
+                h.get("source"),
+            ]
+        )
+    for li in liabs:
+        writer.writerow(
+            [
+                "liability",
+                li.get("name"),
+                li.get("type"),
+                li.get("outstanding"),
+                li.get("updated_at"),
+                "",
+                "",
+            ]
+        )
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=money-track-export.csv"},
+    )
+
+
 # ── AI Insights ──────────────────────────────────────────────────────────────
 
 class AiAskPayload(BaseModel):
@@ -1229,7 +1504,7 @@ def ai_ask(payload: AiAskPayload):
     start = _parse_optional_date(payload.date_from)
     end = _parse_optional_date(payload.date_to, end_of_day=True)
     analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots
+        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
     )
     try:
         return ask(payload.question, analytics_data, provider_name=payload.provider)
@@ -1246,7 +1521,7 @@ def ai_monthly_summary(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots
+        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
     )
     try:
         return monthly_summary(analytics_data, provider_name=provider)
@@ -1263,7 +1538,7 @@ def ai_anomalies(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots
+        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
     )
     try:
         return explain_anomalies(analytics_data, provider_name=provider)

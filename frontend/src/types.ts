@@ -89,6 +89,8 @@ export interface AnalyticsPayload {
     other_income_total: number
     lifestyle_to_salary: number
     total_invested: number
+    liabilities_total: number
+    assets_total: number
     net_worth_estimate: number
     investment_to_income: number
   }
@@ -173,6 +175,20 @@ export interface AnalyticsPayload {
     captured_at: string | null
     source?: string
   } | null
+  liabilities?: Array<{
+    id: string
+    name: string
+    type: string
+    outstanding: number
+    updated_at: string | null
+  }>
+  budgets?: Record<string, number>
+  freshness?: {
+    last_sms_at: string | null
+    last_statement_at: string | null
+    last_portfolio_at: string | null
+    last_indmoney_at: string | null
+  }
   alerts: AnalyticsAlert[]
   filters: { banks: string[] }
 }

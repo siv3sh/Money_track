@@ -77,6 +77,18 @@ export function InvestmentsPage() {
             />
           </div>
 
+          {data?.freshness?.last_portfolio_at || data?.freshness?.last_indmoney_at ? (
+            <p className="mb-4 text-xs text-[var(--muted)]">
+              Last synced:{' '}
+              {data.freshness.last_portfolio_at
+                ? new Date(data.freshness.last_portfolio_at).toLocaleString('en-IN')
+                : data.freshness.last_indmoney_at
+                  ? new Date(data.freshness.last_indmoney_at).toLocaleString('en-IN')
+                  : '—'}
+              {data.freshness.last_indmoney_at ? ' via INDmoney / CSV import' : ' via portfolio editor'}
+            </p>
+          ) : null}
+
           <div className="mb-5 grid gap-4 xl:grid-cols-2">
             <ChartCard title="Portfolio allocation" subtitle="By asset class (cost basis)">
               <DonutChart

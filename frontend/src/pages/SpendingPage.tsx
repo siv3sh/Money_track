@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
 import {
@@ -10,9 +11,11 @@ import {
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { CARD_TYPE_LABELS, type CardType } from '../types'
 import { formatINR } from '../lib/format'
+import { transactionsHref } from '../lib/transactionsLink'
 
 export function SpendingPage() {
-  const { data, loading, error } = useFilters()
+  const navigate = useNavigate()
+  const { data, loading, error, dateFrom, dateTo } = useFilters()
   const o = data?.overview
 
   const lifestyleCats = data?.by_category_lifestyle?.length
@@ -38,12 +41,17 @@ export function SpendingPage() {
   }, [lifestyleMonthly])
 
   const topCat = lifestyleCats[0]
+  const periodLink = transactionsHref({
+    type: 'debit',
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+  })
 
   return (
     <div className="fade-in">
       <PageHeader
         title="Spending Analysis"
-        description="Lifestyle spend excludes Transfers and Investments so self-moves and SIPs don’t look like shopping."
+        description="Lifestyle spend excludes Transfers and Investments. Click a category or merchant to open matching transactions."
       />
       <FilterBar />
 
@@ -63,16 +71,32 @@ export function SpendingPage() {
               value={formatINR(o.lifestyle_spend ?? o.total_debit)}
               tone="debit"
               hint="Excludes transfers & investments"
+              to={periodLink}
             />
             <KpiCard
               label="All bank debits"
               value={formatINR(o.total_debit)}
               hint={`Transfers ${formatINR(o.transfers_debit ?? 0)} · Invest ${formatINR(o.investments_debit ?? 0)}`}
+              to={transactionsHref({
+                type: 'debit',
+                date_from: dateFrom || undefined,
+                date_to: dateTo || undefined,
+              })}
             />
             <KpiCard
               label="Top lifestyle category"
               value={topCat?.name || '—'}
               hint={topCat ? formatINR(topCat.debit) : undefined}
+              to={
+                topCat
+                  ? transactionsHref({
+                      category: topCat.name,
+                      type: 'debit',
+                      date_from: dateFrom || undefined,
+                      date_to: dateTo || undefined,
+                    })
+                  : undefined
+              }
             />
             <KpiCard
               label="Avg daily lifestyle"
@@ -84,24 +108,52 @@ export function SpendingPage() {
           <div className="mb-5 grid gap-4 xl:grid-cols-2">
             <ChartCard
               title="Lifestyle categories"
-              subtitle="Transfers & Investments excluded"
+              subtitle="Click a slice to view transactions"
             >
               <DonutChart
                 data={lifestyleCats.map((c) => ({ name: c.name, value: c.debit }))}
+                onSliceClick={(name) =>
+                  navigate(
+                    transactionsHref({
+                      category: name,
+                      type: 'debit',
+                      date_from: dateFrom || undefined,
+                      date_to: dateTo || undefined,
+                    }),
+                  )
+                }
               />
             </ChartCard>
-            <ChartCard title="Lifestyle category trend" subtitle="Stacked monthly (excludes transfers & investments)">
+            <ChartCard
+              title="Lifestyle category trend"
+              subtitle="Stacked monthly (excludes transfers & investments)"
+            >
               <StackedAreaChart data={lifestyleMonthly} keys={categoryKeys} />
             </ChartCard>
           </div>
 
           <div className="mb-5 grid gap-4 xl:grid-cols-2">
-            <ChartCard title="Top merchants" subtitle="Ranked by debit amount">
+            <ChartCard title="Top merchants" subtitle="Click a bar to search transactions">
               <HorizontalBars
                 data={data.merchants.map((m) => ({
                   name: m.merchant.length > 22 ? `${m.merchant.slice(0, 20)}…` : m.merchant,
                   value: m.amount,
+                  full: m.merchant,
                 }))}
+                onBarClick={(name) => {
+                  const full =
+                    data.merchants.find(
+                      (m) => m.merchant === name || m.merchant.startsWith(name.replace(/…$/, '')),
+                    )?.merchant || name.replace(/…$/, '')
+                  navigate(
+                    transactionsHref({
+                      q: full,
+                      type: 'debit',
+                      date_from: dateFrom || undefined,
+                      date_to: dateTo || undefined,
+                    }),
+                  )
+                }}
               />
             </ChartCard>
             <ChartCard title="Recurring vs one-time" subtitle="Split of debit volume">
