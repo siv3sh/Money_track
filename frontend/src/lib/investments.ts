@@ -44,9 +44,9 @@ export function normalizeInvestmentMerchant(raw: string | null | undefined): str
   const s = flattenText(raw || '') || 'Unknown'
   const lower = s.toLowerCase()
   if (/digital\s*gold|neosiex.*digital/.test(lower)) return 'Digital Gold'
-  if (/indmoney/.test(lower)) return 'IndMoney'
+  // INDstocks is IndMoney's stock-broker product — keep one bucket
+  if (/indmoney|indstocks|ind\s*money/.test(lower)) return 'IndMoney'
   if (/groww/.test(lower)) return 'Groww'
-  if (/indstocks/.test(lower)) return 'INDstocks'
   if (/finzoomer/.test(lower)) return 'Finzoomers'
   if (/nippon|neosiex.*nippon/.test(lower)) return 'Nippon India MF'
   if (/clearing\s*corp|iccl/.test(lower)) return 'Indian Clearing Corp (MF)'
@@ -54,6 +54,11 @@ export function normalizeInvestmentMerchant(raw: string | null | undefined): str
   if (/upstox/.test(lower)) return 'Upstox'
   if (s.length > 42) return `${s.slice(0, 39)}…`
   return s
+}
+
+/** Skip ₹1 broker KYC / signup pings — not real investments. */
+export function isMeaningfulInvestment(t: Transaction): boolean {
+  return isInvestmentTxn(t) && t.amount >= 2
 }
 
 /** Merge category=Investments rows with broker-pattern matches; de-dupe by id. */
@@ -68,9 +73,9 @@ export function mergeInvestmentTransactions(
   for (const t of candidates) {
     if (isInvestmentTxn(t)) byId.set(t._id, t)
   }
-  return [...byId.values()].sort(
-    (a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime(),
-  )
+  return [...byId.values()]
+    .filter(isMeaningfulInvestment)
+    .sort((a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime())
 }
 
 /** Build investment views from real transactions only — no seeded/demo holdings. */
@@ -78,7 +83,7 @@ export function buildInvestmentSnapshot(
   txns: Transaction[],
   monthly: MonthlyBucket[] = [],
 ): InvestmentSnapshot {
-  const investmentTxns = txns.filter(isInvestmentTxn)
+  const investmentTxns = txns.filter(isMeaningfulInvestment)
   const totalInvested = investmentTxns.reduce((s, t) => s + t.amount, 0)
 
   const now = new Date()

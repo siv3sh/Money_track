@@ -187,6 +187,8 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("upstox", "Investments"),
     ("kuvera", "Investments"),
     ("indmoney", "Investments"),
+    ("indstocks", "Investments"),
+    ("ind money", "Investments"),
     ("mutual fund", "Investments"),
     ("stocksip", "Investments"),
     ("stocks", "Investments"),
