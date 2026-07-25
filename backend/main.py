@@ -16,6 +16,7 @@ from pymongo import DESCENDING, MongoClient
 from parser import parse_sms
 from statement_parser import parse_statement, parse_statement_file
 from categorizer import CATEGORIES, apply_category
+from analytics import build_analytics
 
 load_dotenv()
 
@@ -1021,3 +1022,16 @@ def reports_detailed(
         "largest": [_serialize(doc) for doc in largest],
         "categories": CATEGORIES,
     }
+
+
+@app.get("/analytics")
+def analytics(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    bank: str | None = Query(default=None, description="Comma-separated bank names"),
+):
+    """Unified analytics payload for Net Worth, Cash Flow, Spending, Sources, Investments, Alerts."""
+    start = _parse_optional_date(date_from)
+    end = _parse_optional_date(date_to, end_of_day=True)
+    banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
+    return build_analytics(transactions, date_from=start, date_to=end, banks=banks)

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { FileUp } from 'lucide-react'
 import { uploadStatementFile } from '../api'
+import { PageHeader } from '../components/ui'
 
 const BANKS = [
   'HDFC Bank',
@@ -10,10 +11,8 @@ const BANKS = [
   'Kotak Bank',
   'IDFC First Bank',
   'Yes Bank',
+  'Federal Bank',
 ]
-
-const field =
-  'w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm text-[var(--text)]'
 
 export function ImportPage() {
   const [bank, setBank] = useState('HDFC Bank')
@@ -38,38 +37,36 @@ export function ImportPage() {
         setOk(
           `Imported ${result.imported} of ${result.parsed} rows` +
             (result.skipped_duplicates
-              ? ` · ${result.skipped_duplicates} duplicates skipped`
+              ? ` · skipped ${result.skipped_duplicates} duplicates`
               : ''),
         )
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Upload failed')
+      setErr(e instanceof Error ? e.message : 'Import failed')
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4 xl:max-w-3xl">
-      <section className="panel p-5">
-        <h2 className="text-lg font-semibold tracking-tight">Import statement</h2>
+    <div className="fade-in">
+      <PageHeader
+        title="Import"
+        description="Upload bank statements (CSV, Excel, PDF) to backfill history alongside live SMS."
+      />
+
+      <section className="panel max-w-xl p-5">
+        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
+          <FileUp size={22} />
+        </div>
+        <h2 className="text-base font-semibold">Statement upload</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Upload a bank statement file. Supported: CSV, Excel (.xlsx / .xls), PDF.
+          Pick the bank, then drop a file. Duplicates are skipped automatically.
         </p>
 
-        <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-[var(--muted)]">
-          <li>Open net banking or your bank app</li>
-          <li>Download account statement for the month you want</li>
-          <li>Choose bank below and upload the file</li>
-        </ol>
-
-        <label className="mt-5 block text-xs text-[var(--muted)]">
+        <label className="mt-5 flex flex-col gap-1.5 text-xs font-medium text-[var(--muted)]">
           Bank
-          <select
-            className={`${field} mt-1`}
-            value={bank}
-            onChange={(e) => setBank(e.target.value)}
-          >
+          <select className="field" value={bank} onChange={(e) => setBank(e.target.value)}>
             {BANKS.map((b) => (
               <option key={b} value={b}>
                 {b}
@@ -78,28 +75,29 @@ export function ImportPage() {
           </select>
         </label>
 
-        <label className="mt-4 flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-10 text-sm hover:border-[var(--accent)]">
-          <FileUp size={28} className="text-[var(--accent)]" />
-          <span className="font-medium text-[var(--text)]">
-            {busy ? 'Uploading…' : 'Tap to choose CSV / Excel / PDF'}
-          </span>
-          <span className="text-xs text-[var(--muted)]">.csv .xlsx .xls .pdf · max ~8MB</span>
+        <label className="mt-4 flex flex-col gap-1.5 text-xs font-medium text-[var(--muted)]">
+          File
           <input
             type="file"
-            accept=".csv,.txt,.tsv,.xlsx,.xls,.pdf,text/csv,text/plain,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            className="hidden"
+            accept=".csv,.tsv,.txt,.xlsx,.xls,.pdf"
+            className="field"
             disabled={busy}
-            onChange={(e) => void saveFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => void saveFile(e.target.files?.[0] || null)}
           />
         </label>
 
-        {ok ? <p className="mt-4 text-sm text-[var(--credit)]">{ok}</p> : null}
-        {err ? <p className="mt-4 text-sm text-[var(--debit)]">{err}</p> : null}
+        {busy ? <p className="mt-4 text-sm text-[var(--muted)]">Importing…</p> : null}
+        {ok ? (
+          <p className="mt-4 rounded-xl bg-[var(--credit-soft)] px-3 py-2 text-sm text-[var(--credit)]">
+            {ok}
+          </p>
+        ) : null}
+        {err ? (
+          <p className="mt-4 rounded-xl bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]">
+            {err}
+          </p>
+        ) : null}
       </section>
-
-      <p className="text-center text-xs text-[var(--muted)]">
-        After import, open <strong>Dashboard</strong> or <strong>Reports</strong> to see the data.
-      </p>
     </div>
   )
 }

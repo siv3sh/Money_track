@@ -1,61 +1,51 @@
-export function formatINR(amount: number): string {
+export function formatINR(value: number): string {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
-    maximumFractionDigits: 2,
-  }).format(amount)
+    maximumFractionDigits: value % 1 === 0 ? 0 : 2,
+  }).format(value)
 }
 
-/** Map DLT sender IDs like VM-HDFCBK → display bank name. */
-const SENDER_BANK: Record<string, string> = {
-  HDFCBK: 'HDFC Bank',
-  HDFC: 'HDFC Bank',
-  SBIINB: 'SBI',
-  SBIPSG: 'SBI',
-  SBI: 'SBI',
-  ICICIB: 'ICICI Bank',
-  ICICI: 'ICICI Bank',
-  AXISBK: 'Axis Bank',
-  AXIS: 'Axis Bank',
-  KOTAKB: 'Kotak Bank',
-  KOTAK: 'Kotak Bank',
-  IDFCFB: 'IDFC First Bank',
-  IDFC: 'IDFC First Bank',
+export function formatCompactINR(value: number): string {
+  const abs = Math.abs(value)
+  if (abs >= 10_000_000) return `₹${(value / 10_000_000).toFixed(2)}Cr`
+  if (abs >= 100_000) return `₹${(value / 100_000).toFixed(2)}L`
+  if (abs >= 1_000) return `₹${(value / 1_000).toFixed(1)}k`
+  return formatINR(value)
 }
 
-export function bankLabel(bank: string | null | undefined, sender?: string | null): string {
-  if (bank && bank.trim()) return bank
-  const cleaned = (sender || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase()
-  if (!cleaned) return 'Unknown bank'
-  const keys = Object.keys(SENDER_BANK).sort((a, b) => b.length - a.length)
-  for (const key of keys) {
-    if (cleaned === key || cleaned.endsWith(key)) return SENDER_BANK[key]
-  }
-  return sender || 'Unknown bank'
-}
-
-export function formatDate(iso: string): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) {
-    // timestamp may be YYYY-MM prefix only
-    return iso.slice(0, 16).replace('T', ' ')
-  }
-  return d.toLocaleString('en-IN', {
+export function formatDate(value: string): string {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleDateString('en-IN', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
   })
 }
 
-export function pctChange(current: number, previous: number): string | null {
-  if (previous === 0) {
-    if (current === 0) return null
-    return current > 0 ? '+∞' : null
-  }
-  const pct = ((current - previous) / Math.abs(previous)) * 100
+export function formatMonth(ym: string): string {
+  const [y, m] = ym.split('-')
+  if (!y || !m) return ym
+  const d = new Date(Number(y), Number(m) - 1, 1)
+  return d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
+}
+
+export function bankLabel(bank: string | null | undefined, sender?: string): string {
+  if (bank) return bank
+  if (sender) return sender
+  return 'Unknown'
+}
+
+export function pctChangeLabel(pct: number | null | undefined): string {
+  if (pct == null) return '—'
   const sign = pct > 0 ? '+' : ''
-  return `${sign}${pct.toFixed(0)}%`
+  return `${sign}${pct.toFixed(1)}%`
+}
+
+export function toInputDate(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }

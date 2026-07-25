@@ -1,7 +1,6 @@
 export type TxnType = 'debit' | 'credit'
 export type CardType = 'credit_card' | 'debit_card' | 'upi' | 'bank_account'
 
-/** Matches parser.Transaction + fields added when stored in MongoDB. */
 export interface Transaction {
   _id: string
   type: TxnType
@@ -13,40 +12,14 @@ export interface Transaction {
   bank: string | null
   raw_text: string
   sender?: string
+  source?: string
   received_at: string
   category?: string | null
   mcc?: string | null
   category_source?: string | null
 }
 
-export interface Summary {
-  total_debit: number
-  total_credit: number
-  net: number
-  count: number
-  this_month_debit: number
-  this_month_credit: number
-  this_month_net: number
-  last_month_debit: number
-  last_month_credit: number
-  last_month_net: number
-}
-
-export interface MonthlyBucket {
-  month: string
-  debit: number
-  credit: number
-  net: number
-  count: number
-}
-
-export interface MerchantSpend {
-  merchant: string
-  amount: number
-  count: number
-}
-
-export interface ReportBreakdownRow {
+export interface BreakdownRow {
   name: string
   debit: number
   credit: number
@@ -55,29 +28,40 @@ export interface ReportBreakdownRow {
   debit_share: number
 }
 
-export interface ReportMerchantRow {
-  merchant: string
-  amount: number
-  count: number
-  avg: number
-  share: number
-}
-
-export interface ReportDailyRow {
-  date: string
+export interface MonthlyRow {
+  month: string
   debit: number
   credit: number
   net: number
   count: number
+  running_net?: number
 }
 
-export interface ReportWeekdayRow {
-  day: string
+export interface MerchantRow {
+  merchant: string
   amount: number
   count: number
+  avg?: number
+  share?: number
 }
 
-export interface DetailedReport {
+export interface AnalyticsAlert {
+  type: string
+  severity: 'info' | 'warning' | 'alert'
+  title: string
+  message: string
+  category?: string
+  budget?: number
+  actual?: number
+  pct?: number
+  amount?: number
+  merchant?: string
+  avg?: number
+  count?: number
+  created_at?: string
+}
+
+export interface AnalyticsPayload {
   range: { date_from: string | null; date_to: string | null }
   overview: {
     total_debit: number
@@ -92,17 +76,76 @@ export interface DetailedReport {
     max_credit: number
     active_days: number
     avg_daily_debit: number
+    liquid_total: number
+    total_invested: number
+    net_worth_estimate: number
+    investment_to_income: number
   }
-  by_bank: ReportBreakdownRow[]
-  by_card_type: ReportBreakdownRow[]
-  by_source: ReportBreakdownRow[]
-  by_category?: ReportBreakdownRow[]
-  merchants: ReportMerchantRow[]
-  daily: ReportDailyRow[]
-  weekday: ReportWeekdayRow[]
-  monthly: MonthlyBucket[]
-  largest: Transaction[]
-  categories?: string[]
+  mom: {
+    net_pct: number | null
+    debit_pct: number | null
+    credit_pct: number | null
+    savings_pct: number | null
+    current_month?: string
+    previous_month?: string
+    current_net?: number
+    current_debit?: number
+    current_credit?: number
+  }
+  monthly: MonthlyRow[]
+  daily: Array<{ date: string; debit: number; credit: number; net: number; count: number }>
+  weekday: Array<{ day: string; dow: number; amount: number; count: number }>
+  day_of_month: Array<{ day: number; amount: number; count: number }>
+  by_bank: BreakdownRow[]
+  by_card_type: BreakdownRow[]
+  by_source: BreakdownRow[]
+  by_category: BreakdownRow[]
+  category_monthly: Array<Record<string, string | number>>
+  source_monthly: Array<{
+    month: string
+    source: string
+    debit: number
+    credit: number
+    net: number
+    count: number
+  }>
+  merchants: MerchantRow[]
+  recurring: {
+    recurring_amount: number
+    onetime_amount: number
+    merchants: Array<{ merchant: string; amount: number; count: number; avg: number }>
+  }
+  accounts: Array<{
+    bank: string
+    account_last4: string
+    balance: number
+    as_of: string | null
+  }>
+  income_sources: Array<{ name: string; amount: number; count: number }>
+  investments: {
+    total_invested: number
+    total_current: number
+    pnl: number
+    holdings: Array<{
+      name: string
+      asset_class: string
+      invested: number
+      current_value: number
+      pnl: number
+      pnl_pct: number
+      count: number
+    }>
+    asset_allocation: Array<{ name: string; value: number }>
+    monthly: Array<{
+      month: string
+      invested: number
+      returned: number
+      cumulative: number
+    }>
+    note: string
+  }
+  alerts: AnalyticsAlert[]
+  filters: { banks: string[] }
 }
 
 export const DEFAULT_CATEGORIES = [
@@ -127,3 +170,14 @@ export const CARD_TYPE_LABELS: Record<CardType, string> = {
   upi: 'UPI',
   bank_account: 'Bank account',
 }
+
+export const CHART_COLORS = [
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
+  'var(--chart-6)',
+  'var(--chart-7)',
+  'var(--chart-8)',
+]

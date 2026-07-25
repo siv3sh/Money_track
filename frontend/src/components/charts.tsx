@@ -1,0 +1,417 @@
+import { useMemo } from 'react'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import { CHART_COLORS } from '../types'
+import { formatCompactINR, formatINR, formatMonth } from '../lib/format'
+import { EmptyState } from './ui'
+
+function useChartTheme() {
+  return useMemo(() => {
+    const s = getComputedStyle(document.documentElement)
+    return {
+      text: s.getPropertyValue('--muted').trim() || '#6b7280',
+      border: s.getPropertyValue('--border').trim() || '#e2e6eb',
+      surface: s.getPropertyValue('--surface').trim() || '#fff',
+      debit: s.getPropertyValue('--debit').trim() || '#dc3d33',
+      credit: s.getPropertyValue('--credit').trim() || '#0d9f6e',
+      accent: s.getPropertyValue('--accent').trim() || '#2563eb',
+      colors: CHART_COLORS.map((c) => {
+        if (c.startsWith('var(')) {
+          const name = c.slice(4, -1)
+          return s.getPropertyValue(name).trim() || c
+        }
+        return c
+      }),
+    }
+  }, [])
+}
+
+function Tip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean
+  payload?: Array<{ name: string; value: number; color?: string }>
+  label?: string
+}) {
+  if (!active || !payload?.length) return null
+  return (
+    <div
+      className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs shadow-[var(--shadow-lg)]"
+      style={{ minWidth: 140 }}
+    >
+      {label ? <p className="mb-1.5 font-semibold text-[var(--text)]">{label}</p> : null}
+      {payload.map((p) => (
+        <div key={p.name} className="flex items-center justify-between gap-4 py-0.5">
+          <span className="flex items-center gap-1.5 text-[var(--muted)]">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: p.color }}
+            />
+            {p.name}
+          </span>
+          <span className="font-medium tabular-nums text-[var(--text)]">
+            {formatINR(Number(p.value) || 0)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function CashflowBars({
+  data,
+}: {
+  data: Array<{ month: string; debit: number; credit: number; net: number }>
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No cash-flow data yet" />
+  const rows = data.map((d) => ({ ...d, label: formatMonth(d.month) }))
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <BarChart data={rows} barGap={4} barCategoryGap="18%">
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fill: theme.text, fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+          width={56}
+        />
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Bar dataKey="credit" name="Credited" fill={theme.credit} radius={[4, 4, 0, 0]} />
+        <Bar dataKey="debit" name="Debited" fill={theme.debit} radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function NetTrendLine({
+  data,
+  dataKey = 'running_net',
+  name = 'Running net',
+}: {
+  data: Array<Record<string, string | number>>
+  dataKey?: string
+  name?: string
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No trend data yet" />
+  const rows = data.map((d) => ({
+    ...d,
+    label: formatMonth(String(d.month ?? d.date ?? '')),
+  }))
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <AreaChart data={rows}>
+        <defs>
+          <linearGradient id="netFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={theme.accent} stopOpacity={0.28} />
+            <stop offset="100%" stopColor={theme.accent} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fill: theme.text, fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+          width={56}
+        />
+        <Tooltip content={<Tip />} />
+        <Area
+          type="monotone"
+          dataKey={dataKey}
+          name={name}
+          stroke={theme.accent}
+          fill="url(#netFill)"
+          strokeWidth={2.25}
+          dot={false}
+          activeDot={{ r: 4 }}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function DonutChart({
+  data,
+  nameKey = 'name',
+  valueKey = 'value',
+}: {
+  data: Array<Record<string, string | number>>
+  nameKey?: string
+  valueKey?: string
+}) {
+  const theme = useChartTheme()
+  const cleaned = data.filter((d) => Number(d[valueKey]) > 0)
+  if (!cleaned.length) return <EmptyState message="No breakdown yet" />
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <PieChart>
+        <Pie
+          data={cleaned}
+          dataKey={valueKey}
+          nameKey={nameKey}
+          innerRadius="58%"
+          outerRadius="82%"
+          paddingAngle={2}
+          strokeWidth={0}
+        >
+          {cleaned.map((_, i) => (
+            <Cell key={i} fill={theme.colors[i % theme.colors.length]} />
+          ))}
+        </Pie>
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+      </PieChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function HorizontalBars({
+  data,
+  nameKey = 'name',
+  valueKey = 'value',
+  color,
+}: {
+  data: Array<Record<string, string | number>>
+  nameKey?: string
+  valueKey?: string
+  color?: string
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No ranking data yet" />
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(240, data.length * 32)}>
+      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 12 }}>
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+        />
+        <YAxis
+          type="category"
+          dataKey={nameKey}
+          width={110}
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+        />
+        <Tooltip content={<Tip />} />
+        <Bar dataKey={valueKey} name="Amount" fill={color || theme.debit} radius={[0, 4, 4, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function StackedAreaChart({
+  data,
+  keys,
+}: {
+  data: Array<Record<string, string | number>>
+  keys: string[]
+}) {
+  const theme = useChartTheme()
+  if (!data.length || !keys.length) return <EmptyState message="No category trends yet" />
+  const rows = data.map((d) => ({ ...d, label: formatMonth(String(d.month)) }))
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <AreaChart data={rows}>
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fill: theme.text, fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+          width={56}
+        />
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        {keys.map((key, i) => (
+          <Area
+            key={key}
+            type="monotone"
+            dataKey={key}
+            stackId="1"
+            stroke={theme.colors[i % theme.colors.length]}
+            fill={theme.colors[i % theme.colors.length]}
+            fillOpacity={0.55}
+            strokeWidth={1}
+          />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function MultiLineChart({
+  data,
+  keys,
+}: {
+  data: Array<Record<string, string | number>>
+  keys: string[]
+}) {
+  const theme = useChartTheme()
+  if (!data.length || !keys.length) return <EmptyState message="No source trends yet" />
+  const rows = data.map((d) => ({ ...d, label: formatMonth(String(d.month)) }))
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <LineChart data={rows}>
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fill: theme.text, fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+          width={56}
+        />
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        {keys.map((key, i) => (
+          <Line
+            key={key}
+            type="monotone"
+            dataKey={key}
+            name={key}
+            stroke={theme.colors[i % theme.colors.length]}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function GroupedSourceBars({
+  data,
+}: {
+  data: Array<{ source: string; debit: number; credit: number; net: number }>
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No source breakdown yet" />
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(260, data.length * 48)}>
+      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 12 }}>
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+        />
+        <YAxis
+          type="category"
+          dataKey="source"
+          width={100}
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+        />
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Bar dataKey="credit" name="Credit" fill={theme.credit} radius={[0, 3, 3, 0]} />
+        <Bar dataKey="debit" name="Debit" fill={theme.debit} radius={[0, 3, 3, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function HeatmapGrid({
+  cells,
+}: {
+  cells: Array<{ day: number; amount: number; count: number }>
+}) {
+  if (!cells.length) return <EmptyState message="No day-of-month pattern yet" />
+  const max = Math.max(...cells.map((c) => c.amount), 1)
+  const map = new Map(cells.map((c) => [c.day, c]))
+  return (
+    <div className="grid grid-cols-7 gap-1.5 sm:grid-cols-8 md:grid-cols-11">
+      {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => {
+        const cell = map.get(day)
+        const intensity = cell ? cell.amount / max : 0
+        return (
+          <div
+            key={day}
+            title={
+              cell
+                ? `Day ${day}: ${formatINR(cell.amount)} · ${cell.count} txns`
+                : `Day ${day}: no spend`
+            }
+            className="flex aspect-square flex-col items-center justify-center rounded-lg border border-[var(--border)] text-[10px] font-medium"
+            style={{
+              background:
+                intensity > 0
+                  ? `color-mix(in srgb, var(--debit) ${Math.round(intensity * 70 + 8)}%, var(--surface))`
+                  : 'var(--surface-2)',
+              color: intensity > 0.45 ? '#fff' : 'var(--muted)',
+            }}
+          >
+            {day}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+export function AssetsLiabilitiesBars({
+  assets,
+  liabilities,
+}: {
+  assets: number
+  liabilities: number
+}) {
+  const theme = useChartTheme()
+  const data = [
+    { name: 'Assets', value: assets },
+    { name: 'Liabilities', value: liabilities },
+  ]
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <BarChart data={data} barCategoryGap="30%">
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="name" tick={{ fill: theme.text, fontSize: 12 }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+          width={56}
+        />
+        <Tooltip content={<Tip />} />
+        <Bar dataKey="value" name="Amount" radius={[6, 6, 0, 0]}>
+          <Cell fill={theme.credit} />
+          <Cell fill={theme.debit} />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}

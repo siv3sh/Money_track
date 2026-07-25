@@ -1,0 +1,786 @@
+"""Analytics aggregations for the premium dashboard modules."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from pymongo.collection import Collection
+
+
+def _match_range(
+    date_from: datetime | None,
+    date_to: datetime | None,
+    banks: list[str] | None = None,
+    categories: list[str] | None = None,
+) -> dict[str, Any]:
+    match: dict[str, Any] = {}
+    if date_from or date_to:
+        received: dict[str, Any] = {}
+        if date_from:
+            received["$gte"] = date_from
+        if date_to:
+            received["$lte"] = date_to
+        match["received_at"] = received
+    if banks:
+        match["bank"] = {"$in": banks}
+    if categories:
+        match["category"] = {"$in": categories}
+    return match
+
+
+def _dc_group(field: str) -> dict[str, Any]:
+    return {
+        "$group": {
+            "_id": f"${field}",
+            "debit": {"$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}},
+            "credit": {"$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}},
+            "count": {"$sum": 1},
+        }
+    }
+
+
+def _rows_from_group(rows: list[dict[str, Any]], total_debit: float) -> list[dict[str, Any]]:
+    out = []
+    for r in rows:
+        debit = float(r.get("debit") or 0)
+        credit = float(r.get("credit") or 0)
+        out.append(
+            {
+                "name": str(r["_id"] or "Unknown"),
+                "debit": debit,
+                "credit": credit,
+                "net": credit - debit,
+                "count": int(r.get("count") or 0),
+                "debit_share": round(debit / total_debit * 100, 1) if total_debit else 0.0,
+            }
+        )
+    return out
+
+
+def build_analytics(
+    transactions: Collection,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    banks: list[str] | None = None,
+) -> dict[str, Any]:
+    match = _match_range(date_from, date_to, banks=banks)
+    base = [{"$match": match}] if match else []
+
+    # Totals
+    totals_rows = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": "$type",
+                        "total": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                        "avg": {"$avg": "$amount"},
+                        "max": {"$max": "$amount"},
+                    }
+                }
+            ]
+        )
+    )
+    by_type = {r["_id"]: r for r in totals_rows}
+    debit = by_type.get("debit", {})
+    credit = by_type.get("credit", {})
+    total_debit = float(debit.get("total") or 0)
+    total_credit = float(credit.get("total") or 0)
+    debit_count = int(debit.get("count") or 0)
+    credit_count = int(credit.get("count") or 0)
+
+    def group_breakdown(field: str) -> list[dict[str, Any]]:
+        rows = list(
+            transactions.aggregate(base + [_dc_group(field), {"$sort": {"debit": -1}}])
+        )
+        return _rows_from_group(rows, total_debit)
+
+    # Monthly cashflow
+    monthly = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": {
+                            "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
+                        },
+                        "debit": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
+                        },
+                        "credit": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    monthly_rows = []
+    running = 0.0
+    for r in monthly:
+        if not r.get("_id"):
+            continue
+        d = float(r.get("debit") or 0)
+        c = float(r.get("credit") or 0)
+        running += c - d
+        monthly_rows.append(
+            {
+                "month": r["_id"],
+                "debit": d,
+                "credit": c,
+                "net": c - d,
+                "count": int(r.get("count") or 0),
+                "running_net": round(running, 2),
+            }
+        )
+
+    # Daily
+    daily = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": {
+                            "$dateToString": {"format": "%Y-%m-%d", "date": "$received_at"}
+                        },
+                        "debit": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
+                        },
+                        "credit": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    daily_rows = [
+        {
+            "date": r["_id"],
+            "debit": float(r.get("debit") or 0),
+            "credit": float(r.get("credit") or 0),
+            "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in daily
+        if r.get("_id")
+    ]
+
+    # Weekday
+    weekday_map = {
+        1: "Sun",
+        2: "Mon",
+        3: "Tue",
+        4: "Wed",
+        5: "Thu",
+        6: "Fri",
+        7: "Sat",
+    }
+    weekday = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit"}},
+                {
+                    "$group": {
+                        "_id": {"$dayOfWeek": "$received_at"},
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    weekday_rows = [
+        {
+            "day": weekday_map.get(int(r["_id"]), str(r["_id"])),
+            "dow": int(r["_id"]),
+            "amount": float(r.get("amount") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in weekday
+        if r.get("_id") is not None
+    ]
+
+    # Day of month heatmap (1-31)
+    dom = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit"}},
+                {
+                    "$group": {
+                        "_id": {"$dayOfMonth": "$received_at"},
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    day_of_month = [
+        {
+            "day": int(r["_id"]),
+            "amount": float(r.get("amount") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in dom
+        if r.get("_id") is not None
+    ]
+
+    # Category × month (for stacked area)
+    cat_month = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit"}},
+                {
+                    "$group": {
+                        "_id": {
+                            "month": {
+                                "$dateToString": {
+                                    "format": "%Y-%m",
+                                    "date": "$received_at",
+                                }
+                            },
+                            "category": {"$ifNull": ["$category", "Other"]},
+                        },
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+            ]
+        )
+    )
+    category_monthly: dict[str, dict[str, float]] = defaultdict(dict)
+    for r in cat_month:
+        key = r.get("_id") or {}
+        month = key.get("month")
+        cat = key.get("category") or "Other"
+        if month:
+            category_monthly[month][cat] = float(r.get("amount") or 0)
+    category_monthly_rows = [
+        {"month": m, **vals} for m, vals in sorted(category_monthly.items())
+    ]
+
+    # Bank (source) × month
+    bank_month = list(
+        transactions.aggregate(
+            base
+            + [
+                {
+                    "$group": {
+                        "_id": {
+                            "month": {
+                                "$dateToString": {
+                                    "format": "%Y-%m",
+                                    "date": "$received_at",
+                                }
+                            },
+                            "bank": {"$ifNull": ["$bank", "Unknown"]},
+                        },
+                        "debit": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
+                        },
+                        "credit": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
+                        },
+                        "count": {"$sum": 1},
+                    }
+                },
+            ]
+        )
+    )
+    source_monthly = []
+    for r in bank_month:
+        key = r.get("_id") or {}
+        month = key.get("month")
+        bank = key.get("bank") or "Unknown"
+        if not month:
+            continue
+        d = float(r.get("debit") or 0)
+        c = float(r.get("credit") or 0)
+        source_monthly.append(
+            {
+                "month": month,
+                "source": bank,
+                "debit": d,
+                "credit": c,
+                "net": c - d,
+                "count": int(r.get("count") or 0),
+            }
+        )
+    source_monthly.sort(key=lambda x: (x["month"], x["source"]))
+
+    # Merchants
+    merchants = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
+                {
+                    "$group": {
+                        "_id": "$merchant",
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"amount": -1}},
+                {"$limit": 15},
+            ]
+        )
+    )
+    merchant_rows = [
+        {
+            "merchant": str(r["_id"]),
+            "amount": float(r.get("amount") or 0),
+            "count": int(r.get("count") or 0),
+            "avg": round(float(r.get("amount") or 0) / max(int(r.get("count") or 1), 1), 2),
+            "share": round(float(r.get("amount") or 0) / total_debit * 100, 1)
+            if total_debit
+            else 0.0,
+        }
+        for r in merchants
+    ]
+
+    # Recurring vs one-time (merchant appears ≥3 times = recurring)
+    merchant_freq = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
+                {
+                    "$group": {
+                        "_id": "$merchant",
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+            ]
+        )
+    )
+    recurring_amount = 0.0
+    onetime_amount = 0.0
+    recurring_merchants = []
+    for r in merchant_freq:
+        amt = float(r.get("amount") or 0)
+        cnt = int(r.get("count") or 0)
+        if cnt >= 3:
+            recurring_amount += amt
+            recurring_merchants.append(
+                {
+                    "merchant": str(r["_id"]),
+                    "amount": amt,
+                    "count": cnt,
+                    "avg": round(amt / cnt, 2),
+                }
+            )
+        else:
+            onetime_amount += amt
+    recurring_merchants.sort(key=lambda x: -x["amount"])
+
+    # Account balances (latest non-null balance per bank+last4)
+    bal_pipeline = [
+        {"$match": {"balance": {"$ne": None}}},
+        {"$sort": {"received_at": -1}},
+        {
+            "$group": {
+                "_id": {
+                    "bank": {"$ifNull": ["$bank", "Unknown"]},
+                    "last4": {"$ifNull": ["$account_last4", "????"]},
+                },
+                "balance": {"$first": "$balance"},
+                "as_of": {"$first": "$received_at"},
+            }
+        },
+    ]
+    accounts = []
+    for r in transactions.aggregate(bal_pipeline):
+        key = r.get("_id") or {}
+        as_of = r.get("as_of")
+        accounts.append(
+            {
+                "bank": str(key.get("bank") or "Unknown"),
+                "account_last4": str(key.get("last4") or "????"),
+                "balance": float(r.get("balance") or 0),
+                "as_of": as_of.isoformat() if isinstance(as_of, datetime) else None,
+            }
+        )
+    accounts.sort(key=lambda x: -x["balance"])
+    liquid_total = sum(a["balance"] for a in accounts)
+
+    # Investments inferred
+    inv_match = {**match, "category": "Investments"}
+    inv_base = [{"$match": inv_match}]
+    inv_by_merchant = list(
+        transactions.aggregate(
+            inv_base
+            + [
+                {"$match": {"type": "debit"}},
+                {
+                    "$group": {
+                        "_id": {"$ifNull": ["$merchant", "Unknown"]},
+                        "invested": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"invested": -1}},
+            ]
+        )
+    )
+    inv_monthly = list(
+        transactions.aggregate(
+            inv_base
+            + [
+                {
+                    "$group": {
+                        "_id": {
+                            "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
+                        },
+                        "invested": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
+                        },
+                        "returned": {
+                            "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
+                        },
+                    }
+                },
+                {"$sort": {"_id": 1}},
+            ]
+        )
+    )
+    total_invested = sum(float(r.get("invested") or 0) for r in inv_by_merchant)
+    # Without market values, treat cost basis as current value (P&L = 0)
+    holdings = [
+        {
+            "name": str(r["_id"]),
+            "asset_class": _guess_asset_class(str(r["_id"])),
+            "invested": float(r.get("invested") or 0),
+            "current_value": float(r.get("invested") or 0),
+            "pnl": 0.0,
+            "pnl_pct": 0.0,
+            "count": int(r.get("count") or 0),
+        }
+        for r in inv_by_merchant
+    ]
+    by_asset: dict[str, float] = defaultdict(float)
+    for h in holdings:
+        by_asset[h["asset_class"]] += h["invested"]
+    asset_allocation = [
+        {"name": k, "value": v} for k, v in sorted(by_asset.items(), key=lambda x: -x[1])
+    ]
+    inv_monthly_rows = []
+    inv_running = 0.0
+    for r in inv_monthly:
+        if not r.get("_id"):
+            continue
+        invested = float(r.get("invested") or 0)
+        returned = float(r.get("returned") or 0)
+        inv_running += invested - returned
+        inv_monthly_rows.append(
+            {
+                "month": r["_id"],
+                "invested": invested,
+                "returned": returned,
+                "cumulative": round(inv_running, 2),
+            }
+        )
+
+    # Income sources (credits by merchant/bank)
+    income_sources = list(
+        transactions.aggregate(
+            base
+            + [
+                {"$match": {"type": "credit"}},
+                {
+                    "$group": {
+                        "_id": {
+                            "$ifNull": [
+                                "$merchant",
+                                {"$ifNull": ["$category", "Other income"]},
+                            ]
+                        },
+                        "amount": {"$sum": "$amount"},
+                        "count": {"$sum": 1},
+                    }
+                },
+                {"$sort": {"amount": -1}},
+                {"$limit": 12},
+            ]
+        )
+    )
+    income_rows = [
+        {
+            "name": str(r["_id"] or "Other"),
+            "amount": float(r.get("amount") or 0),
+            "count": int(r.get("count") or 0),
+        }
+        for r in income_sources
+    ]
+
+    # Alerts / insights
+    alerts = _build_alerts(
+        transactions,
+        match,
+        total_debit=total_debit,
+        debit_count=debit_count,
+        avg_debit=float(debit.get("avg") or 0),
+        by_category=group_breakdown("category"),
+        recurring_merchants=recurring_merchants[:8],
+        monthly_rows=monthly_rows,
+        total_credit=total_credit,
+        total_invested=total_invested,
+    )
+
+    # MoM change for KPIs
+    mom = _mom_change(monthly_rows)
+
+    active_days = len(daily_rows)
+    # Always expose full bank list for the filter UI (unscoped)
+    banks_list = sorted(
+        {
+            str(doc.get("bank") or "Unknown")
+            for doc in transactions.find({}, {"bank": 1})
+        }
+    )
+
+    return {
+        "range": {
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+        },
+        "overview": {
+            "total_debit": total_debit,
+            "total_credit": total_credit,
+            "net": total_credit - total_debit,
+            "count": debit_count + credit_count,
+            "debit_count": debit_count,
+            "credit_count": credit_count,
+            "avg_debit": round(float(debit.get("avg") or 0), 2),
+            "avg_credit": round(float(credit.get("avg") or 0), 2),
+            "max_debit": float(debit.get("max") or 0),
+            "max_credit": float(credit.get("max") or 0),
+            "active_days": active_days,
+            "avg_daily_debit": round(total_debit / active_days, 2) if active_days else 0.0,
+            "liquid_total": liquid_total,
+            "total_invested": total_invested,
+            "net_worth_estimate": liquid_total + total_invested,
+            "investment_to_income": round(total_invested / total_credit * 100, 1)
+            if total_credit
+            else 0.0,
+        },
+        "mom": mom,
+        "monthly": monthly_rows,
+        "daily": daily_rows,
+        "weekday": weekday_rows,
+        "day_of_month": day_of_month,
+        "by_bank": group_breakdown("bank"),
+        "by_card_type": group_breakdown("card_type"),
+        "by_source": group_breakdown("source"),
+        "by_category": group_breakdown("category"),
+        "category_monthly": category_monthly_rows,
+        "source_monthly": source_monthly,
+        "merchants": merchant_rows,
+        "recurring": {
+            "recurring_amount": recurring_amount,
+            "onetime_amount": onetime_amount,
+            "merchants": recurring_merchants[:15],
+        },
+        "accounts": accounts,
+        "income_sources": income_rows,
+        "investments": {
+            "total_invested": total_invested,
+            "total_current": total_invested,
+            "pnl": 0.0,
+            "holdings": holdings,
+            "asset_allocation": asset_allocation,
+            "monthly": inv_monthly_rows,
+            "note": "Current value equals cost basis until you add market prices.",
+        },
+        "alerts": alerts,
+        "filters": {"banks": banks_list},
+    }
+
+
+def _guess_asset_class(name: str) -> str:
+    lower = name.lower()
+    if "gold" in lower or "neosie" in lower:
+        return "Digital Gold"
+    if any(k in lower for k in ("groww", "zerodha", "upstox", "stock", "equity")):
+        return "Equity / Brokerage"
+    if any(k in lower for k in ("mutual", "sip", "mf ")):
+        return "Mutual Funds"
+    if any(k in lower for k in ("fd", "deposit")):
+        return "Fixed Deposits"
+    return "Other Investments"
+
+
+def _mom_change(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(monthly_rows) < 2:
+        return {
+            "net_pct": None,
+            "debit_pct": None,
+            "credit_pct": None,
+            "savings_pct": None,
+        }
+
+    cur = monthly_rows[-1]
+    prev = monthly_rows[-2]
+
+    def pct(a: float, b: float) -> Optional[float]:
+        if b == 0:
+            return None if a == 0 else 100.0
+        return round((a - b) / abs(b) * 100, 1)
+
+    return {
+        "net_pct": pct(cur["net"], prev["net"]),
+        "debit_pct": pct(cur["debit"], prev["debit"]),
+        "credit_pct": pct(cur["credit"], prev["credit"]),
+        "savings_pct": pct(cur["net"], prev["net"]),
+        "current_month": cur["month"],
+        "previous_month": prev["month"],
+        "current_net": cur["net"],
+        "current_debit": cur["debit"],
+        "current_credit": cur["credit"],
+    }
+
+
+def _build_alerts(
+    transactions: Collection,
+    match: dict[str, Any],
+    *,
+    total_debit: float,
+    debit_count: int,
+    avg_debit: float,
+    by_category: list[dict[str, Any]],
+    recurring_merchants: list[dict[str, Any]],
+    monthly_rows: list[dict[str, Any]],
+    total_credit: float,
+    total_invested: float,
+) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+
+    # Budget vs actual — soft defaults for expense categories
+    default_budgets = {
+        "Food & Dining": 8000,
+        "Shopping": 10000,
+        "Subscriptions": 3000,
+        "Travel & Transport": 5000,
+        "Groceries": 6000,
+        "Entertainment": 3000,
+    }
+    cat_map = {r["name"]: r["debit"] for r in by_category}
+    for cat, budget in default_budgets.items():
+        actual = cat_map.get(cat, 0)
+        if actual <= 0 and budget:
+            continue
+        pct = round(actual / budget * 100, 1) if budget else 0
+        alerts.append(
+            {
+                "type": "budget",
+                "severity": "warning" if pct >= 90 else "info",
+                "title": f"{cat} budget",
+                "message": f"Spent ₹{actual:,.0f} of ₹{budget:,.0f} ({pct}%)",
+                "category": cat,
+                "budget": budget,
+                "actual": actual,
+                "pct": pct,
+            }
+        )
+
+    # Unusual spends (> 3× average debit)
+    if avg_debit > 0:
+        threshold = avg_debit * 3
+        unusual = list(
+            transactions.find(
+                {**match, "type": "debit", "amount": {"$gte": threshold}},
+                {"amount": 1, "merchant": 1, "received_at": 1, "category": 1},
+            )
+            .sort("amount", -1)
+            .limit(5)
+        )
+        for u in unusual:
+            merch = u.get("merchant") or "Unknown"
+            amt = float(u.get("amount") or 0)
+            alerts.append(
+                {
+                    "type": "anomaly",
+                    "severity": "alert",
+                    "title": "Unusual spend",
+                    "message": f"{merch}: ₹{amt:,.0f} (avg debit ₹{avg_debit:,.0f})",
+                    "amount": amt,
+                    "merchant": merch,
+                }
+            )
+
+    # Subscription renewals (recurring in Subscriptions / Entertainment)
+    for m in recurring_merchants:
+        name = m["merchant"]
+        lower = name.lower()
+        if any(
+            k in lower
+            for k in (
+                "spotify",
+                "netflix",
+                "apple",
+                "cursor",
+                "prime",
+                "youtube",
+                "adobe",
+                "icloud",
+            )
+        ) or m["count"] >= 4:
+            alerts.append(
+                {
+                    "type": "subscription",
+                    "severity": "info",
+                    "title": "Recurring charge",
+                    "message": f"{name}: ~₹{m['avg']:,.0f} × {m['count']} times",
+                    "merchant": name,
+                    "avg": m["avg"],
+                    "count": m["count"],
+                }
+            )
+
+    # MoM spend spike
+    if len(monthly_rows) >= 2:
+        cur = monthly_rows[-1]["debit"]
+        prev = monthly_rows[-2]["debit"]
+        if prev > 0 and cur > prev * 1.25:
+            alerts.append(
+                {
+                    "type": "trend",
+                    "severity": "warning",
+                    "title": "Spend up month-over-month",
+                    "message": f"Debits rose {((cur - prev) / prev * 100):.0f}% vs previous month",
+                }
+            )
+
+    if total_credit > 0 and total_invested / total_credit < 0.1:
+        alerts.append(
+            {
+                "type": "insight",
+                "severity": "info",
+                "title": "Low investment rate",
+                "message": f"Only {total_invested / total_credit * 100:.0f}% of income went to investments",
+            }
+        )
+
+    # Cap and stamp
+    for a in alerts:
+        a.setdefault("created_at", now.isoformat())
+    return alerts[:20]

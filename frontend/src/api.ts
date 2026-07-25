@@ -1,4 +1,4 @@
-import type { CardType, DetailedReport, MerchantSpend, MonthlyBucket, Summary, Transaction, TxnType } from './types'
+import type { AnalyticsPayload, CardType, Transaction, TxnType } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:8000'
 
@@ -23,6 +23,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export interface AnalyticsQuery {
+  date_from?: string
+  date_to?: string
+  bank?: string[]
+}
+
+export function fetchAnalytics(query: AnalyticsQuery = {}): Promise<AnalyticsPayload> {
+  const params = new URLSearchParams()
+  if (query.date_from) params.set('date_from', query.date_from)
+  if (query.date_to) params.set('date_to', query.date_to)
+  if (query.bank?.length) params.set('bank', query.bank.join(','))
+  const qs = params.toString()
+  return request(`/analytics${qs ? `?${qs}` : ''}`)
+}
+
 export interface TransactionQuery {
   limit?: number
   skip?: number
@@ -34,18 +49,6 @@ export interface TransactionQuery {
   date_to?: string
   sort?: 'received_at' | 'amount'
   order?: 'asc' | 'desc'
-}
-
-export function fetchSummary(): Promise<Summary> {
-  return request('/summary')
-}
-
-export function fetchMonthly(months = 12): Promise<MonthlyBucket[]> {
-  return request(`/summary/monthly?months=${months}`)
-}
-
-export function fetchMerchants(limit = 10): Promise<MerchantSpend[]> {
-  return request(`/summary/merchants?limit=${limit}`)
 }
 
 export function fetchTransactions(query: TransactionQuery = {}): Promise<Transaction[]> {
@@ -82,29 +85,6 @@ export function updateTransactionCategory(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ category, remember_merchant }),
   })
-}
-
-export function backfillCategories(force = false): Promise<{
-  scanned: number
-  updated: number
-  by_category: Record<string, number>
-}> {
-  return request(`/categories/backfill?force=${force ? 'true' : 'false'}`, {
-    method: 'POST',
-  })
-}
-
-export function fetchDetailedReport(params: {
-  date_from?: string
-  date_to?: string
-  merchant_limit?: number
-} = {}): Promise<DetailedReport> {
-  const qs = new URLSearchParams()
-  if (params.date_from) qs.set('date_from', params.date_from)
-  if (params.date_to) qs.set('date_to', params.date_to)
-  if (params.merchant_limit != null) qs.set('merchant_limit', String(params.merchant_limit))
-  const q = qs.toString()
-  return request(`/reports/detailed${q ? `?${q}` : ''}`)
 }
 
 export interface StatementImportResult {
