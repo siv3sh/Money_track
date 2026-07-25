@@ -1,9 +1,52 @@
 import type { CardType, DetailedReport, MerchantSpend, MonthlyBucket, Summary, Transaction, TxnType } from './types'
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:8000'
+/**
+ * Resolve API base at call time.
+ * On Vercel preview/prod hosts, always use the same-origin `/api` rewrite so we
+ * avoid CORS failures when Render only allows the production origin.
+ */
+function resolveApiBase(): string {
+  if (typeof window !== 'undefined' && /\.vercel\.app$/i.test(window.location.hostname)) {
+    return '/api'
+  }
+  const fromEnv = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
+  if (fromEnv) return fromEnv
+  return import.meta.env.DEV ? 'http://localhost:8000' : '/api'
+}
+
+function formatErrorDetail(detail: unknown, fallback: string): string {
+  if (detail == null) return fallback
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === 'string') return item
+      if (item && typeof item === 'object' && 'msg' in item) {
+        const loc = Array.isArray((item as { loc?: unknown }).loc)
+          ? (item as { loc: unknown[] }).loc.join('.')
+          : ''
+        const msg = String((item as { msg: unknown }).msg)
+        return loc ? `${loc}: ${msg}` : msg
+      }
+      try {
+        return JSON.stringify(item)
+      } catch {
+        return String(item)
+      }
+    })
+    return parts.filter(Boolean).join('; ') || fallback
+  }
+  if (typeof detail === 'object') {
+    try {
+      return JSON.stringify(detail)
+    } catch {
+      return fallback
+    }
+  }
+  return String(detail)
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${resolveApiBase()}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
@@ -11,14 +54,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   if (!res.ok) {
-    let detail = res.statusText
+    let detail: unknown = res.statusText
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      const body = (await res.json()) as { detail?: unknown }
+      if (body.detail !== undefined) detail = body.detail
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Request failed (${res.status})`)
+    throw new Error(formatErrorDetail(detail, `Request failed (${res.status})`))
   }
   return res.json() as Promise<T>
 }
@@ -124,21 +167,21 @@ export async function uploadStatementFile(
   if (bank) form.append('bank', bank)
   form.append('format', format)
 
-  const res = await fetch(`${API_BASE}/statements/upload`, {
+  const res = await fetch(`${resolveApiBase()}/statements/upload`, {
     method: 'POST',
     body: form,
   })
   if (!res.ok) {
-    let detail = res.statusText
+    let detail: unknown = res.statusText
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      const body = (await res.json()) as { detail?: unknown }
+      if (body.detail !== undefined) detail = body.detail
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Upload failed (${res.status})`)
+    throw new Error(formatErrorDetail(detail, `Upload failed (${res.status})`))
   }
   return res.json() as Promise<StatementImportResult>
 }
 
-export { API_BASE }
+export { resolveApiBase }

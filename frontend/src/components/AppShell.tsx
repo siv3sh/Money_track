@@ -1,15 +1,32 @@
-import { NavLink, Outlet } from 'react-router-dom'
-import { FileSpreadsheet, LayoutDashboard, Moon, PieChart, Sun } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { NavLink, Outlet } from 'react-router-dom'
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  FileSpreadsheet,
+  Landmark,
+  LayoutDashboard,
+  Menu,
+  Moon,
+  PieChart,
+  Sun,
+  TrendingUp,
+  Wallet,
+  X,
+} from 'lucide-react'
+import { FilterProvider } from '../context/FilterContext'
 
 const THEME_KEY = 'money-track-theme'
 
-const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
-    isActive
-      ? 'bg-[var(--accent)] text-white shadow-sm'
-      : 'text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]'
-  }`
+const NAV = [
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/cash-flow', label: 'Cash Flow', icon: Wallet },
+  { to: '/spending', label: 'Spending', icon: PieChart },
+  { to: '/investments', label: 'Investments', icon: TrendingUp },
+  { to: '/sources', label: 'Sources', icon: ArrowLeftRight },
+  { to: '/alerts', label: 'Alerts', icon: AlertTriangle },
+  { to: '/import', label: 'Import', icon: FileSpreadsheet },
+] as const
 
 function useDarkMode() {
   const [dark, setDark] = useState(() => {
@@ -27,47 +44,103 @@ function useDarkMode() {
   return { dark, toggle: () => setDark((d) => !d) }
 }
 
+function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
+      {NAV.map(({ to, label, icon: Icon, ...rest }) => (
+        <NavLink
+          key={to}
+          to={to}
+          end={'end' in rest ? rest.end : false}
+          onClick={onNavigate}
+          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+        >
+          <Icon size={16} strokeWidth={2} />
+          {label}
+        </NavLink>
+      ))}
+    </nav>
+  )
+}
+
 export function AppShell() {
   const { dark, toggle } = useDarkMode()
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   return (
-    <div className="app-shell mx-auto min-h-screen w-full max-w-[1800px] px-4 py-5 sm:px-6 lg:px-8 xl:px-10">
-      <header className="app-header mb-5 flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border)] pb-4">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Money Track</h1>
-            <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
-              Cash-flow control
+    <FilterProvider>
+      <div className="flex min-h-screen">
+        {/* Desktop sidebar */}
+        <aside className="app-sidebar fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col border-r border-[var(--border)] bg-[var(--surface)] lg:flex">
+          <div className="flex h-[var(--header-h)] items-center gap-2.5 border-b border-[var(--border)] px-5">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+              <Landmark size={16} />
             </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold tracking-tight">Money Track</p>
+              <p className="truncate text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--muted)]">
+                Personal finance
+              </p>
+            </div>
           </div>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Live activity · spend patterns · actionable reports
-          </p>
-        </div>
+          <SidebarNav />
+          <div className="border-t border-[var(--border)] p-3">
+            <button type="button" onClick={toggle} className="btn w-full justify-center" aria-label="Toggle theme">
+              {dark ? <Sun size={14} /> : <Moon size={14} />}
+              {dark ? 'Light mode' : 'Dark mode'}
+            </button>
+          </div>
+        </aside>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <nav className="app-nav flex flex-wrap gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
-            <NavLink to="/" end className={linkClass}>
-              <LayoutDashboard size={14} />
-              Dashboard
-            </NavLink>
-            <NavLink to="/reports" className={linkClass}>
-              <PieChart size={14} />
-              Reports
-            </NavLink>
-            <NavLink to="/import" className={linkClass}>
-              <FileSpreadsheet size={14} />
-              Import
-            </NavLink>
-          </nav>
-          <button type="button" onClick={toggle} aria-label="Toggle dark mode" className="btn">
-            {dark ? <Sun size={14} /> : <Moon size={14} />}
-            {dark ? 'Light' : 'Dark'}
-          </button>
-        </div>
-      </header>
+        {/* Mobile drawer */}
+        {mobileOpen ? (
+          <div className="fixed inset-0 z-40 lg:hidden">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/40"
+              aria-label="Close menu"
+              onClick={() => setMobileOpen(false)}
+            />
+            <aside className="absolute inset-y-0 left-0 flex w-[min(280px,85vw)] flex-col bg-[var(--surface)] shadow-lg">
+              <div className="flex h-[var(--header-h)] items-center justify-between border-b border-[var(--border)] px-4">
+                <div className="flex items-center gap-2">
+                  <Landmark size={16} className="text-[var(--accent)]" />
+                  <span className="text-sm font-semibold">Money Track</span>
+                </div>
+                <button type="button" className="btn" onClick={() => setMobileOpen(false)}>
+                  <X size={14} />
+                </button>
+              </div>
+              <SidebarNav onNavigate={() => setMobileOpen(false)} />
+            </aside>
+          </div>
+        ) : null}
 
-      <Outlet />
-    </div>
+        <div className="flex min-h-screen w-full flex-1 flex-col lg:pl-[var(--sidebar-w)]">
+          <header className="app-topbar sticky top-0 z-20 flex h-[var(--header-h)] items-center justify-between gap-3 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg)_90%,transparent)] px-4 backdrop-blur-md sm:px-6 lg:px-8">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="btn lg:hidden"
+                onClick={() => setMobileOpen(true)}
+                aria-label="Open menu"
+              >
+                <Menu size={16} />
+              </button>
+              <p className="text-sm text-[var(--muted)] lg:hidden">Money Track</p>
+            </div>
+            <button type="button" onClick={toggle} aria-label="Toggle dark mode" className="btn lg:hidden">
+              {dark ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+          </header>
+
+          <main className="flex-1 px-4 py-5 sm:px-6 lg:px-8 xl:px-10">
+            <div className="mx-auto w-full max-w-[1600px]">
+              <Outlet />
+            </div>
+          </main>
+        </div>
+      </div>
+    </FilterProvider>
   )
 }

@@ -40,10 +40,17 @@ CORS_ORIGINS = [
     ).split(",")
     if o.strip()
 ]
+# Preview deployments use unique *.vercel.app hosts; allow them without
+# updating Render env for every PR.
+CORS_ORIGIN_REGEX = os.getenv(
+    "CORS_ORIGIN_REGEX",
+    r"https://([a-z0-9-]+\.)*(vercel\.app|localhost)(:\d+)?",
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS or ["*"],
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
