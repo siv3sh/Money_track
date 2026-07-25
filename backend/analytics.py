@@ -2,11 +2,94 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pymongo.collection import Collection
+
+# Canonical instrument names for investment vehicles
+INSTRUMENT_RULES: list[tuple[str, str, str]] = [
+    # (keyword, instrument, asset class)
+    ("digital gold", "Digital Gold (Neosie)", "Digital Gold"),
+    ("gold in", "Digital Gold (Neosie)", "Digital Gold"),
+    ("neosie", "Digital Gold (Neosie)", "Digital Gold"),
+    ("groww", "Groww", "Equity / Brokerage"),
+    ("zerodha", "Zerodha", "Equity / Brokerage"),
+    ("upstox", "Upstox", "Equity / Brokerage"),
+    ("indmoney", "INDmoney", "Equity / Brokerage"),
+    ("indstocks", "INDmoney (INDstocks)", "Equity / Brokerage"),
+    ("finzoomers", "INDmoney", "Equity / Brokerage"),
+    ("kuvera", "Kuvera", "Mutual Funds"),
+    ("mutual fund", "Mutual Funds", "Mutual Funds"),
+    ("indian clearing", "Mutual Funds (via ICCL)", "Mutual Funds"),
+    ("nse", "NSE", "Equity / Brokerage"),
+]
+
+# Long alphanumeric transaction references (NEFT/UPI ids) that make merchants unique per txn
+_REF_RUN = re.compile(r"\b[A-Z]*\d{6,}[A-Z0-9]*\b")
+_TXN_PREFIX = re.compile(
+    r"^(?:NFT|NEFT|IMPS|RTGS|UPIOUT|UPI\s*IN|TO\s+ECM|POS|ACHDR|INTL\.?\s*ECM\s*MRK)\b[/ :-]*",
+    re.IGNORECASE,
+)
+
+# Known merchants → friendly display names (checked against the cleaned lowercase label)
+_PRETTY_RULES: list[tuple[str, str]] = [
+    ("digital gold", "Digital Gold"),
+    ("indian clearing", "Indian Clearing Corp (MF)"),
+    ("appleservices", "Apple Services"),
+    ("cursor", "Cursor"),
+    ("spotify", "Spotify"),
+    ("netflix", "Netflix"),
+    ("swiggy", "Swiggy"),
+    ("zomato", "Zomato"),
+    ("myntra", "Myntra"),
+    ("amazon", "Amazon"),
+    ("makemytrip", "MakeMyTrip"),
+    ("redbus", "Redbus"),
+    ("groww", "Groww"),
+    ("indmoney", "INDmoney"),
+    ("indstocks", "INDmoney (INDstocks)"),
+    ("finzoomers", "INDmoney"),
+]
+
+
+def _clean_merchant_label(name: str | None) -> str:
+    """Collapse statement narrations into a stable merchant label."""
+    s = re.sub(r"\s+", " ", (name or "").replace("\n", " ")).strip()
+    if not s:
+        return "Unknown"
+    s = _TXN_PREFIX.sub("", s)
+
+    # UPI VPAs: keep only the handle and repair OCR spaces inside it
+    if "@" in s:
+        for segment in s.split("/"):
+            if "@" in segment:
+                s = re.sub(r"\s+", "", segment)
+                break
+
+    s = _REF_RUN.sub("", s)
+    s = re.sub(r"[/\\]+[A-Za-z]{0,2}$", "", s)  # trailing "/S", "//" remnants
+    s = re.sub(r"\s+", " ", s).strip(" /\\-_.,")
+    if not s:
+        return "Unknown"
+
+    lower = s.lower()
+    for keyword, pretty in _PRETTY_RULES:
+        if keyword in lower:
+            return pretty
+    return s
+
+
+def _instrument_for(merchant: str | None, raw_text: str | None) -> tuple[str, str]:
+    """Return (instrument name, asset class) for an investment transaction."""
+    blob = f"{merchant or ''} {raw_text or ''}".lower().replace("\n", " ")
+    for keyword, instrument, asset_class in INSTRUMENT_RULES:
+        if keyword in blob:
+            return instrument, asset_class
+    label = _clean_merchant_label(merchant)
+    return label, "Other Investments"
 
 
 def _match_range(
@@ -325,64 +408,45 @@ def build_analytics(
         )
     source_monthly.sort(key=lambda x: (x["month"], x["source"]))
 
-    # Merchants
-    merchants = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
-                {
-                    "$group": {
-                        "_id": "$merchant",
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"amount": -1}},
-                {"$limit": 15},
-            ]
-        )
+    # Merchants + recurring, grouped by normalized label so statement
+    # reference numbers don't split one merchant into many
+    merchant_totals: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"amount": 0.0, "count": 0.0}
+    )
+    for doc in transactions.find(
+        {**match, "type": "debit", "merchant": {"$nin": [None, ""]}},
+        {"merchant": 1, "amount": 1},
+    ):
+        label = _clean_merchant_label(doc.get("merchant"))
+        merchant_totals[label]["amount"] += float(doc.get("amount") or 0)
+        merchant_totals[label]["count"] += 1
+
+    merchant_sorted = sorted(
+        merchant_totals.items(), key=lambda kv: -kv[1]["amount"]
     )
     merchant_rows = [
         {
-            "merchant": str(r["_id"]),
-            "amount": float(r.get("amount") or 0),
-            "count": int(r.get("count") or 0),
-            "avg": round(float(r.get("amount") or 0) / max(int(r.get("count") or 1), 1), 2),
-            "share": round(float(r.get("amount") or 0) / total_debit * 100, 1)
-            if total_debit
-            else 0.0,
+            "merchant": name,
+            "amount": vals["amount"],
+            "count": int(vals["count"]),
+            "avg": round(vals["amount"] / max(vals["count"], 1), 2),
+            "share": round(vals["amount"] / total_debit * 100, 1) if total_debit else 0.0,
         }
-        for r in merchants
+        for name, vals in merchant_sorted[:15]
     ]
 
     # Recurring vs one-time (merchant appears ≥3 times = recurring)
-    merchant_freq = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "debit", "merchant": {"$nin": [None, ""]}}},
-                {
-                    "$group": {
-                        "_id": "$merchant",
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-            ]
-        )
-    )
     recurring_amount = 0.0
     onetime_amount = 0.0
     recurring_merchants = []
-    for r in merchant_freq:
-        amt = float(r.get("amount") or 0)
-        cnt = int(r.get("count") or 0)
+    for name, vals in merchant_sorted:
+        amt = vals["amount"]
+        cnt = int(vals["count"])
         if cnt >= 3:
             recurring_amount += amt
             recurring_merchants.append(
                 {
-                    "merchant": str(r["_id"]),
+                    "merchant": name,
                     "amount": amt,
                     "count": cnt,
                     "avg": round(amt / cnt, 2),
@@ -422,25 +486,21 @@ def build_analytics(
     accounts.sort(key=lambda x: -x["balance"])
     liquid_total = sum(a["balance"] for a in accounts)
 
-    # Investments inferred
+    # Investments inferred — group by canonical instrument, not raw narration
     inv_match = {**match, "category": "Investments"}
     inv_base = [{"$match": inv_match}]
-    inv_by_merchant = list(
-        transactions.aggregate(
-            inv_base
-            + [
-                {"$match": {"type": "debit"}},
-                {
-                    "$group": {
-                        "_id": {"$ifNull": ["$merchant", "Unknown"]},
-                        "invested": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"invested": -1}},
-            ]
+    instrument_totals: dict[str, dict[str, Any]] = {}
+    for doc in transactions.find(
+        {**inv_match, "type": "debit"}, {"merchant": 1, "raw_text": 1, "amount": 1}
+    ):
+        instrument, asset_class = _instrument_for(doc.get("merchant"), doc.get("raw_text"))
+        bucket = instrument_totals.setdefault(
+            instrument,
+            {"asset_class": asset_class, "invested": 0.0, "count": 0},
         )
-    )
+        bucket["invested"] += float(doc.get("amount") or 0)
+        bucket["count"] += 1
+
     inv_monthly = list(
         transactions.aggregate(
             inv_base
@@ -462,19 +522,21 @@ def build_analytics(
             ]
         )
     )
-    total_invested = sum(float(r.get("invested") or 0) for r in inv_by_merchant)
+    total_invested = sum(v["invested"] for v in instrument_totals.values())
     # Without market values, treat cost basis as current value (P&L = 0)
     holdings = [
         {
-            "name": str(r["_id"]),
-            "asset_class": _guess_asset_class(str(r["_id"])),
-            "invested": float(r.get("invested") or 0),
-            "current_value": float(r.get("invested") or 0),
+            "name": name,
+            "asset_class": vals["asset_class"],
+            "invested": vals["invested"],
+            "current_value": vals["invested"],
             "pnl": 0.0,
             "pnl_pct": 0.0,
-            "count": int(r.get("count") or 0),
+            "count": vals["count"],
         }
-        for r in inv_by_merchant
+        for name, vals in sorted(
+            instrument_totals.items(), key=lambda kv: -kv[1]["invested"]
+        )
     ]
     by_asset: dict[str, float] = defaultdict(float)
     for h in holdings:
@@ -499,36 +561,21 @@ def build_analytics(
             }
         )
 
-    # Income sources (credits by merchant/bank)
-    income_sources = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "credit"}},
-                {
-                    "$group": {
-                        "_id": {
-                            "$ifNull": [
-                                "$merchant",
-                                {"$ifNull": ["$category", "Other income"]},
-                            ]
-                        },
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"amount": -1}},
-                {"$limit": 12},
-            ]
-        )
+    # Income sources (credits by normalized merchant)
+    income_totals: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"amount": 0.0, "count": 0.0}
     )
+    for doc in transactions.find(
+        {**match, "type": "credit"}, {"merchant": 1, "category": 1, "amount": 1}
+    ):
+        label = _clean_merchant_label(doc.get("merchant")) if doc.get("merchant") else str(
+            doc.get("category") or "Other income"
+        )
+        income_totals[label]["amount"] += float(doc.get("amount") or 0)
+        income_totals[label]["count"] += 1
     income_rows = [
-        {
-            "name": str(r["_id"] or "Other"),
-            "amount": float(r.get("amount") or 0),
-            "count": int(r.get("count") or 0),
-        }
-        for r in income_sources
+        {"name": name, "amount": vals["amount"], "count": int(vals["count"])}
+        for name, vals in sorted(income_totals.items(), key=lambda kv: -kv[1]["amount"])[:12]
     ]
 
     # Alerts / insights
@@ -613,19 +660,6 @@ def build_analytics(
         "alerts": alerts,
         "filters": {"banks": banks_list},
     }
-
-
-def _guess_asset_class(name: str) -> str:
-    lower = name.lower()
-    if "gold" in lower or "neosie" in lower:
-        return "Digital Gold"
-    if any(k in lower for k in ("groww", "zerodha", "upstox", "stock", "equity")):
-        return "Equity / Brokerage"
-    if any(k in lower for k in ("mutual", "sip", "mf ")):
-        return "Mutual Funds"
-    if any(k in lower for k in ("fd", "deposit")):
-        return "Fixed Deposits"
-    return "Other Investments"
 
 
 def _mom_change(monthly_rows: list[dict[str, Any]]) -> dict[str, Any]:
