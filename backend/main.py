@@ -42,6 +42,7 @@ transactions = db["transactions"]
 webhook_events = db["webhook_events"]
 category_memory = db["category_memory"]
 portfolio = db["portfolio"]
+networth_snapshots = db["networth_snapshots"]
 
 API_KEY = os.getenv("API_KEY", "")
 CORS_ORIGINS = [
@@ -1047,7 +1048,12 @@ def analytics(
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
     return build_analytics(
-        transactions, date_from=start, date_to=end, banks=banks, portfolio=portfolio
+        transactions,
+        date_from=start,
+        date_to=end,
+        banks=banks,
+        portfolio=portfolio,
+        networth_snapshots=networth_snapshots,
     )
 
 
@@ -1155,12 +1161,6 @@ async def indmoney_preview(file: UploadFile = File(...)):
     }
 
 
-class IndmoneyCommitPayload(BaseModel):
-    mapping: dict[str, Optional[str]]
-    rows: list[dict[str, Any]]
-    confirm: bool = False
-
-
 @app.post("/indmoney/validate")
 async def indmoney_validate(
     file: UploadFile = File(...),
@@ -1236,7 +1236,7 @@ def ai_ask(payload: AiAskPayload):
     start = _parse_optional_date(payload.date_from)
     end = _parse_optional_date(payload.date_to, end_of_day=True)
     analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio
+        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots
     )
     try:
         return ask(payload.question, analytics_data, provider_name=payload.provider)

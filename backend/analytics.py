@@ -149,6 +149,7 @@ def build_analytics(
     date_to: datetime | None = None,
     banks: list[str] | None = None,
     portfolio: Collection | None = None,
+    networth_snapshots: Collection | None = None,
 ) -> dict[str, Any]:
     match = _match_range(date_from, date_to, banks=banks)
     base = [{"$match": match}] if match else []
@@ -635,6 +636,32 @@ def build_analytics(
         }
     )
 
+    net_worth_estimate = liquid_total + total_current
+    indmoney_snapshot = None
+    if networth_snapshots is not None:
+        try:
+            snap = networth_snapshots.find_one(sort=[("captured_at", -1)])
+            if snap:
+                indmoney_snapshot = {
+                    "total_networth": float(snap.get("total_networth") or 0),
+                    "total_invested": float(snap.get("total_invested") or 0),
+                    "total_current_value": float(snap.get("total_current_value") or 0),
+                    "liabilities": float((snap.get("liabilities") or 0) if not isinstance(snap.get("liabilities"), dict) else (snap.get("liabilities") or {}).get("total") or 0),
+                    "captured_at": snap.get("captured_at").isoformat()
+                    if isinstance(snap.get("captured_at"), datetime)
+                    else snap.get("captured_at"),
+                    "source": snap.get("source"),
+                }
+                if indmoney_snapshot["total_networth"] > 0:
+                    net_worth_estimate = indmoney_snapshot["total_networth"]
+                # Prefer savings/liquid from snapshot investments SA bucket if present
+                for row in snap.get("investments") or []:
+                    if row.get("asset_type") == "SA":
+                        liquid_total = float(row.get("current_value") or liquid_total)
+                        break
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load networth snapshot: {exc}")
+
     return {
         "range": {
             "date_from": date_from.isoformat() if date_from else None,
@@ -655,11 +682,12 @@ def build_analytics(
             "avg_daily_debit": round(total_debit / active_days, 2) if active_days else 0.0,
             "liquid_total": liquid_total,
             "total_invested": total_invested,
-            "net_worth_estimate": liquid_total + total_current,
+            "net_worth_estimate": net_worth_estimate,
             "investment_to_income": round(total_invested / total_credit * 100, 1)
             if total_credit
             else 0.0,
         },
+        "indmoney_snapshot": indmoney_snapshot,
         "mom": mom,
         "monthly": monthly_rows,
         "daily": daily_rows,
