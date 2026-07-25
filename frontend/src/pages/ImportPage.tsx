@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { FileUp } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { uploadStatementFile } from '../api'
+import { PageHeader } from '../components/ui/PageHeader'
 
 const BANKS = [
   'HDFC Bank',
@@ -11,9 +13,6 @@ const BANKS = [
   'IDFC First Bank',
   'Yes Bank',
 ]
-
-const field =
-  'w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm text-[var(--text)]'
 
 export function ImportPage() {
   const [bank, setBank] = useState('HDFC Bank')
@@ -50,23 +49,23 @@ export function ImportPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4 xl:max-w-3xl">
-      <section className="panel p-5">
-        <h2 className="text-lg font-semibold tracking-tight">Import statement</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Upload a bank statement file. Supported: CSV, Excel (.xlsx / .xls), PDF.
-        </p>
+    <div>
+      <PageHeader
+        title="Import statement"
+        description="Upload a bank statement to enrich your cash-flow, spending, and source analytics."
+      />
 
-        <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-[var(--muted)]">
+      <section className="panel mx-auto max-w-2xl p-5 fade-up xl:max-w-3xl">
+        <ol className="list-decimal space-y-1.5 pl-5 text-sm text-[var(--muted)]">
           <li>Open net banking or your bank app</li>
           <li>Download account statement for the month you want</li>
           <li>Choose bank below and upload the file</li>
         </ol>
 
-        <label className="mt-5 block text-xs text-[var(--muted)]">
+        <label className="mt-5 block text-xs font-medium text-[var(--muted)]">
           Bank
           <select
-            className={`${field} mt-1`}
+            className="field mt-1 w-full"
             value={bank}
             onChange={(e) => setBank(e.target.value)}
           >
@@ -78,7 +77,7 @@ export function ImportPage() {
           </select>
         </label>
 
-        <label className="mt-4 flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-10 text-sm hover:border-[var(--accent)]">
+        <label className="mt-4 flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-10 text-sm transition hover:border-[var(--accent)]">
           <FileUp size={28} className="text-[var(--accent)]" />
           <span className="font-medium text-[var(--text)]">
             {busy ? 'Uploading…' : 'Tap to choose CSV / Excel / PDF'}
@@ -97,8 +96,16 @@ export function ImportPage() {
         {err ? <p className="mt-4 text-sm text-[var(--debit)]">{err}</p> : null}
       </section>
 
-      <p className="text-center text-xs text-[var(--muted)]">
-        After import, open <strong>Dashboard</strong> or <strong>Reports</strong> to see the data.
+      <p className="mt-4 text-center text-xs text-[var(--muted)]">
+        After import, open{' '}
+        <Link className="font-semibold text-[var(--accent)]" to="/">
+          Dashboard
+        </Link>{' '}
+        or{' '}
+        <Link className="font-semibold text-[var(--accent)]" to="/cash-flow">
+          Cash Flow
+        </Link>
+        .
       </p>
     </div>
   )
