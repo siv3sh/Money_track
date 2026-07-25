@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CalendarDays, PiggyBank, Store, TrendingUp } from 'lucide-react'
 import {
   DonutChart,
@@ -11,19 +11,68 @@ import { ChartCard } from '../components/ui/ChartCard'
 import { EmptyState, LoadingBlock } from '../components/ui/EmptyState'
 import { KpiCard } from '../components/ui/KpiCard'
 import { PageHeader } from '../components/ui/PageHeader'
+import { useFilters } from '../context/FilterContext'
 import { useFinanceReport } from '../hooks/useFinanceReport'
+import { fetchTransactions } from '../api'
 import { pctDelta } from '../lib/analytics'
-import { buildInvestmentSnapshot } from '../lib/investments'
+import {
+  buildInvestmentSnapshot,
+  mergeInvestmentTransactions,
+  normalizeInvestmentMerchant,
+} from '../lib/investments'
 import { formatDate, formatINR } from '../lib/format'
+import type { Transaction } from '../types'
 
 export function InvestmentsPage() {
-  const { summary, report, monthly, transactions, loading, error, reload } = useFinanceReport({
+  const { dateFrom, dateTo } = useFilters()
+  const { summary, report, monthly, loading, error, reload } = useFinanceReport({
     txnLimit: 500,
   })
+  const [investmentTxns, setInvestmentTxns] = useState<Transaction[]>([])
+  const [invLoading, setInvLoading] = useState(true)
+  const [invError, setInvError] = useState<string | null>(null)
+  const [invTick, setInvTick] = useState(0)
+
+  const loadInvestments = useCallback(async () => {
+    setInvLoading(true)
+    try {
+      const dateFromIso = dateFrom ? `${dateFrom}T00:00:00.000Z` : undefined
+      const dateToIso = dateTo ? `${dateTo}T23:59:59.999Z` : undefined
+      const [categorized, debits] = await Promise.all([
+        fetchTransactions({
+          limit: 500,
+          category: 'Investments',
+          type: 'debit',
+          date_from: dateFromIso,
+          date_to: dateToIso,
+          sort: 'received_at',
+          order: 'desc',
+        }),
+        fetchTransactions({
+          limit: 500,
+          type: 'debit',
+          date_from: dateFromIso,
+          date_to: dateToIso,
+          sort: 'received_at',
+          order: 'desc',
+        }),
+      ])
+      setInvestmentTxns(mergeInvestmentTransactions(categorized, debits))
+      setInvError(null)
+    } catch (err) {
+      setInvError(err instanceof Error ? err.message : 'Failed to load investments')
+    } finally {
+      setInvLoading(false)
+    }
+  }, [dateFrom, dateTo, invTick])
+
+  useEffect(() => {
+    void loadInvestments()
+  }, [loadInvestments])
 
   const portfolio = useMemo(
-    () => buildInvestmentSnapshot(transactions, monthly),
-    [transactions, monthly],
+    () => buildInvestmentSnapshot(investmentTxns, monthly),
+    [investmentTxns, monthly],
   )
 
   const income = summary?.this_month_credit || 0
@@ -42,27 +91,33 @@ export function InvestmentsPage() {
     value: m.amount,
   }))
 
+  const busy = loading || invLoading
+  const displayError = invError || error
+
   return (
     <div>
       <PageHeader
         title="Investments"
-        description="Tracked from your real Investment-category transactions and known investment merchants — no demo holdings."
+        description="All Investment-category outflows plus broker / MF / gold matches from your statements."
       />
       <FilterBar
         availableSources={(report?.by_bank || []).map((r) => r.name)}
-        onRefresh={reload}
-        loading={loading}
+        onRefresh={() => {
+          reload()
+          setInvTick((t) => t + 1)
+        }}
+        loading={busy}
         showCategoryFilter={false}
         showSourceFilter={false}
       />
 
-      {error ? (
+      {displayError ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/35 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
-          {error}
+          {displayError}
         </div>
       ) : null}
 
-      {loading && !report ? (
+      {busy && portfolio.txnCount === 0 ? (
         <LoadingBlock />
       ) : (
         <>
@@ -151,29 +206,38 @@ export function InvestmentsPage() {
 
               <section className="panel overflow-hidden fade-up">
                 <div className="border-b border-[var(--border)] px-4 py-3">
-                  <h3 className="text-sm font-semibold">Investment transactions</h3>
+                  <h3 className="text-sm font-semibold">
+                    Investment transactions
+                    <span className="ml-2 text-xs font-medium text-[var(--muted)]">
+                      {portfolio.txnCount} total · {formatINR(portfolio.totalInvested)}
+                    </span>
+                  </h3>
                   <p className="text-xs text-[var(--muted)]">
-                    Debits categorized as Investments or matching known brokers
+                    Investment category + IndMoney, Groww, Digital Gold, MF clearing, etc.
                   </p>
                 </div>
-                <div className="overflow-x-auto">
+                <div className="max-h-[32rem] overflow-auto">
                   <table className="min-w-full text-left text-sm">
-                    <thead className="text-xs uppercase tracking-wide text-[var(--muted)]">
+                    <thead className="sticky top-0 bg-[var(--surface)] text-xs uppercase tracking-wide text-[var(--muted)]">
                       <tr>
                         <th className="px-4 py-2 font-medium">Date</th>
-                        <th className="px-4 py-2 font-medium">Merchant</th>
+                        <th className="px-4 py-2 font-medium">Platform</th>
+                        <th className="px-4 py-2 font-medium">Merchant / detail</th>
                         <th className="px-4 py-2 font-medium">Category</th>
                         <th className="px-4 py-2 text-right font-medium">Amount</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {portfolio.transactions.slice(0, 40).map((t) => (
+                      {portfolio.transactions.map((t) => (
                         <tr key={t._id} className="border-t border-[var(--border)]">
                           <td className="whitespace-nowrap px-4 py-2.5 text-[var(--muted)]">
                             {formatDate(t.received_at)}
                           </td>
-                          <td className="max-w-[260px] truncate px-4 py-2.5 font-medium">
-                            {t.merchant || '—'}
+                          <td className="px-4 py-2.5 font-medium">
+                            {normalizeInvestmentMerchant(t.merchant)}
+                          </td>
+                          <td className="max-w-[280px] truncate px-4 py-2.5 text-[var(--muted)]">
+                            {(t.merchant || '—').replace(/\s+/g, ' ')}
                           </td>
                           <td className="px-4 py-2.5 text-[var(--muted)]">
                             {t.category || '—'}
