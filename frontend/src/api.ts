@@ -1,9 +1,21 @@
 import type { CardType, DetailedReport, MerchantSpend, MonthlyBucket, Summary, Transaction, TxnType } from './types'
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:8000'
+/**
+ * Resolve API base at call time.
+ * On Vercel preview/prod hosts, always use the same-origin `/api` rewrite so we
+ * avoid CORS failures when Render only allows the production origin.
+ */
+function resolveApiBase(): string {
+  if (typeof window !== 'undefined' && /\.vercel\.app$/i.test(window.location.hostname)) {
+    return '/api'
+  }
+  const fromEnv = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
+  if (fromEnv) return fromEnv
+  return import.meta.env.DEV ? 'http://localhost:8000' : '/api'
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${resolveApiBase()}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
@@ -124,7 +136,7 @@ export async function uploadStatementFile(
   if (bank) form.append('bank', bank)
   form.append('format', format)
 
-  const res = await fetch(`${API_BASE}/statements/upload`, {
+  const res = await fetch(`${resolveApiBase()}/statements/upload`, {
     method: 'POST',
     body: form,
   })
@@ -141,4 +153,4 @@ export async function uploadStatementFile(
   return res.json() as Promise<StatementImportResult>
 }
 
-export { API_BASE }
+export { resolveApiBase }
