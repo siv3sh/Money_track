@@ -48,7 +48,7 @@ _TXN_PREFIX = re.compile(
     r"|^(?:nft|neft|imps|rtgs|achdr|ach|ecs|ifn|pos|intl\.?\s*ecm\s*mrk)[/:\-\s]*"
 )
 
-_REF_TOKEN = re.compile(r"\b[A-Z]*\d{6,}[A-Z0-9]*\b")
+_REF_TOKEN = re.compile(r"(?i)\b[a-z]{0,4}\d{4,}[a-z0-9]*\b")
 _MCC_TAIL = re.compile(r"(?i)(?:/+\s*)?(?:paid\s*v)?/*\d{3,4}\s*$")
 _TIME_TOKEN = re.compile(r"\b\d{1,2}:\d{2}\b")
 _BANK_NOISE = re.compile(
@@ -82,9 +82,17 @@ _BRAND_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"indian\s*clearing|clearingcorp|iccl"), "Indian Clearing (MF)"),
     (re.compile(r"oxygen"), "Oxygen"),
     (re.compile(r"makemytrip|mmt"), "MakeMyTrip"),
-    (re.compile(r"idea\s*elan|vodafone|idea\s*india"), "Idea / Vodafone"),
+    (re.compile(r"idea\s*elan"), "Idea Elan"),
+    (re.compile(r"vodafone|\bvi\b|idea\s*cellular"), "Vi (Vodafone Idea)"),
     (re.compile(r"\bfedone\b|\bfederal\s*bank\b"), "Federal Bank"),
     (re.compile(r"bigshopper"), "Bigshopper"),
+]
+
+# Employers whose credits are salary, plus generic payroll wording
+_SALARY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"(?i)idea\s*elan"),
+    re.compile(r"(?i)\bsalary\b"),
+    re.compile(r"(?i)\bpayroll\b"),
 ]
 
 _LOCAL_BRANDS: list[tuple[str, str]] = [
@@ -136,47 +144,23 @@ def _brand_from_local(local: str) -> Optional[str]:
     return None
 
 
-def clean_merchant_label(
-    name: str | None,
-    *,
-    fallback: str | None = None,
-    max_len: int = 40,
-) -> str:
-    """
-    Turn raw SMS/statement narrations into a short display label.
+def is_salary_source(*texts: str | None) -> bool:
+    """True when a credit narration belongs to a known employer or payroll wording."""
+    blob = " ".join(t for t in texts if t)
+    if not blob:
+        return False
+    return any(pattern.search(blob) for pattern in _SALARY_PATTERNS)
 
-    Examples:
-      NFT/CHRIST UNIVERSI/...     → Christ University
-      UPIOUT/.../rajeevkshr@okaxis → Rajeevkshr
-      .../zerodhabrokingsignup@hdf → Zerodha
-      IFN/FEDONE/...              → Federal Bank
-    """
-    name = (name or "").strip()
-    fallback = (fallback or "").strip()
-    if not name and not fallback:
-        return "Unknown"
 
-    # Only blend in raw SMS when the merchant field itself looks like a rail narration
-    use_fallback = bool(fallback) and (
-        not name
-        or len(name) > 48
-        or "/" in name
-        or "\n" in name
-        or "\\" in name
-        or bool(
-            re.match(
-                r"(?i)^(?:upi|nft|neft|imps|rtgs|ifn|ach|pos|in)\b",
-                name.replace("\n", " "),
-            )
-        )
-    )
-    primary = f"{name} {fallback}".strip() if use_fallback else name
-    if not primary:
-        primary = fallback
+_WEAK_LABELS = frozenset({"Bank transfer", "Unknown", "UPI transfer", "UPI merchant"})
 
+
+def _label_from(text: str, max_len: int, *, strict: bool = False) -> str:
+    """strict=True only trusts brand/VPA hits (used for full SMS bodies)."""
     # Repair mid-token newlines: mariajames…@o\\nkh → …@okh
-    joined = primary.replace("\n", "").replace("\r", "")
-    joined = re.sub(r"\s+", " ", joined).strip()
+    joined = re.sub(r"\s+", " ", text.replace("\n", "").replace("\r", "")).strip()
+    if not joined:
+        return "Unknown"
     compact = _compact(joined)
 
     brand = _brand_from_blob(joined) or _brand_from_blob(compact)
@@ -192,6 +176,9 @@ def clean_merchant_label(
             return local_brand
         return _person_from_local(local)[:max_len]
 
+    if strict:
+        return "Bank transfer"
+
     # Strip rail prefixes and reference ids
     s = _TXN_PREFIX.sub("", joined)
     s = _REF_TOKEN.sub(" ", s)
@@ -200,7 +187,6 @@ def clean_merchant_label(
     s = _BANK_NOISE.sub(" ", s)
     s = re.sub(r"[/\\]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip(" /-_,.")
-
     if not s or len(s) < 2:
         return "Bank transfer"
 
@@ -208,7 +194,6 @@ def clean_merchant_label(
     if brand:
         return brand
 
-    # Title-case remaining words, drop pure digits
     words = [w for w in s.split() if not re.fullmatch(r"\d+", w)]
     if not words:
         return "Bank transfer"
@@ -216,3 +201,37 @@ def clean_merchant_label(
     if len(label) > max_len:
         label = label[: max_len - 1].rstrip() + "…"
     return label
+
+
+def clean_merchant_label(
+    name: str | None,
+    *,
+    fallback: str | None = None,
+    max_len: int = 40,
+) -> str:
+    """
+    Turn raw SMS/statement narrations into a short display label.
+
+    Examples:
+      NFT/CHRIST UNIVERSI/...      → Christ University
+      UPIOUT/.../rajeevkshr@okaxis → Rajeevkshr
+      .../zerodhabrokingsignup@hdf → Zerodha
+      NFT/IDEA ELAN INDIA/...      → Idea Elan
+    """
+    name = (name or "").strip()
+    fallback = (fallback or "").strip()
+    if not name and not fallback:
+        return "Unknown"
+
+    if name:
+        label = _label_from(name, max_len)
+        if label not in _WEAK_LABELS:
+            return label
+
+    # Raw SMS bodies are full sentences, so only trust brand/VPA hits from them
+    if fallback:
+        label = _label_from(fallback, max_len, strict=True)
+        if label not in _WEAK_LABELS:
+            return label
+
+    return "Bank transfer"

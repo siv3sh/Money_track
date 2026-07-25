@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from pymongo.collection import Collection
 
-from merchant_label import clean_merchant_label
+from merchant_label import clean_merchant_label, is_salary_source
 
 # Canonical instrument names for investment vehicles
 INSTRUMENT_RULES: list[tuple[str, str, str]] = [
@@ -563,8 +563,10 @@ def build_analytics(
 
     # Income sources (credits by normalized merchant)
     income_totals: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"amount": 0.0, "count": 0.0}
+        lambda: {"amount": 0.0, "count": 0.0, "salary": 0.0}
     )
+    salary_total = 0.0
+    salary_count = 0
     for doc in transactions.find(
         {**match, "type": "credit"}, {"merchant": 1, "raw_text": 1, "category": 1, "amount": 1}
     ):
@@ -573,12 +575,24 @@ def build_analytics(
             if doc.get("merchant")
             else str(doc.get("category") or "Other income")
         )
-        income_totals[label]["amount"] += float(doc.get("amount") or 0)
+        amount = float(doc.get("amount") or 0)
+        income_totals[label]["amount"] += amount
         income_totals[label]["count"] += 1
+        if is_salary_source(label, doc.get("merchant"), doc.get("raw_text")):
+            income_totals[label]["salary"] = 1.0
+            salary_total += amount
+            salary_count += 1
     income_rows = [
-        {"name": name, "amount": vals["amount"], "count": int(vals["count"])}
+        {
+            "name": name,
+            "amount": vals["amount"],
+            "count": int(vals["count"]),
+            "is_salary": bool(vals["salary"]),
+        }
         for name, vals in sorted(income_totals.items(), key=lambda kv: -kv[1]["amount"])[:12]
     ]
+    salary_total = round(salary_total, 2)
+    other_income_total = round(total_credit - salary_total, 2)
 
     by_category = group_breakdown("category")
     transfers_debit = next(
@@ -676,6 +690,12 @@ def build_analytics(
             "lifestyle_spend": lifestyle_spend,
             "transfers_debit": round(transfers_debit, 2),
             "investments_debit": round(investments_debit, 2),
+            "salary_total": salary_total,
+            "salary_count": salary_count,
+            "other_income_total": other_income_total,
+            "lifestyle_to_salary": round(lifestyle_spend / salary_total * 100, 1)
+            if salary_total
+            else 0.0,
             "avg_daily_lifestyle": round(lifestyle_spend / active_days, 2)
             if active_days
             else 0.0,

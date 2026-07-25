@@ -34,6 +34,16 @@ export function CashFlowPage() {
         <>
           <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
+              label="Salary received"
+              value={formatINR(o.salary_total ?? 0)}
+              tone="credit"
+              hint={
+                o.salary_total
+                  ? `${o.salary_count} credits · other income ${formatINR(o.other_income_total ?? 0)}`
+                  : 'No salary credits detected'
+              }
+            />
+            <KpiCard
               label="Total credited"
               value={formatINR(o.total_credit)}
               change={mom?.credit_pct}
@@ -76,10 +86,13 @@ export function CashFlowPage() {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <ChartCard title="Income source breakdown" subtitle="Where credits came from">
+            <ChartCard
+              title="Income source breakdown"
+              subtitle="Salary sources are marked"
+            >
               <DonutChart
                 data={data.income_sources.map((r) => ({
-                  name: r.name,
+                  name: r.is_salary ? `${r.name} (salary)` : r.name,
                   value: r.amount,
                 }))}
               />

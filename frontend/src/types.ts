@@ -84,6 +84,10 @@ export interface AnalyticsPayload {
     transfers_debit: number
     investments_debit: number
     avg_daily_lifestyle: number
+    salary_total: number
+    salary_count: number
+    other_income_total: number
+    lifestyle_to_salary: number
     total_invested: number
     net_worth_estimate: number
     investment_to_income: number
@@ -133,7 +137,12 @@ export interface AnalyticsPayload {
     incomplete?: boolean
     note?: string
   }>
-  income_sources: Array<{ name: string; amount: number; count: number }>
+  income_sources: Array<{
+    name: string
+    amount: number
+    count: number
+    is_salary?: boolean
+  }>
   investments: {
     total_invested: number
     total_current: number

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+from merchant_label import is_salary_source
+
 # Stable category labels used across API + UI
 CATEGORIES = [
     "Food & Dining",
@@ -298,6 +300,9 @@ def categorize(
                 "mcc": mcc,
                 "source": "memory",
             }
+
+    if txn_type == "credit" and is_salary_source(merchant_s, raw):
+        return {"category": "Income", "mcc": mcc, "source": "salary"}
 
     kw = _keyword_category(blob, txn_type)
     if kw:
