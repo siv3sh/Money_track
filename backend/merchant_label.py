@@ -50,11 +50,12 @@ _TXN_PREFIX = re.compile(
 
 _REF_TOKEN = re.compile(r"\b[A-Z]*\d{6,}[A-Z0-9]*\b")
 _MCC_TAIL = re.compile(r"(?i)(?:/+\s*)?(?:paid\s*v)?/*\d{3,4}\s*$")
+_TIME_TOKEN = re.compile(r"\b\d{1,2}:\d{2}\b")
 _BANK_NOISE = re.compile(
     r"(?i)\b(?:"
     r"icici\s*bank|hdfc\s*bank|axis\s*bank|kotak\s*bank|federal\s*bank|"
-    r"fedone|ffr|ifn|upi|neft|imps|rtgs|ref|txn|a/c|acct|account|"
-    r"south\s*indi(?:a)?|bank"
+    r"fedone|ffr|ifn|upi|neft|imps|rtgs|achdr|ach|ecs|ref|txn|a/c|acct|account|"
+    r"south\s*indi(?:a)?|bank|clearingcorp"
     r")\b"
 )
 
@@ -195,6 +196,7 @@ def clean_merchant_label(
     s = _TXN_PREFIX.sub("", joined)
     s = _REF_TOKEN.sub(" ", s)
     s = _MCC_TAIL.sub("", s)
+    s = _TIME_TOKEN.sub(" ", s)
     s = _BANK_NOISE.sub(" ", s)
     s = re.sub(r"[/\\]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip(" /-_,.")
