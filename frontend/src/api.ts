@@ -156,4 +156,150 @@ export async function uploadStatementFile(
   return res.json() as Promise<StatementImportResult>
 }
 
+async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: form })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || `Request failed (${res.status})`)
+  }
+  return res.json() as Promise<T>
+}
+
+export interface IndmoneyPreview {
+  filename: string
+  headers: string[]
+  row_count: number
+  sample_rows: Array<Record<string, unknown>>
+  suggested_mapping: Record<string, string | null>
+  fields: Array<{ key: string; label: string; required: boolean }>
+}
+
+export interface IndmoneyValidateResult {
+  ok: boolean
+  error?: string
+  valid: Array<{
+    name: string
+    asset_class: string
+    invested: number
+    current_value: number
+    units: number | null
+    as_of_date: string | null
+    instrument_key: string
+  }>
+  errors: Array<{ row: number; issue: string; instrument?: string }>
+  summary: {
+    valid: number
+    errors: number
+    duplicates_in_file: number
+    total_invested?: number
+    total_current?: number
+  }
+}
+
+export function previewIndmoneyFile(file: File): Promise<IndmoneyPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  return postForm('/indmoney/preview', form)
+}
+
+export function validateIndmoneyFile(
+  file: File,
+  mapping: Record<string, string | null>,
+): Promise<IndmoneyValidateResult> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('mapping_json', JSON.stringify(mapping))
+  return postForm('/indmoney/validate', form)
+}
+
+export function commitIndmoneyFile(
+  file: File,
+  mapping: Record<string, string | null>,
+): Promise<{
+  ok: boolean
+  import: { inserted: number; updated: number; total: number }
+  summary: IndmoneyValidateResult['summary']
+  errors: IndmoneyValidateResult['errors']
+  holdings: PortfolioResponse
+}> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('mapping_json', JSON.stringify(mapping))
+  return postForm('/indmoney/commit', form)
+}
+
+export interface AiStatus {
+  configured: string
+  active: string | null
+  ollama: { available: boolean; base_url: string; model: string }
+  gemini: { available: boolean; model: string; key_configured: boolean }
+}
+
+export function fetchAiStatus(): Promise<AiStatus> {
+  return request('/ai/status')
+}
+
+export function aiAsk(
+  question: string,
+  opts: { date_from?: string; date_to?: string; provider?: string } = {},
+): Promise<{ answer: string; provider: string }> {
+  return request('/ai/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, ...opts }),
+  })
+}
+
+export function aiMonthlySummary(opts: {
+  date_from?: string
+  date_to?: string
+  provider?: string
+} = {}): Promise<{ summary: string; provider: string }> {
+  const qs = new URLSearchParams()
+  if (opts.date_from) qs.set('date_from', opts.date_from)
+  if (opts.date_to) qs.set('date_to', opts.date_to)
+  if (opts.provider) qs.set('provider', opts.provider)
+  const q = qs.toString()
+  return request(`/ai/monthly-summary${q ? `?${q}` : ''}`, { method: 'POST' })
+}
+
+export function aiAnomalies(opts: {
+  date_from?: string
+  date_to?: string
+  provider?: string
+} = {}): Promise<{ insights: string[]; provider: string }> {
+  const qs = new URLSearchParams()
+  if (opts.date_from) qs.set('date_from', opts.date_from)
+  if (opts.date_to) qs.set('date_to', opts.date_to)
+  if (opts.provider) qs.set('provider', opts.provider)
+  const q = qs.toString()
+  return request(`/ai/anomalies${q ? `?${q}` : ''}`, { method: 'POST' })
+}
+
+export function aiCategorize(opts: {
+  limit?: number
+  use_llm?: boolean
+  provider?: string
+} = {}): Promise<{
+  scanned: number
+  updated: number
+  llm_applied: number
+  remaining_other: number
+  suggestions: Array<{ id: string; category: string; source: string; merchant?: string }>
+  llm_error?: string
+}> {
+  const qs = new URLSearchParams()
+  if (opts.limit != null) qs.set('limit', String(opts.limit))
+  if (opts.use_llm != null) qs.set('use_llm', String(opts.use_llm))
+  if (opts.provider) qs.set('provider', opts.provider)
+  const q = qs.toString()
+  return request(`/ai/categorize${q ? `?${q}` : ''}`, { method: 'POST' })
+}
+
 export { API_BASE }

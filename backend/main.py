@@ -17,6 +17,15 @@ from parser import parse_sms
 from statement_parser import parse_statement, parse_statement_file
 from categorizer import CATEGORIES, apply_category
 from analytics import build_analytics
+from indmoney_import import (
+    TARGET_FIELDS,
+    apply_mapping,
+    read_tabular_file,
+    suggest_mapping,
+    upsert_holdings,
+)
+from ai_insights import ask, categorize_batch, explain_anomalies, monthly_summary
+from llm import LLMError, provider_status
 
 load_dotenv()
 
@@ -59,6 +68,8 @@ try:
     transactions.create_index("type")
     transactions.create_index("category")
     category_memory.create_index("merchant_key", unique=True)
+    portfolio.create_index("instrument_key")
+    portfolio.create_index("source")
 except Exception as exc:  # noqa: BLE001 — allow import/boot without Mongo during local checks
     print(f"Warning: could not create Mongo indexes yet: {exc}")
 
@@ -1056,14 +1067,21 @@ def _serialize_holding(doc: dict[str, Any]) -> dict[str, Any]:
     current = float(doc.get("current_value") or 0)
     pnl = current - invested
     updated = doc.get("updated_at")
+    imported = doc.get("import_date")
     return {
         "name": str(doc.get("name") or ""),
         "asset_class": str(doc.get("asset_class") or "Other Investments"),
         "invested": invested,
         "current_value": current,
+        "units": doc.get("units"),
+        "as_of_date": doc.get("as_of_date"),
+        "instrument_key": doc.get("instrument_key"),
+        "source": doc.get("source") or "manual",
+        "provider": doc.get("provider"),
         "pnl": round(pnl, 2),
         "pnl_pct": round(pnl / invested * 100, 2) if invested else 0.0,
         "updated_at": updated.isoformat() if isinstance(updated, datetime) else None,
+        "import_date": imported.isoformat() if isinstance(imported, datetime) else None,
     }
 
 
@@ -1083,16 +1101,189 @@ def put_portfolio(payload: PortfolioPayload):
     now = datetime.now(timezone.utc)
     portfolio.delete_many({})
     if payload.holdings:
-        portfolio.insert_many(
-            [
+        docs = []
+        for h in payload.holdings:
+            name = h.name.strip()
+            key = f"{name.strip().lower()}|latest"
+            docs.append(
                 {
-                    "name": h.name.strip(),
+                    "name": name,
                     "asset_class": h.asset_class.strip() or "Other Investments",
                     "invested": h.invested,
                     "current_value": h.current_value,
+                    "instrument_key": key,
+                    "source": "manual",
+                    "provider": "manual",
                     "updated_at": now,
+                    "import_date": now,
                 }
-                for h in payload.holdings
-            ]
-        )
+            )
+        portfolio.insert_many(docs)
     return get_portfolio()
+
+
+# ── INDmoney CSV / Excel import ──────────────────────────────────────────────
+
+@app.get("/indmoney/fields")
+def indmoney_fields():
+    return {"fields": TARGET_FIELDS}
+
+
+@app.post("/indmoney/preview")
+async def indmoney_preview(file: UploadFile = File(...)):
+    """Parse export + return headers, sample rows, and suggested column mapping."""
+    name = (file.filename or "").lower()
+    if not name.endswith((".csv", ".tsv", ".txt", ".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Upload a CSV or Excel file")
+    raw = await file.read()
+    if len(raw) > 5_000_000:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+    try:
+        headers, rows = read_tabular_file(raw, file.filename or name)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}") from exc
+    if not headers:
+        raise HTTPException(status_code=422, detail="No header row found")
+    mapping = suggest_mapping(headers)
+    return {
+        "filename": file.filename,
+        "headers": headers,
+        "row_count": len(rows),
+        "sample_rows": rows[:8],
+        "suggested_mapping": mapping,
+        "fields": TARGET_FIELDS,
+    }
+
+
+class IndmoneyCommitPayload(BaseModel):
+    mapping: dict[str, Optional[str]]
+    rows: list[dict[str, Any]]
+    confirm: bool = False
+
+
+@app.post("/indmoney/validate")
+async def indmoney_validate(
+    file: UploadFile = File(...),
+    mapping_json: str = Form(...),
+):
+    """Validate mapped rows and return preview before commit."""
+    try:
+        mapping = json.loads(mapping_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid mapping JSON") from exc
+    raw = await file.read()
+    try:
+        _headers, rows = read_tabular_file(raw, file.filename or "export.csv")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}") from exc
+    return apply_mapping(rows, mapping)
+
+
+@app.post("/indmoney/commit")
+async def indmoney_commit(
+    file: UploadFile = File(...),
+    mapping_json: str = Form(...),
+):
+    """Parse file with user mapping and upsert holdings (source=csv_import)."""
+    try:
+        mapping = json.loads(mapping_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid mapping JSON") from exc
+    if not isinstance(mapping, dict):
+        raise HTTPException(status_code=400, detail="mapping must be an object")
+
+    raw = await file.read()
+    try:
+        _headers, rows = read_tabular_file(raw, file.filename or "export.csv")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not parse file: {exc}") from exc
+
+    preview = apply_mapping(rows, mapping)
+    if not preview.get("ok"):
+        raise HTTPException(status_code=422, detail=preview.get("error") or "Validation failed")
+    if not preview["valid"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No valid rows to import ({preview['summary']['errors']} errors)",
+        )
+
+    result = upsert_holdings(portfolio, preview["valid"], source="csv_import")
+    return {
+        "ok": True,
+        "import": result,
+        "summary": preview["summary"],
+        "errors": preview["errors"][:20],
+        "holdings": get_portfolio(),
+    }
+
+
+# ── AI Insights ──────────────────────────────────────────────────────────────
+
+class AiAskPayload(BaseModel):
+    question: str = Field(..., min_length=3, max_length=500)
+    date_from: str | None = None
+    date_to: str | None = None
+    provider: str | None = None
+
+
+@app.get("/ai/status")
+def ai_status():
+    return provider_status()
+
+
+@app.post("/ai/ask")
+def ai_ask(payload: AiAskPayload):
+    start = _parse_optional_date(payload.date_from)
+    end = _parse_optional_date(payload.date_to, end_of_day=True)
+    analytics_data = build_analytics(
+        transactions, date_from=start, date_to=end, portfolio=portfolio
+    )
+    try:
+        return ask(payload.question, analytics_data, provider_name=payload.provider)
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/ai/monthly-summary")
+def ai_monthly_summary(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    provider: str | None = None,
+):
+    start = _parse_optional_date(date_from)
+    end = _parse_optional_date(date_to, end_of_day=True)
+    analytics_data = build_analytics(
+        transactions, date_from=start, date_to=end, portfolio=portfolio
+    )
+    try:
+        return monthly_summary(analytics_data, provider_name=provider)
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/ai/anomalies")
+def ai_anomalies(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    provider: str | None = None,
+):
+    start = _parse_optional_date(date_from)
+    end = _parse_optional_date(date_to, end_of_day=True)
+    analytics_data = build_analytics(
+        transactions, date_from=start, date_to=end, portfolio=portfolio
+    )
+    try:
+        return explain_anomalies(analytics_data, provider_name=provider)
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/ai/categorize")
+def ai_categorize(
+    limit: int = Query(default=40, ge=1, le=100),
+    use_llm: bool = Query(default=True),
+    provider: str | None = None,
+):
+    return categorize_batch(
+        transactions, limit=limit, use_llm=use_llm, provider_name=provider
+    )

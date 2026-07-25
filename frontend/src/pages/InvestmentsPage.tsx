@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+import { FileSpreadsheet } from 'lucide-react'
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
 import { PortfolioEditor } from '../components/PortfolioEditor'
@@ -35,6 +37,12 @@ export function InvestmentsPage() {
       <PageHeader
         title="Investments"
         description="SIP flows from transactions plus market values you sync from broker apps."
+        actions={
+          <Link to="/investments/indmoney" className="btn">
+            <FileSpreadsheet size={14} />
+            Import from INDmoney
+          </Link>
+        }
       />
       <FilterBar />
       <PortfolioEditor onSaved={refresh} />

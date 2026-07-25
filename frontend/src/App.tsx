@@ -1,8 +1,10 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { AiInsightsPage } from './pages/AiInsightsPage'
 import { AlertsPage } from './pages/AlertsPage'
 import { CashFlowPage } from './pages/CashFlowPage'
 import { ImportPage } from './pages/ImportPage'
+import { IndmoneyImportPage } from './pages/IndmoneyImportPage'
 import { InvestmentsPage } from './pages/InvestmentsPage'
 import { NetWorthPage } from './pages/NetWorthPage'
 import { SourcesPage } from './pages/SourcesPage'
@@ -18,9 +20,10 @@ export default function App() {
           <Route path="spending" element={<SpendingPage />} />
           <Route path="sources" element={<SourcesPage />} />
           <Route path="investments" element={<InvestmentsPage />} />
+          <Route path="investments/indmoney" element={<IndmoneyImportPage />} />
+          <Route path="ai" element={<AiInsightsPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="import" element={<ImportPage />} />
-          {/* Legacy redirects */}
           <Route path="reports" element={<SpendingPage />} />
           <Route path="dashboard" element={<NetWorthPage />} />
         </Route>

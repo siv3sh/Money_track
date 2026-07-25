@@ -6,6 +6,7 @@ import {
   Menu,
   Moon,
   PieChart,
+  Sparkles,
   Sun,
   TrendingUp,
   Upload,
@@ -24,6 +25,7 @@ const NAV = [
   { to: '/spending', label: 'Spending', icon: PieChart },
   { to: '/sources', label: 'Sources', icon: Landmark },
   { to: '/investments', label: 'Investments', icon: TrendingUp },
+  { to: '/ai', label: 'AI Insights', icon: Sparkles },
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/import', label: 'Import', icon: Upload },
 ] as const
