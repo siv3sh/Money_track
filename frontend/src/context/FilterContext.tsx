@@ -11,12 +11,21 @@ import { fetchAnalytics } from '../api'
 import { toInputDate } from '../lib/format'
 import type { AnalyticsPayload } from '../types'
 
-export type DatePreset = 'month' | 'last-month' | 'quarter' | 'year' | 'all'
+export type DatePreset = 'day' | 'week' | 'month' | 'last-month' | 'quarter' | 'year' | 'all'
 
 function presetRange(preset: DatePreset): { from: string; to: string } {
   const today = new Date()
   const end = toInputDate(today)
   switch (preset) {
+    case 'day':
+      return { from: end, to: end }
+    case 'week': {
+      const start = new Date(today)
+      // Monday-start week
+      const dow = (today.getDay() + 6) % 7
+      start.setDate(today.getDate() - dow)
+      return { from: toInputDate(start), to: end }
+    }
     case 'month':
       return { from: toInputDate(new Date(today.getFullYear(), today.getMonth(), 1)), to: end }
     case 'last-month':

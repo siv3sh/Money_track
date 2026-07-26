@@ -13,7 +13,7 @@ from bson.errors import InvalidId
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from pymongo import DESCENDING, MongoClient
 
@@ -32,8 +32,11 @@ from indmoney_import import (
     suggest_mapping,
     upsert_holdings,
 )
-from ai_insights import ask, categorize_batch, explain_anomalies, monthly_summary
+from ai_insights import ask, categorize_batch, disambiguate_transfers, explain_anomalies, monthly_summary
 from llm import LLMError, provider_status
+from smart_insights import attach_smart_insights, find_ambiguous_transfers
+from monthly_report import generate_monthly_report, get_report, list_reports
+from email_report import email_configured, render_report_html, send_report_email
 
 app = FastAPI(title="SMS Money Tracker")
 
@@ -52,6 +55,11 @@ networth_snapshots = db["networth_snapshots"]
 liabilities_col = db["liabilities"]
 budgets_col = db["budgets"]
 import_events = db["import_events"]
+sip_overrides = db["sip_overrides"]
+app_settings = db["app_settings"]
+transfer_suggestions = db["transfer_suggestions"]
+monthly_reports = db["monthly_reports"]
+news_cache = db["news_cache"]
 
 API_KEY = os.getenv("API_KEY", "")
 CORS_ORIGINS = [
@@ -78,6 +86,10 @@ try:
     transactions.create_index("type")
     transactions.create_index("category")
     category_memory.create_index("merchant_key", unique=True)
+    sip_overrides.create_index([("instrument", 1), ("month", 1)], unique=True)
+    transfer_suggestions.create_index("txn_id", unique=True)
+    monthly_reports.create_index("month", unique=True)
+    news_cache.create_index("expires_at")
     portfolio.create_index("instrument_key")
     portfolio.create_index("source")
 except Exception as exc:  # noqa: BLE001 — allow import/boot without Mongo during local checks
@@ -703,19 +715,24 @@ def update_transaction_category(txn_id: str, payload: CategoryUpdate):
 
     merchant = (doc.get("merchant") or "").strip()
     if payload.remember_merchant and merchant:
-        key = merchant.lower()
-        category_memory.update_one(
-            {"merchant_key": key},
-            {
-                "$set": {
-                    "merchant_key": key,
-                    "merchant": merchant,
-                    "category": payload.category,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-            upsert=True,
-        )
+        now = datetime.now(timezone.utc)
+        keys = {merchant.lower()}
+        cleaned = clean_merchant_label(merchant, fallback=doc.get("raw_text")).strip().lower()
+        if cleaned:
+            keys.add(cleaned)
+        for key in keys:
+            category_memory.update_one(
+                {"merchant_key": key},
+                {
+                    "$set": {
+                        "merchant_key": key,
+                        "merchant": merchant,
+                        "category": payload.category,
+                        "updated_at": now,
+                    }
+                },
+                upsert=True,
+            )
 
     updated = transactions.find_one({"_id": oid})
     return {"ok": True, "transaction": _serialize(updated or doc)}
@@ -1132,7 +1149,7 @@ def analytics(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
-    return build_analytics(
+    payload = build_analytics(
         transactions,
         date_from=start,
         date_to=end,
@@ -1141,6 +1158,12 @@ def analytics(
         networth_snapshots=networth_snapshots,
         liabilities=liabilities_col,
         budgets=budgets_col,
+    )
+    return attach_smart_insights(
+        payload,
+        transactions,
+        sip_overrides=sip_overrides,
+        settings=app_settings,
     )
 
 
@@ -1503,8 +1526,13 @@ def ai_status():
 def ai_ask(payload: AiAskPayload):
     start = _parse_optional_date(payload.date_from)
     end = _parse_optional_date(payload.date_to, end_of_day=True)
-    analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
+    analytics_data = attach_smart_insights(
+        build_analytics(
+            transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
+        ),
+        transactions,
+        sip_overrides=sip_overrides,
+        settings=app_settings,
     )
     try:
         return ask(payload.question, analytics_data, provider_name=payload.provider)
@@ -1520,8 +1548,13 @@ def ai_monthly_summary(
 ):
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
-    analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
+    analytics_data = attach_smart_insights(
+        build_analytics(
+            transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
+        ),
+        transactions,
+        sip_overrides=sip_overrides,
+        settings=app_settings,
     )
     try:
         return monthly_summary(analytics_data, provider_name=provider)
@@ -1537,8 +1570,13 @@ def ai_anomalies(
 ):
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
-    analytics_data = build_analytics(
-        transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
+    analytics_data = attach_smart_insights(
+        build_analytics(
+            transactions, date_from=start, date_to=end, portfolio=portfolio, networth_snapshots=networth_snapshots, liabilities=liabilities_col, budgets=budgets_col
+        ),
+        transactions,
+        sip_overrides=sip_overrides,
+        settings=app_settings,
     )
     try:
         return explain_anomalies(analytics_data, provider_name=provider)
@@ -1553,5 +1591,419 @@ def ai_categorize(
     provider: str | None = None,
 ):
     return categorize_batch(
-        transactions, limit=limit, use_llm=use_llm, provider_name=provider
+        transactions,
+        limit=limit,
+        use_llm=use_llm,
+        provider_name=provider,
+        merchant_memory=_load_merchant_memory(),
     )
+
+
+class SipMarkPayload(BaseModel):
+    instrument: str = Field(..., min_length=1, max_length=120)
+    month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+
+
+@app.post("/smart/sip/mark-invested")
+def mark_sip_invested(payload: SipMarkPayload):
+    month = payload.month or datetime.now(timezone.utc).strftime("%Y-%m")
+    name = payload.instrument.strip()
+    sip_overrides.update_one(
+        {"instrument": name, "month": month},
+        {
+            "$set": {
+                "instrument": name,
+                "month": month,
+                "marked_at": datetime.now(timezone.utc),
+            }
+        },
+        upsert=True,
+    )
+    return {"ok": True, "instrument": name, "month": month}
+
+
+@app.delete("/smart/sip/mark-invested")
+def unmark_sip_invested(instrument: str = Query(...), month: str | None = None):
+    ym = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    sip_overrides.delete_one({"instrument": instrument.strip(), "month": ym})
+    return {"ok": True}
+
+
+class DriftSettingsPayload(BaseModel):
+    targets: dict[str, float] | None = None
+    threshold_pp: float = Field(default=10.0, ge=1, le=50)
+    use_current_as_baseline: bool = False
+
+
+@app.get("/smart/drift-settings")
+def get_drift_settings():
+    doc = app_settings.find_one({"_id": "allocation"}) or {}
+    return {
+        "targets": doc.get("targets") or {},
+        "baseline": doc.get("baseline") or {},
+        "threshold_pp": float(doc.get("threshold_pp") or 10),
+        "baseline_saved_at": doc.get("baseline_saved_at").isoformat()
+        if isinstance(doc.get("baseline_saved_at"), datetime)
+        else None,
+    }
+
+
+@app.put("/smart/drift-settings")
+def put_drift_settings(payload: DriftSettingsPayload):
+    now = datetime.now(timezone.utc)
+    update: dict[str, Any] = {"threshold_pp": payload.threshold_pp, "updated_at": now}
+    if payload.targets is not None:
+        update["targets"] = {str(k): float(v) for k, v in payload.targets.items() if float(v) > 0}
+    if payload.use_current_as_baseline:
+        analytics_data = build_analytics(
+            transactions, portfolio=portfolio, networth_snapshots=networth_snapshots
+        )
+        holdings = (analytics_data.get("investments") or {}).get("holdings") or []
+        total = sum(float(h.get("current_value") or 0) for h in holdings) or 1.0
+        baseline: dict[str, float] = {}
+        for h in holdings:
+            cls = str(h.get("asset_class") or "Other")
+            baseline[cls] = baseline.get(cls, 0) + float(h.get("current_value") or 0)
+        update["baseline"] = {k: round(v / total * 100, 1) for k, v in baseline.items()}
+        update["baseline_saved_at"] = now
+    app_settings.update_one(
+        {"_id": "allocation"},
+        {"$set": update, "$setOnInsert": {"_id": "allocation"}},
+        upsert=True,
+    )
+    return get_drift_settings()
+
+
+@app.get("/ai/transfer-suggestions")
+def list_transfer_suggestions():
+    rows = list(transfer_suggestions.find({"status": "pending"}).sort("created_at", DESCENDING).limit(50))
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "id": str(row.get("txn_id")),
+                "amount": row.get("amount"),
+                "merchant": row.get("merchant"),
+                "bank": row.get("bank"),
+                "received_at": row.get("received_at"),
+                "label": row.get("label"),
+                "confidence": row.get("confidence"),
+                "suggested_category": row.get("suggested_category"),
+                "reason": row.get("reason"),
+                "provider": row.get("provider"),
+            }
+        )
+    return {"suggestions": out}
+
+
+@app.post("/ai/disambiguate-transfers")
+def ai_disambiguate_transfers(
+    limit: int = Query(default=25, ge=1, le=40),
+    provider: str | None = None,
+):
+    banks = sorted(
+        {
+            str(doc.get("bank") or "")
+            for doc in transactions.find({}, {"bank": 1})
+            if doc.get("bank")
+        }
+    )
+    candidates = find_ambiguous_transfers(transactions, known_banks=banks, limit=limit)
+    # Skip ones already pending
+    pending_ids = {
+        str(r["txn_id"])
+        for r in transfer_suggestions.find({"status": "pending"}, {"txn_id": 1})
+    }
+    candidates = [c for c in candidates if c["id"] not in pending_ids]
+    try:
+        result = disambiguate_transfers(
+            candidates, known_accounts=banks, provider_name=provider
+        )
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    now = datetime.now(timezone.utc)
+    stored = 0
+    for s in result.get("suggestions") or []:
+        transfer_suggestions.update_one(
+            {"txn_id": s["id"]},
+            {
+                "$set": {
+                    "txn_id": s["id"],
+                    "amount": s.get("amount"),
+                    "merchant": s.get("merchant"),
+                    "bank": s.get("bank"),
+                    "received_at": s.get("received_at"),
+                    "label": s.get("label"),
+                    "confidence": s.get("confidence"),
+                    "suggested_category": s.get("suggested_category"),
+                    "reason": s.get("reason"),
+                    "provider": s.get("provider"),
+                    "status": "pending",
+                    "created_at": now,
+                }
+            },
+            upsert=True,
+        )
+        stored += 1
+    return {
+        "scanned": len(candidates),
+        "stored": stored,
+        "provider": result.get("provider"),
+        "suggestions": result.get("suggestions") or [],
+    }
+
+
+class TransferReviewPayload(BaseModel):
+    action: str = Field(..., pattern="^(approve|reject)$")
+
+
+@app.post("/ai/transfer-suggestions/{txn_id}/review")
+def review_transfer_suggestion(txn_id: str, payload: TransferReviewPayload):
+    try:
+        oid = ObjectId(txn_id)
+    except InvalidId as exc:
+        raise HTTPException(status_code=400, detail="Invalid transaction id") from exc
+
+    suggestion = transfer_suggestions.find_one({"txn_id": txn_id, "status": "pending"})
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="No pending suggestion")
+
+    doc = transactions.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    now = datetime.now(timezone.utc)
+    if payload.action == "reject":
+        transfer_suggestions.update_one(
+            {"txn_id": txn_id},
+            {"$set": {"status": "rejected", "reviewed_at": now}},
+        )
+        transactions.update_one(
+            {"_id": oid},
+            {"$set": {"transfer_review": "rejected"}},
+        )
+        return {"ok": True, "action": "reject"}
+
+    # approve
+    label = suggestion.get("label")
+    if label == "self_transfer":
+        category = "Transfers"
+        review_flag = "approved_transfer"
+    else:
+        category = suggestion.get("suggested_category") or "Other"
+        if category not in CATEGORIES:
+            category = "Other"
+        review_flag = "approved_spend"
+
+    transactions.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "category": category,
+                "category_source": "disambiguation",
+                "transfer_review": review_flag,
+            }
+        },
+    )
+    # Remember merchant → Transfers for self-transfers
+    merchant = (doc.get("merchant") or "").strip()
+    if label == "self_transfer" and merchant:
+        for key in {
+            merchant.lower(),
+            clean_merchant_label(merchant, fallback=doc.get("raw_text")).strip().lower(),
+        }:
+            if not key:
+                continue
+            category_memory.update_one(
+                {"merchant_key": key},
+                {
+                    "$set": {
+                        "merchant_key": key,
+                        "merchant": merchant,
+                        "category": "Transfers",
+                        "updated_at": now,
+                    }
+                },
+                upsert=True,
+            )
+
+    transfer_suggestions.update_one(
+        {"txn_id": txn_id},
+        {"$set": {"status": "approved", "reviewed_at": now, "applied_category": category}},
+    )
+    return {"ok": True, "action": "approve", "category": category}
+
+
+# ── Monthly AI reports + email ───────────────────────────────────────────────
+
+
+def _report_settings() -> dict[str, Any]:
+    doc = app_settings.find_one({"_id": "monthly_report"}) or {}
+    return {
+        "email_enabled": bool(doc.get("email_enabled", True)),
+        "recipient_email": str(doc.get("recipient_email") or "").strip(),
+        "email_configured": email_configured(),
+    }
+
+
+class MonthlyReportSettingsPayload(BaseModel):
+    email_enabled: bool = True
+    recipient_email: str = Field(default="", max_length=200)
+
+
+class GenerateReportPayload(BaseModel):
+    year: int | None = Field(default=None, ge=2020, le=2100)
+    month: int | None = Field(default=None, ge=1, le=12)
+    force: bool = False
+    provider: str | None = None
+    send_email: bool = False
+
+
+@app.get("/reports/monthly")
+def reports_monthly_list(limit: int = Query(default=24, ge=1, le=60)):
+    return {"reports": list_reports(monthly_reports, limit=limit), "settings": _report_settings()}
+
+
+@app.get("/reports/monthly/{month}")
+def reports_monthly_get(month: str):
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    doc = get_report(monthly_reports, month)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return doc
+
+
+@app.get("/reports/monthly-settings")
+def get_monthly_report_settings():
+    return _report_settings()
+
+
+@app.put("/reports/monthly-settings")
+def put_monthly_report_settings(payload: MonthlyReportSettingsPayload):
+    email = payload.recipient_email.strip()
+    if email and "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    app_settings.update_one(
+        {"_id": "monthly_report"},
+        {
+            "$set": {
+                "email_enabled": payload.email_enabled,
+                "recipient_email": email,
+                "updated_at": datetime.now(timezone.utc),
+            },
+            "$setOnInsert": {"_id": "monthly_report"},
+        },
+        upsert=True,
+    )
+    return _report_settings()
+
+
+@app.post("/reports/monthly/generate")
+def reports_monthly_generate(payload: GenerateReportPayload):
+    try:
+        report = generate_monthly_report(
+            transactions,
+            monthly_reports,
+            year=payload.year,
+            month=payload.month,
+            portfolio=portfolio,
+            networth_snapshots=networth_snapshots,
+            liabilities=liabilities_col,
+            budgets=budgets_col,
+            sip_overrides=sip_overrides,
+            settings=app_settings,
+            news_cache=news_cache,
+            provider_name=payload.provider,
+            force=payload.force,
+        )
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}") from exc
+
+    email_result = None
+    if payload.send_email:
+        settings = _report_settings()
+        to = settings.get("recipient_email") or ""
+        if not settings.get("email_enabled"):
+            email_result = {"ok": False, "reason": "email disabled in settings"}
+        elif not to:
+            email_result = {"ok": False, "reason": "recipient_email not set"}
+        else:
+            try:
+                email_result = send_report_email(report, to_email=to)
+                monthly_reports.update_one(
+                    {"month": report["month"]},
+                    {"$set": {"emailed_at": datetime.now(timezone.utc)}},
+                )
+                report["emailed_at"] = email_result.get("sent_at")
+            except Exception as exc:  # noqa: BLE001
+                email_result = {"ok": False, "reason": str(exc)}
+
+    return {"report": report, "email": email_result}
+
+
+@app.post("/jobs/monthly-report")
+def job_monthly_report(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    force: bool = Query(default=False),
+    send_email: bool = Query(default=True),
+):
+    """Cron entrypoint — protected by API_KEY. Generates prior-month report + optional email."""
+    if not API_KEY or not x_api_key or not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+    try:
+        report = generate_monthly_report(
+            transactions,
+            monthly_reports,
+            portfolio=portfolio,
+            networth_snapshots=networth_snapshots,
+            liabilities=liabilities_col,
+            budgets=budgets_col,
+            sip_overrides=sip_overrides,
+            settings=app_settings,
+            news_cache=news_cache,
+            force=force,
+        )
+    except LLMError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    email_result = None
+    settings = _report_settings()
+    if send_email and settings.get("email_enabled"):
+        to = settings.get("recipient_email") or ""
+        if to and email_configured():
+            try:
+                email_result = send_report_email(report, to_email=to)
+                monthly_reports.update_one(
+                    {"month": report["month"]},
+                    {"$set": {"emailed_at": datetime.now(timezone.utc)}},
+                )
+            except Exception as exc:  # noqa: BLE001
+                email_result = {"ok": False, "reason": str(exc)}
+        else:
+            email_result = {
+                "ok": False,
+                "reason": "missing recipient_email or RESEND_API_KEY",
+            }
+
+    return {
+        "ok": True,
+        "month": report.get("month"),
+        "report_id": report.get("id"),
+        "email": email_result,
+    }
+
+
+@app.get("/reports/monthly/{month}/preview-html")
+def reports_monthly_preview_html(month: str):
+    """Debug/preview the email HTML body."""
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    doc = get_report(monthly_reports, month)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return HTMLResponse(render_report_html(doc))

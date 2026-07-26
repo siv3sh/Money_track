@@ -54,7 +54,9 @@ def _match_range(
     banks: list[str] | None = None,
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    match: dict[str, Any] = {}
+    # Wallet/FASTag debits are excluded from all money totals — the bank was
+    # already debited at recharge time, counting the wallet spend double-counts.
+    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}}
     if date_from or date_to:
         received: dict[str, Any] = {}
         if date_from:
@@ -597,18 +599,58 @@ def build_analytics(
     other_income_total = round(total_credit - salary_total, 2)
 
     by_category = group_breakdown("category")
+    by_card_type = group_breakdown("card_type")
     transfers_debit = next(
         (float(r["debit"]) for r in by_category if r.get("name") == "Transfers"), 0.0
     )
     investments_debit = next(
         (float(r["debit"]) for r in by_category if r.get("name") == "Investments"), 0.0
     )
+    credit_card_spend = next(
+        (float(r["debit"]) for r in by_card_type if r.get("name") == "credit_card"), 0.0
+    )
+    upi_spend = next(
+        (float(r["debit"]) for r in by_card_type if r.get("name") == "upi"), 0.0
+    )
+    debit_card_spend = next(
+        (float(r["debit"]) for r in by_card_type if r.get("name") == "debit_card"), 0.0
+    )
+    bank_account_spend = next(
+        (float(r["debit"]) for r in by_card_type if r.get("name") == "bank_account"), 0.0
+    )
+
+    # Credit-card purchases (merchants) — kept separate from bank/UPI lifestyle
+    cc_merchants: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"amount": 0.0, "count": 0.0}
+    )
+    cc_count = 0
+    for doc in transactions.find(
+        {**match, "type": "debit", "card_type": "credit_card"},
+        {"merchant": 1, "raw_text": 1, "amount": 1, "category": 1},
+    ):
+        label = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
+        amt = float(doc.get("amount") or 0)
+        cc_merchants[label]["amount"] += amt
+        cc_merchants[label]["count"] += 1
+        cc_count += 1
+    credit_card_merchants = [
+        {
+            "merchant": name,
+            "amount": round(vals["amount"], 2),
+            "count": int(vals["count"]),
+            "share": round(vals["amount"] / credit_card_spend * 100, 1) if credit_card_spend else 0.0,
+        }
+        for name, vals in sorted(cc_merchants.items(), key=lambda kv: -kv[1]["amount"])[:15]
+    ]
+
     lifestyle_rows = [
         r
         for r in by_category
         if r.get("name") not in NON_LIFESTYLE_CATEGORIES and float(r.get("debit") or 0) > 0
     ]
     lifestyle_spend = round(sum(float(r["debit"]) for r in lifestyle_rows), 2)
+    # Bank/UPI lifestyle = total lifestyle minus credit-card purchases (so card spend stays separate)
+    bank_upi_spend = round(max(lifestyle_spend - credit_card_spend, 0.0), 2)
     lifestyle_category_monthly = []
     for row in category_monthly_rows:
         filtered = {"month": row["month"]}
@@ -617,6 +659,32 @@ def build_analytics(
                 continue
             filtered[k] = v
         lifestyle_category_monthly.append(filtered)
+
+    # Wallet / FASTag spends — informational only, excluded from all totals above
+    wallet_match = {**match, "card_type": "wallet"}
+    wallet_total = 0.0
+    wallet_count = 0
+    wallet_recent: list[dict[str, Any]] = []
+    for doc in (
+        transactions.find(
+            {**wallet_match, "type": "debit"},
+            {"merchant": 1, "raw_text": 1, "amount": 1, "received_at": 1},
+        )
+        .sort("received_at", -1)
+        .limit(200)
+    ):
+        amt = float(doc.get("amount") or 0)
+        wallet_total += amt
+        wallet_count += 1
+        if len(wallet_recent) < 10:
+            ts = doc.get("received_at")
+            wallet_recent.append(
+                {
+                    "merchant": _clean_merchant_label(doc.get("merchant"), doc.get("raw_text")),
+                    "amount": amt,
+                    "received_at": ts.isoformat() if isinstance(ts, datetime) else None,
+                }
+            )
 
     # MoM change for KPIs
     mom = _mom_change(monthly_rows)
@@ -762,8 +830,14 @@ def build_analytics(
             "active_days": active_days,
             "avg_daily_debit": round(total_debit / active_days, 2) if active_days else 0.0,
             "lifestyle_spend": lifestyle_spend,
+            "bank_upi_spend": bank_upi_spend,
             "transfers_debit": round(transfers_debit, 2),
             "investments_debit": round(investments_debit, 2),
+            "credit_card_spend": round(credit_card_spend, 2),
+            "credit_card_count": cc_count,
+            "debit_card_spend": round(debit_card_spend, 2),
+            "upi_spend": round(upi_spend, 2),
+            "bank_account_spend": round(bank_account_spend, 2),
             "salary_total": salary_total,
             "salary_count": salary_count,
             "other_income_total": other_income_total,
@@ -794,7 +868,18 @@ def build_analytics(
         "weekday": weekday_rows,
         "day_of_month": day_of_month,
         "by_bank": group_breakdown("bank"),
-        "by_card_type": group_breakdown("card_type"),
+        "by_card_type": by_card_type,
+        "wallet": {
+            "total": round(wallet_total, 2),
+            "count": wallet_count,
+            "recent": wallet_recent,
+            "note": "Wallet/FASTag debits — excluded from spend totals (recharge already counted)",
+        },
+        "credit_card": {
+            "total": round(credit_card_spend, 2),
+            "count": cc_count,
+            "merchants": credit_card_merchants,
+        },
         "by_source": group_breakdown("source"),
         "by_category": by_category,
         "by_category_lifestyle": lifestyle_rows,

@@ -86,6 +86,30 @@ def build_finance_context(analytics: dict[str, Any]) -> dict[str, Any]:
             "onetime_amount": (analytics.get("recurring") or {}).get("onetime_amount"),
             "top": (analytics.get("recurring") or {}).get("merchants", [])[:5],
         },
+        "smart": _smart_context(analytics.get("smart")),
+    }
+
+
+def _smart_context(smart: Any) -> dict[str, Any] | None:
+    if not isinstance(smart, dict):
+        return None
+    sip = smart.get("sip") or {}
+    drift = smart.get("drift") or {}
+    creep = smart.get("subscription_creep") or {}
+    forecast = smart.get("spend_forecast") or {}
+    return {
+        "sip_flagged": [
+            {"name": s.get("name"), "status": s.get("status"), "message": s.get("message")}
+            for s in (sip.get("sips") or [])
+            if s.get("status") not in {"ok", "marked"}
+        ][:8],
+        "drift": drift.get("drifts") or [],
+        "subscription_issues": [
+            {"merchant": i.get("merchant"), "status": i.get("status"), "message": i.get("message")}
+            for i in (creep.get("items") or [])
+            if i.get("status") != "ok"
+        ][:8],
+        "spend_forecast": forecast or None,
     }
 
 
@@ -184,8 +208,9 @@ def categorize_batch(
     limit: int = 40,
     use_llm: bool = True,
     provider_name: str | None = None,
+    merchant_memory: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Categorize uncategorized / Other transactions. Rules first, LLM for leftovers."""
+    """Categorize uncategorized / Other transactions. Memory → rules → LLM leftovers."""
     query = {
         "$or": [
             {"category": {"$exists": False}},
@@ -199,12 +224,14 @@ def categorize_batch(
     updated = 0
     suggestions: list[dict[str, Any]] = []
     leftovers: list[dict[str, Any]] = []
+    memory_applied = 0
 
     for doc in docs:
         result = categorize(
             merchant=doc.get("merchant"),
             raw_text=doc.get("raw_text"),
             txn_type=doc.get("type"),
+            merchant_memory=merchant_memory,
         )
         if result["category"] != "Other":
             transactions_col.update_one(
@@ -218,6 +245,8 @@ def categorize_batch(
                 },
             )
             updated += 1
+            if result["source"] == "memory":
+                memory_applied += 1
             suggestions.append(
                 {
                     "id": str(doc["_id"]),
@@ -290,6 +319,7 @@ def categorize_batch(
                 "scanned": len(docs),
                 "updated": updated,
                 "llm_applied": 0,
+                "memory_applied": memory_applied,
                 "suggestions": suggestions,
                 "llm_error": str(exc),
             }
@@ -298,9 +328,81 @@ def categorize_batch(
         "scanned": len(docs),
         "updated": updated,
         "llm_applied": llm_applied,
+        "memory_applied": memory_applied,
         "suggestions": suggestions,
         "remaining_other": max(0, len(leftovers) - llm_applied),
     }
+
+
+def disambiguate_transfers(
+    candidates: list[dict[str, Any]],
+    *,
+    known_accounts: list[str] | None = None,
+    provider_name: str | None = None,
+) -> dict[str, Any]:
+    """LLM classifies ambiguous debits as self-transfer vs spend. Suggestions only."""
+    if not candidates:
+        return {"suggestions": [], "provider": None}
+
+    provider = get_provider(provider_name)
+    payload = {
+        "known_accounts_banks": known_accounts or [],
+        "candidates": [
+            {
+                "id": c["id"],
+                "amount": c["amount"],
+                "merchant": c["merchant"],
+                "bank": c.get("bank"),
+                "snippet": c.get("raw_snippet"),
+                "heuristic_reasons": c.get("reasons"),
+                "current_category": c.get("category"),
+            }
+            for c in candidates[:30]
+        ],
+    }
+    user = (
+        "Classify each candidate debit as either self_transfer (internal money movement "
+        "between the user's own accounts/cards/wallets) or actual_spend (lifestyle expense).\n"
+        "Ground your decision in the merchant name, narration snippet, round amounts, "
+        "and known_accounts_banks list — do not invent account names.\n"
+        "Return JSON: {\"items\":[{\"id\":\"...\",\"label\":\"self_transfer\"|\"actual_spend\","
+        "\"confidence\":0-1,\"suggested_category\":\"Transfers\"|\"Other\"|a spend category,"
+        "\"reason\":\"...\"}]}.\n"
+        f"Context:\n{_compact(payload)}"
+    )
+    raw = provider.complete(SYSTEM + " Respond with JSON only.", user, temperature=0.1)
+    parsed = extract_json(raw)
+    items = parsed.get("items") if isinstance(parsed, dict) else parsed
+    if not isinstance(items, list):
+        items = []
+
+    by_id = {c["id"]: c for c in candidates}
+    suggestions: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        tid = str(item.get("id") or "")
+        if tid not in by_id:
+            continue
+        label = str(item.get("label") or "").strip()
+        if label not in {"self_transfer", "actual_spend"}:
+            continue
+        suggested = str(item.get("suggested_category") or "").strip()
+        if label == "self_transfer":
+            suggested = "Transfers"
+        elif suggested not in CATEGORIES:
+            suggested = by_id[tid].get("category") or "Other"
+        suggestions.append(
+            {
+                **{k: by_id[tid].get(k) for k in ("id", "amount", "merchant", "bank", "received_at", "reasons")},
+                "label": label,
+                "confidence": float(item.get("confidence") or 0),
+                "suggested_category": suggested,
+                "reason": str(item.get("reason") or "")[:200],
+                "provider": provider.name,
+            }
+        )
+    return {"suggestions": suggestions, "provider": provider.name, "raw": raw}
 
 
 def _compact(obj: Any) -> str:

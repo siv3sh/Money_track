@@ -302,6 +302,7 @@ export function aiCategorize(opts: {
   scanned: number
   updated: number
   llm_applied: number
+  memory_applied?: number
   remaining_other: number
   suggestions: Array<{ id: string; category: string; source: string; merchant?: string }>
   llm_error?: string
@@ -312,6 +313,70 @@ export function aiCategorize(opts: {
   if (opts.provider) qs.set('provider', opts.provider)
   const q = qs.toString()
   return request(`/ai/categorize${q ? `?${q}` : ''}`, { method: 'POST' })
+}
+
+export interface TransferSuggestion {
+  id: string
+  amount: number
+  merchant: string
+  bank?: string
+  received_at?: string
+  label: 'self_transfer' | 'actual_spend' | string
+  confidence: number
+  suggested_category: string
+  reason: string
+  provider?: string
+}
+
+export function fetchTransferSuggestions(): Promise<{ suggestions: TransferSuggestion[] }> {
+  return request('/ai/transfer-suggestions')
+}
+
+export function runDisambiguateTransfers(opts: {
+  limit?: number
+  provider?: string
+} = {}): Promise<{
+  scanned: number
+  stored: number
+  provider: string | null
+  suggestions: TransferSuggestion[]
+}> {
+  const qs = new URLSearchParams()
+  if (opts.limit != null) qs.set('limit', String(opts.limit))
+  if (opts.provider) qs.set('provider', opts.provider)
+  const q = qs.toString()
+  return request(`/ai/disambiguate-transfers${q ? `?${q}` : ''}`, { method: 'POST' })
+}
+
+export function reviewTransferSuggestion(
+  txnId: string,
+  action: 'approve' | 'reject',
+): Promise<{ ok: boolean; action: string; category?: string }> {
+  return request(`/ai/transfer-suggestions/${txnId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  })
+}
+
+export function markSipInvested(instrument: string, month?: string): Promise<{ ok: boolean }> {
+  return request('/smart/sip/mark-invested', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instrument, month }),
+  })
+}
+
+export function saveDriftBaseline(threshold_pp = 10): Promise<{
+  targets: Record<string, number>
+  baseline: Record<string, number>
+  threshold_pp: number
+}> {
+  return request('/smart/drift-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threshold_pp, use_current_as_baseline: true }),
+  })
 }
 
 export interface LiabilityItem {
@@ -356,3 +421,122 @@ export function exportDataUrl(format: 'json' | 'csv' = 'json'): string {
 }
 
 export { API_BASE }
+
+export interface MonthlyReportSettings {
+  email_enabled: boolean
+  recipient_email: string
+  email_configured: boolean
+}
+
+export interface MonthlyReportListItem {
+  id: string
+  month: string
+  label?: string
+  generated_at?: string | null
+  emailed_at?: string | null
+  headline?: {
+    savings_rate_pct?: number | null
+    net_worth_estimate?: number
+    lifestyle_spend?: number
+    vs_prior_lifestyle_pct?: number | null
+  }
+  summary_preview?: string
+}
+
+export interface MonthlyReport {
+  id?: string
+  month: string
+  label: string
+  generated_at?: string | null
+  emailed_at?: string | null
+  stats: {
+    history_ok: boolean
+    current: Record<string, unknown> & {
+      lifestyle_spend: number
+      total_credit: number
+      total_debit: number
+      credit_card_spend?: number
+      savings_rate_pct?: number | null
+    }
+    previous: Record<string, unknown>
+    ytd: {
+      lifestyle_spend: number
+      total_credit: number
+      investments_debit: number
+      savings_rate_pct?: number | null
+    }
+    category_changes: Array<{
+      name: string
+      current: number
+      previous: number
+      change_inr: number
+      change_pct: number
+    }>
+    headline_metric: {
+      savings_rate_pct?: number | null
+      net_worth_estimate: number
+      lifestyle_spend: number
+      vs_prior_lifestyle_pct?: number | null
+    }
+    news: {
+      entities: string[]
+      headlines: Array<{ title: string; source?: string; url?: string }>
+      note?: string | null
+    }
+    tax_flags: Array<{ type: string; message: string }>
+    sip?: unknown
+    drift?: unknown
+  }
+  narrative: {
+    summary: string
+    going_well: string[]
+    suggestions: Array<{ text: string; inr_impact?: number | null }>
+    market_context: string
+    tax_notes: string[]
+    ytd_snapshot: string
+    provider?: string
+  }
+}
+
+export function fetchMonthlyReports(): Promise<{
+  reports: MonthlyReportListItem[]
+  settings: MonthlyReportSettings
+}> {
+  return request('/reports/monthly')
+}
+
+export function fetchMonthlyReport(month: string): Promise<MonthlyReport> {
+  return request(`/reports/monthly/${month}`)
+}
+
+export function fetchMonthlyReportSettings(): Promise<MonthlyReportSettings> {
+  return request('/reports/monthly-settings')
+}
+
+export function saveMonthlyReportSettings(payload: {
+  email_enabled: boolean
+  recipient_email: string
+}): Promise<MonthlyReportSettings> {
+  return request('/reports/monthly-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function generateMonthlyReport(opts: {
+  year?: number
+  month?: number
+  force?: boolean
+  provider?: string
+  send_email?: boolean
+} = {}): Promise<{
+  report: MonthlyReport
+  email: { ok?: boolean; reason?: string; sent_at?: string } | null
+}> {
+  return request('/reports/monthly/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  })
+}

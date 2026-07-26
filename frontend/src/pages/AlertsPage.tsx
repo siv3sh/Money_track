@@ -5,6 +5,7 @@ import { FilterBar } from '../components/FilterBar'
 import { BudgetEditor } from '../components/BudgetEditor'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
+import { markSipInvested } from '../api'
 import type { AnalyticsAlert } from '../types'
 
 function severityIcon(severity: AnalyticsAlert['severity']) {
@@ -28,7 +29,17 @@ export function AlertsPage() {
 
   const budgets = alerts.filter((a) => a.type === 'budget')
   const subscriptions = alerts.filter((a) => a.type === 'subscription')
-  const anomalies = alerts.filter((a) => a.type === 'anomaly' || a.type === 'trend' || a.type === 'insight')
+  const sipAlerts = alerts.filter((a) => a.type === 'sip')
+  const driftAlerts = alerts.filter((a) => a.type === 'drift')
+  const anomalies = alerts.filter(
+    (a) => a.type === 'anomaly' || a.type === 'trend' || a.type === 'insight',
+  )
+
+  const creepItems = data?.smart?.subscription_creep?.items || []
+  const flaggedCreep = creepItems.filter((i) => i.status !== 'ok')
+  const sipRows = (data?.smart?.sip?.sips || []).filter(
+    (s) => !['ok', 'marked'].includes(s.status),
+  )
 
   const actuals = useMemo(() => {
     const map: Record<string, number> = {}
@@ -40,7 +51,7 @@ export function AlertsPage() {
     <div className="fade-in">
       <PageHeader
         title="Alerts & Insights"
-        description="Budget progress, recurring subscriptions, and unusual spend signals."
+        description="Budgets, SIP misses, subscription price changes, and unusual spend signals."
         actions={
           <button type="button" className="btn" onClick={refresh}>
             <RefreshCw size={14} />
@@ -87,7 +98,11 @@ export function AlertsPage() {
                           className="h-full rounded-full transition-all"
                           style={{
                             width: `${Math.min(pct, 100)}%`,
-                            background: over ? 'var(--debit)' : pct >= 90 ? 'var(--warning)' : 'var(--accent)',
+                            background: over
+                              ? 'var(--debit)'
+                              : pct >= 90
+                                ? 'var(--warning)'
+                                : 'var(--accent)',
                           }}
                         />
                       </div>
@@ -99,32 +114,55 @@ export function AlertsPage() {
             )}
           </ChartCard>
 
-          <ChartCard title="Upcoming / recurring subscriptions" subtitle="Detected from repeat merchants">
-            {subscriptions.length === 0 ? (
+          <ChartCard title="Subscriptions & bill creep" subtitle="Price hikes and missing charges">
+            {flaggedCreep.length === 0 && subscriptions.length === 0 ? (
               <p className="py-10 text-center text-sm text-[var(--muted)]">
-                No recurring subscriptions detected
+                No subscription issues detected
               </p>
             ) : (
               <ul className="divide-y divide-[var(--border)]">
-                {subscriptions.map((s, i) => (
-                  <li key={`${s.merchant}-${i}`} className="flex items-start gap-3 py-3">
-                    <Bell size={14} className="mt-0.5 text-[var(--accent)]" />
+                {flaggedCreep.map((s) => (
+                  <li key={`${s.merchant}-${s.status}`} className="flex items-start gap-3 py-3">
+                    <Bell
+                      size={14}
+                      className={
+                        s.status === 'price_up'
+                          ? 'mt-0.5 text-[var(--warning)]'
+                          : 'mt-0.5 text-[var(--debit)]'
+                      }
+                    />
                     <div>
-                      <p className="text-sm font-medium">{s.title}</p>
+                      <p className="text-sm font-medium">{s.merchant}</p>
                       <p className="text-xs text-[var(--muted)]">{s.message}</p>
                     </div>
                   </li>
                 ))}
+                {subscriptions
+                  .filter(
+                    (s) =>
+                      !flaggedCreep.some(
+                        (c) => c.merchant.toLowerCase() === (s.merchant || '').toLowerCase(),
+                      ),
+                  )
+                  .map((s, i) => (
+                    <li key={`${s.merchant}-${i}`} className="flex items-start gap-3 py-3">
+                      <Bell size={14} className="mt-0.5 text-[var(--accent)]" />
+                      <div>
+                        <p className="text-sm font-medium">{s.title}</p>
+                        <p className="text-xs text-[var(--muted)]">{s.message}</p>
+                      </div>
+                    </li>
+                  ))}
               </ul>
             )}
           </ChartCard>
 
-          <ChartCard title="Anomalies & insights" subtitle="Unusual spends and trend flags">
-            {anomalies.length === 0 ? (
+          <ChartCard title="Anomalies & insights" subtitle="Unusual spends, SIP & drift flags">
+            {anomalies.length === 0 && sipAlerts.length === 0 && driftAlerts.length === 0 ? (
               <p className="py-10 text-center text-sm text-[var(--muted)]">All quiet for now</p>
             ) : (
               <ul className="space-y-3">
-                {anomalies.map((a, i) => (
+                {[...sipAlerts, ...driftAlerts, ...anomalies].map((a, i) => (
                   <li
                     key={`${a.title}-${i}`}
                     className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3"
@@ -141,6 +179,45 @@ export function AlertsPage() {
               </ul>
             )}
           </ChartCard>
+
+          {sipRows.length > 0 ? (
+            <ChartCard
+              title="SIP consistency"
+              subtitle="Missing or drifted investment schedules"
+              className="xl:col-span-3"
+            >
+              <ul className="space-y-3">
+                {sipRows.map((s) => (
+                  <li
+                    key={s.name}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3"
+                  >
+                    <div>
+                      <p className="text-sm font-medium">
+                        SIP: {s.name}
+                        {s.status === 'missing'
+                          ? ` — expected on day ${s.typical_day}, not yet detected this month`
+                          : ''}
+                      </p>
+                      <p className="text-xs text-[var(--muted)]">{s.message}</p>
+                    </div>
+                    {(s.status === 'missing' || s.status === 'stopped') && (
+                      <button
+                        type="button"
+                        className="btn text-xs"
+                        onClick={async () => {
+                          await markSipInvested(s.name, s.current_month)
+                          refresh()
+                        }}
+                      >
+                        Mark as invested
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </ChartCard>
+          ) : null}
         </div>
       )}
     </div>

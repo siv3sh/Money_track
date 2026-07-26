@@ -5,6 +5,7 @@ export function transactionsHref(opts: {
   source?: string
   bank?: string
   type?: 'debit' | 'credit' | ''
+  card_type?: string
   month?: string
   date_from?: string
   date_to?: string
@@ -15,6 +16,7 @@ export function transactionsHref(opts: {
   const source = opts.source || opts.bank
   if (source) p.set('source', source)
   if (opts.type) p.set('type', opts.type)
+  if (opts.card_type) p.set('card_type', opts.card_type)
   if (opts.month) p.set('month', opts.month)
   if (opts.date_from) p.set('date_from', opts.date_from)
   if (opts.date_to) p.set('date_to', opts.date_to)

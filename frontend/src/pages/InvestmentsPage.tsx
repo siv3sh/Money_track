@@ -89,6 +89,54 @@ export function InvestmentsPage() {
             </p>
           ) : null}
 
+          {data?.smart?.drift && (data.smart.drift.drifts.length > 0 || data.smart.drift.current.length > 0) ? (
+            <ChartCard
+              title="Allocation drift"
+              subtitle={`Current vs ${data.smart.drift.reference_source} (±${data.smart.drift.threshold_pp} pp)`}
+              className="mb-5"
+            >
+              {data.smart.drift.drifts.length === 0 ? (
+                <p className="text-sm text-[var(--credit)]">Allocation within your drift threshold</p>
+              ) : (
+                <ul className="mb-3 space-y-2">
+                  {data.smart.drift.drifts.map((d) => (
+                    <li
+                      key={d.asset_class}
+                      className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                    >
+                      <strong>{d.asset_class}</strong> allocation is {d.current_pct}%,{' '}
+                      {d.direction === 'up' ? 'up' : 'down'} from your typical {d.reference_pct}% —
+                      consider rebalancing
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="grid max-w-lg grid-cols-2 gap-4 text-xs">
+                <div>
+                  <p className="mb-1 text-[var(--muted)]">Current %</p>
+                  {data.smart.drift.current.map((c) => (
+                    <div key={c.name} className="flex justify-between py-0.5">
+                      <span className="truncate">{c.name}</span>
+                      <span className="tabular-nums">{c.pct}%</span>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <p className="mb-1 text-[var(--muted)]">Baseline %</p>
+                  {(data.smart.drift.reference.length
+                    ? data.smart.drift.reference
+                    : data.smart.drift.current
+                  ).map((c) => (
+                    <div key={c.name} className="flex justify-between py-0.5">
+                      <span className="truncate">{c.name}</span>
+                      <span className="tabular-nums">{c.pct}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </ChartCard>
+          ) : null}
+
           <div className="mb-5 grid gap-4 xl:grid-cols-2">
             <ChartCard title="Portfolio allocation" subtitle="By asset class (cost basis)">
               <DonutChart

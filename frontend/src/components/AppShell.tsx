@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import {
   Bell,
+  FileText,
   Landmark,
   LayoutDashboard,
   List,
@@ -21,13 +22,15 @@ import { FilterProvider } from '../context/FilterContext'
 const THEME_KEY = 'money-track-theme'
 
 const NAV = [
-  { to: '/', label: 'Net Worth', icon: LayoutDashboard, end: true },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/net-worth', label: 'Net Worth', icon: Wallet },
   { to: '/cash-flow', label: 'Cash Flow', icon: ArrowLeftRight },
   { to: '/spending', label: 'Spending', icon: PieChart },
   { to: '/transactions', label: 'Transactions', icon: List },
   { to: '/sources', label: 'Sources', icon: Landmark },
   { to: '/investments', label: 'Investments', icon: TrendingUp },
   { to: '/ai', label: 'AI Insights', icon: Sparkles },
+  { to: '/monthly-reports', label: 'Reports', icon: FileText },
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/import', label: 'Import', icon: Upload },
 ] as const

@@ -67,12 +67,135 @@ export function SpendingPage() {
         <>
           <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
-              label="Lifestyle spend"
-              value={formatINR(o.lifestyle_spend ?? o.total_debit)}
+              label="Bank / UPI spend"
+              value={formatINR(o.bank_upi_spend ?? Math.max((o.lifestyle_spend ?? 0) - (o.credit_card_spend ?? 0), 0))}
               tone="debit"
-              hint="Excludes transfers & investments"
+              hint="Lifestyle excluding credit cards"
               to={periodLink}
             />
+            <KpiCard
+              label="Credit card spend"
+              value={formatINR(o.credit_card_spend ?? 0)}
+              tone="debit"
+              hint={
+                o.credit_card_count
+                  ? `${o.credit_card_count} card purchase(s) · ICICI style SMS`
+                  : 'From “spent using … Card” SMS'
+              }
+              to={transactionsHref({
+                type: 'debit',
+                card_type: 'credit_card',
+                date_from: dateFrom || undefined,
+                date_to: dateTo || undefined,
+              })}
+            />
+            {data.smart?.spend_forecast ? (
+              <KpiCard
+                label="Month pace"
+                value={formatINR(data.smart.spend_forecast.projected_month)}
+                tone={
+                  data.smart.spend_forecast.status === 'over'
+                    ? 'debit'
+                    : data.smart.spend_forecast.status === 'under'
+                      ? 'credit'
+                      : 'neutral'
+                }
+                hint={
+                  data.smart.spend_forecast.usual_month
+                    ? `vs usual ${formatINR(data.smart.spend_forecast.usual_month)}${
+                        data.smart.spend_forecast.pace_pct != null
+                          ? ` (${data.smart.spend_forecast.pace_pct}%)`
+                          : ''
+                      }`
+                    : data.smart.spend_forecast.message
+                }
+              />
+            ) : null}
+            <KpiCard
+              label="All lifestyle"
+              value={formatINR(o.lifestyle_spend ?? o.total_debit)}
+              hint={`Bank/UPI ${formatINR(o.bank_upi_spend ?? 0)} + card ${formatINR(o.credit_card_spend ?? 0)}`}
+              to={periodLink}
+            />
+          </div>
+
+          {(data.credit_card?.merchants?.length || 0) > 0 ? (
+            <ChartCard
+              title="Credit card purchases"
+              subtitle={`${data.credit_card?.count || 0} txn(s) · total ${formatINR(data.credit_card?.total || 0)} — separate from bank/UPI`}
+              className="mb-5"
+            >
+              <div className="mb-3">
+                <HorizontalBars
+                  data={(data.credit_card?.merchants || []).map((m) => ({
+                    name: m.merchant.length > 28 ? `${m.merchant.slice(0, 26)}…` : m.merchant,
+                    value: m.amount,
+                  }))}
+                  color="var(--debit)"
+                  onBarClick={(name) => {
+                    const full =
+                      data.credit_card?.merchants.find(
+                        (m) => m.merchant === name || m.merchant.startsWith(name.replace(/…$/, '')),
+                      )?.merchant || name.replace(/…$/, '')
+                    navigate(
+                      transactionsHref({
+                        q: full,
+                        type: 'debit',
+                        card_type: 'credit_card',
+                        date_from: dateFrom || undefined,
+                        date_to: dateTo || undefined,
+                      }),
+                    )
+                  }}
+                />
+              </div>
+              <ul className="divide-y divide-[var(--border)] text-sm">
+                {(data.credit_card?.merchants || []).map((m) => (
+                  <li key={m.merchant} className="flex items-center justify-between py-2">
+                    <span>
+                      {m.merchant}
+                      <span className="ml-2 text-xs text-[var(--muted)]">×{m.count}</span>
+                    </span>
+                    <span className="tabular-nums text-[var(--debit)]">{formatINR(m.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </ChartCard>
+          ) : (
+            <div className="mb-5 rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface)] px-4 py-6 text-center text-sm text-[var(--muted)]">
+              No credit-card purchases in this range yet. ICICI “spent using … Card XX####” SMS are
+              tagged as credit card automatically.
+            </div>
+          )}
+
+          {(data.wallet?.count || 0) > 0 ? (
+            <ChartCard
+              title="Wallet / FASTag spends (not counted)"
+              subtitle={`${data.wallet?.count || 0} txn(s) · ${formatINR(data.wallet?.total || 0)} — money already left your bank at recharge time, so these are excluded from all totals`}
+              className="mb-5"
+            >
+              <ul className="divide-y divide-[var(--border)] text-sm">
+                {(data.wallet?.recent || []).map((w, i) => (
+                  <li key={`${w.merchant}-${i}`} className="flex items-center justify-between py-2">
+                    <span>
+                      {w.merchant}
+                      {w.received_at ? (
+                        <span className="ml-2 text-xs text-[var(--muted)]">
+                          {new Date(w.received_at).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                          })}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="tabular-nums text-[var(--muted)]">{formatINR(w.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            </ChartCard>
+          ) : null}
+
+          <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <KpiCard
               label="All bank debits"
               value={formatINR(o.total_debit)}

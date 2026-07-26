@@ -80,9 +80,28 @@ export function CashFlowPage() {
               })}
             />
             <KpiCard
-              label="Avg daily lifestyle"
-              value={formatINR(o.avg_daily_lifestyle ?? o.avg_daily_debit)}
-              hint={`Lifestyle ${formatINR(o.lifestyle_spend ?? 0)} · ${o.active_days} days`}
+              label="Credit card spend"
+              value={formatINR(o.credit_card_spend ?? 0)}
+              tone="debit"
+              hint={
+                o.credit_card_count
+                  ? `${o.credit_card_count} card purchase(s)`
+                  : 'Separate from bank/UPI'
+              }
+              to={transactionsHref({
+                type: 'debit',
+                card_type: 'credit_card',
+                date_from: dateFrom || undefined,
+                date_to: dateTo || undefined,
+              })}
+            />
+            <KpiCard
+              label="Bank / UPI lifestyle"
+              value={formatINR(
+                o.bank_upi_spend ??
+                  Math.max((o.lifestyle_spend ?? 0) - (o.credit_card_spend ?? 0), 0),
+              )}
+              hint={`Avg daily ${formatINR(o.avg_daily_lifestyle ?? o.avg_daily_debit)} · ${o.active_days} days`}
               to={transactionsHref({
                 type: 'debit',
                 date_from: dateFrom || undefined,

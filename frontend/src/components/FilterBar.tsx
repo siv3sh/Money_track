@@ -3,6 +3,8 @@ import type { DatePreset } from '../context/FilterContext'
 import { useFilters } from '../context/FilterContext'
 
 const PRESETS: Array<{ id: DatePreset; label: string }> = [
+  { id: 'day', label: 'Today' },
+  { id: 'week', label: 'This week' },
   { id: 'month', label: 'This month' },
   { id: 'last-month', label: 'Last month' },
   { id: 'quarter', label: '3 months' },

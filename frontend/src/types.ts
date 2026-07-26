@@ -1,5 +1,5 @@
 export type TxnType = 'debit' | 'credit'
-export type CardType = 'credit_card' | 'debit_card' | 'upi' | 'bank_account'
+export type CardType = 'credit_card' | 'debit_card' | 'upi' | 'bank_account' | 'wallet'
 
 export interface Transaction {
   _id: string
@@ -81,8 +81,14 @@ export interface AnalyticsPayload {
     sms_liquid_total: number
     liquid_source: 'sms' | 'indmoney' | string
     lifestyle_spend: number
+    bank_upi_spend?: number
     transfers_debit: number
     investments_debit: number
+    credit_card_spend?: number
+    credit_card_count?: number
+    debit_card_spend?: number
+    upi_spend?: number
+    bank_account_spend?: number
     avg_daily_lifestyle: number
     salary_total: number
     salary_count: number
@@ -125,6 +131,17 @@ export interface AnalyticsPayload {
     count: number
   }>
   merchants: MerchantRow[]
+  wallet?: {
+    total: number
+    count: number
+    recent: Array<{ merchant: string; amount: number; received_at: string | null }>
+    note: string
+  }
+  credit_card?: {
+    total: number
+    count: number
+    merchants: Array<{ merchant: string; amount: number; count: number; share: number }>
+  }
   recurring: {
     recurring_amount: number
     onetime_amount: number
@@ -190,6 +207,66 @@ export interface AnalyticsPayload {
     last_indmoney_at: string | null
   }
   alerts: AnalyticsAlert[]
+  smart?: {
+    sip: {
+      current_month: string
+      flagged: number
+      sips: Array<{
+        name: string
+        asset_class: string
+        typical_amount: number
+        typical_day: number
+        occurrences: number
+        months_active: number
+        last_month: string
+        this_month_amount: number
+        status: string
+        message: string
+        marked_invested: boolean
+        current_month: string
+      }>
+      alerts: AnalyticsAlert[]
+    }
+    drift: {
+      current: Array<{ name: string; value: number; pct: number }>
+      reference: Array<{ name: string; pct: number }>
+      reference_source: string
+      threshold_pp: number
+      drifts: Array<{
+        asset_class: string
+        current_pct: number
+        reference_pct: number
+        delta_pp: number
+        direction: string
+      }>
+      alerts: AnalyticsAlert[]
+    }
+    subscription_creep: {
+      items: Array<{
+        merchant: string
+        category?: string
+        count: number
+        typical_amount: number
+        last_amount: number
+        last_date: string
+        days_since: number
+        status: string
+        message: string
+      }>
+      alerts: AnalyticsAlert[]
+    }
+    spend_forecast: {
+      month: string
+      day_of_month: number
+      days_in_month: number
+      mtd_lifestyle: number
+      projected_month: number
+      usual_month: number
+      pace_pct: number | null
+      status: string
+      message: string
+    }
+  }
   filters: { banks: string[] }
 }
 
@@ -214,6 +291,7 @@ export const CARD_TYPE_LABELS: Record<CardType, string> = {
   debit_card: 'Debit card',
   upi: 'UPI',
   bank_account: 'Bank account',
+  wallet: 'Wallet / FASTag',
 }
 
 export const CHART_COLORS = [

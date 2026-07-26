@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from merchant_label import is_salary_source
+from merchant_label import clean_merchant_label, is_salary_source
 
 # Stable category labels used across API + UI
 CATEGORIES = [
@@ -123,6 +123,8 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("instamart", "Groceries"),
     ("grocery", "Groceries"),
     ("supermarket", "Groceries"),
+    ("hypermar", "Groceries"),
+    ("wefive", "Groceries"),
     ("dmart", "Groceries"),
     ("bigshopper", "Groceries"),
     # Shopping
@@ -133,6 +135,8 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("ajio", "Shopping"),
     ("nykaa", "Shopping"),
     ("snapdeal", "Shopping"),
+    ("soni", "Shopping"),
+    ("bags", "Shopping"),
     ("shop", "Shopping"),
     # Travel
     ("uber", "Travel & Transport"),
@@ -151,6 +155,9 @@ KEYWORD_RULES: list[tuple[str, str]] = [
     ("fuel", "Travel & Transport"),
     ("parking", "Travel & Transport"),
     ("metro", "Travel & Transport"),
+    ("fastag", "Travel & Transport"),
+    ("fast tag", "Travel & Transport"),
+    ("toll", "Travel & Transport"),
     # Bills
     ("electricity", "Bills & Utilities"),
     ("bescom", "Bills & Utilities"),
@@ -291,12 +298,19 @@ def categorize(
             return {"category": "Income", "mcc": mcc, "source": "mcc"}
         return {"category": MCC_MAP[mcc], "mcc": mcc, "source": "mcc"}
 
-    # Merchant memory (manual overrides remembered by merchant key)
+    # Merchant memory (manual overrides) — check raw + cleaned label
     if merchant_memory and merchant_s:
         key = merchant_s.lower()
         if key in merchant_memory:
             return {
                 "category": merchant_memory[key],
+                "mcc": mcc,
+                "source": "memory",
+            }
+        cleaned = clean_merchant_label(merchant_s, fallback=raw).lower()
+        if cleaned and cleaned in merchant_memory:
+            return {
+                "category": merchant_memory[cleaned],
                 "mcc": mcc,
                 "source": "memory",
             }

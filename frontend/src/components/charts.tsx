@@ -116,6 +116,55 @@ export function CashflowBars({
   )
 }
 
+export function DailyCashflowBars({
+  data,
+  onPointClick,
+  height = 280,
+}: {
+  data: Array<{ key: string; label: string; debit: number; credit: number; net?: number }>
+  onPointClick?: (key: string) => void
+  height?: number
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No activity in this period" />
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart
+        data={data}
+        barGap={3}
+        barCategoryGap="16%"
+        style={{ cursor: onPointClick ? 'pointer' : undefined }}
+        onClick={(state) => {
+          const payload = state as { activePayload?: Array<{ payload?: { key?: string } }> }
+          const key = payload.activePayload?.[0]?.payload?.key
+          if (key && onPointClick) onPointClick(key)
+        }}
+      >
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          dataKey="label"
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          interval="preserveStartEnd"
+          minTickGap={18}
+        />
+        <YAxis
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+          width={56}
+        />
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Bar dataKey="credit" name="Credited" fill={theme.credit} radius={[4, 4, 0, 0]} />
+        <Bar dataKey="debit" name="Debited" fill={theme.debit} radius={[4, 4, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
 export function NetTrendLine({
   data,
   dataKey = 'running_net',

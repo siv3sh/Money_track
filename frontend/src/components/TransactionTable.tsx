@@ -37,7 +37,7 @@ const selectClass =
 const inputClass =
   'rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm text-[var(--text)]'
 
-function TransactionRow({
+export function TransactionRow({
   txn,
   categories,
   onDelete,

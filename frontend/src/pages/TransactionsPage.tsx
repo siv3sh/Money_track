@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { Check, X } from 'lucide-react'
 import {
   deleteTransaction,
   fetchCategories,
   fetchTransactions,
+  fetchTransferSuggestions,
+  reviewTransferSuggestion,
   updateTransactionCategory,
+  type TransferSuggestion,
 } from '../api'
 import {
   TransactionTable,
   type Filters,
 } from '../components/TransactionTable'
-import { PageHeader } from '../components/ui'
+import { ChartCard, PageHeader } from '../components/ui'
 import { useFilters } from '../context/FilterContext'
+import { formatINR } from '../lib/format'
 import type { Transaction } from '../types'
 
 const PAGE_SIZE = 40
@@ -70,6 +75,13 @@ export function TransactionsPage() {
   const [hasMore, setHasMore] = useState(false)
   const [categories, setCategories] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [transferQueue, setTransferQueue] = useState<TransferSuggestion[]>([])
+
+  useEffect(() => {
+    void fetchTransferSuggestions()
+      .then((r) => setTransferQueue(r.suggestions))
+      .catch(() => setTransferQueue([]))
+  }, [])
 
   // Sync URL → state when deep-linked
   useEffect(() => {
@@ -174,6 +186,55 @@ export function TransactionsPage() {
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
           {error}
         </div>
+      ) : null}
+
+      {transferQueue.length > 0 ? (
+        <ChartCard
+          title="Possible self-transfers"
+          subtitle="Approve to exclude from lifestyle spend · manage more on AI Insights"
+          className="mb-4"
+        >
+          <ul className="divide-y divide-[var(--border)]">
+            {transferQueue.slice(0, 5).map((s) => (
+              <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+                <div className="text-sm">
+                  <span className="font-medium">{s.merchant}</span>
+                  <span className="text-[var(--muted)]"> · {formatINR(s.amount)}</span>
+                  <p className="text-xs text-[var(--muted)]">
+                    {s.label === 'self_transfer' ? 'Likely self-transfer' : 'Likely spend'}
+                    {s.reason ? ` — ${s.reason}` : ''}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="btn text-xs"
+                    onClick={async () => {
+                      await reviewTransferSuggestion(s.id, 'approve')
+                      setTransferQueue((prev) => prev.filter((x) => x.id !== s.id))
+                      await load()
+                      refreshAnalytics()
+                    }}
+                  >
+                    <Check size={12} />
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    className="btn text-xs"
+                    onClick={async () => {
+                      await reviewTransferSuggestion(s.id, 'reject')
+                      setTransferQueue((prev) => prev.filter((x) => x.id !== s.id))
+                    }}
+                  >
+                    <X size={12} />
+                    Reject
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </ChartCard>
       ) : null}
 
       <TransactionTable

@@ -19,6 +19,17 @@ BALANCE_RE = re.compile(
     r"(?:avl\.?\s?bal|available\s?bal(?:ance)?|bal(?:ance)?)\D{0,12}(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
     re.IGNORECASE,
 )
+# Credit-card available limit (ICICI / HDFC style)
+LIMIT_RE = re.compile(
+    r"(?:avl\.?\s?limit|available\s?limit|credit\s?limit)\D{0,12}(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
+    re.IGNORECASE,
+)
+# "… Card XX4001 on 25-Jul-26 on WEFIVE HYPERMAR"
+MERCHANT_ON_DATE_ON_RE = re.compile(
+    r"\bon\s+\d{1,2}[-/][A-Za-z]{3}[-/]\d{2,4}\s+on\s+"
+    r"([A-Za-z0-9][A-Za-z0-9&_.\-@ ]{1,40}?)(?=\s*(?:\.|Avl|Available|If\s+not|,|$))",
+    re.IGNORECASE,
+)
 
 MERCHANT_AT_RE = re.compile(
     r"(?:at|towards|paid\s+to|trf\s+to|transfer\s+to)\s+"
@@ -59,6 +70,31 @@ CARD_TYPE_KEYWORDS = [
     ("credit card", "credit_card"),
     ("debit card", "debit_card"),
     ("upi", "upi"),
+]
+
+# Phrases that strongly indicate a credit-card spend even without the words "credit card"
+CREDIT_CARD_HINTS = [
+    "avl limit",
+    "available limit",
+    "credit limit",
+    "spent using",
+    "spent on your",
+    "spent on ",
+]
+
+# Prepaid wallet / FASTag debits — money already left the bank at recharge time,
+# so these must NOT count as fresh bank spend.
+WALLET_HINTS = [
+    "toll debited",
+    "toll bal",
+    "fastag",
+    "fast tag",
+    "wallet bal",
+    "from your wallet",
+    "wallet balance",
+    "paytm wallet",
+    "amazon pay balance",
+    "vrn-",
 ]
 
 BANK_SENDER_MAP = {
@@ -133,9 +169,22 @@ def _is_spam_or_non_txn(text_lower: str) -> bool:
 
 
 def _detect_card_type(text_lower: str) -> Optional[str]:
+    # Wallet/FASTag debits first — recharge was already counted as bank spend
+    if any(h in text_lower for h in WALLET_HINTS):
+        # "fastag recharge" itself is a bank debit, not a wallet spend
+        if "recharge" not in text_lower or "toll" in text_lower:
+            return "wallet"
     for keyword, label in CARD_TYPE_KEYWORDS:
         if keyword in text_lower:
             return label
+    # ICICI / similar: "spent using … Bank Card XX####" + Avl Limit
+    if any(h in text_lower for h in CREDIT_CARD_HINTS) and (
+        "card" in text_lower or "limit" in text_lower
+    ):
+        if "debit card" not in text_lower:
+            return "credit_card"
+    if "bank card" in text_lower and ("spent" in text_lower or "purchase" in text_lower):
+        return "credit_card"
     if "@" in text_lower or "upi" in text_lower:
         return "upi"
     return "bank_account"
@@ -172,7 +221,12 @@ def _detect_type(text_lower: str) -> Optional[str]:
 
 def _parse_amount(body: str) -> Optional[float]:
     bal_match = BALANCE_RE.search(body)
-    bal_start = bal_match.start() if bal_match else len(body)
+    limit_match = LIMIT_RE.search(body)
+    bal_start = len(body)
+    if bal_match:
+        bal_start = min(bal_start, bal_match.start())
+    if limit_match:
+        bal_start = min(bal_start, limit_match.start())
 
     for match in AMOUNT_RE.finditer(body):
         if match.start() >= bal_start:
@@ -202,6 +256,13 @@ def _extract_merchant(body: str, txn_type: str) -> Optional[str]:
     subject = MERCHANT_SUBJECT_RE.search(body)
     if txn_type == "debit" and subject:
         cleaned = _clean_merchant(subject.group(1))
+        if cleaned:
+            return cleaned
+
+    # Credit-card style: "on 25-Jul-26 on WEFIVE HYPERMAR"
+    dated = MERCHANT_ON_DATE_ON_RE.search(body)
+    if dated:
+        cleaned = _clean_merchant(dated.group(1))
         if cleaned:
             return cleaned
 
@@ -251,6 +312,13 @@ def parse_sms(sender: str, body: str) -> Optional[Transaction]:
 
     account_match = ACCOUNT_RE.search(text)
     balance_match = BALANCE_RE.search(text)
+    limit_match = LIMIT_RE.search(text)
+    # Prefer account balance; fall back to available credit limit for cards
+    bal_value = None
+    if balance_match:
+        bal_value = _to_float(balance_match.group(1))
+    elif limit_match:
+        bal_value = _to_float(limit_match.group(1))
 
     return Transaction(
         type=txn_type,
@@ -258,7 +326,7 @@ def parse_sms(sender: str, body: str) -> Optional[Transaction]:
         account_last4=account_match.group(1) if account_match else None,
         card_type=_detect_card_type(text_lower),
         merchant=_extract_merchant(text, txn_type),
-        balance=_to_float(balance_match.group(1)) if balance_match else None,
+        balance=bal_value,
         bank=_detect_bank(sender),
         raw_text=text,
     )
@@ -270,6 +338,11 @@ if __name__ == "__main__":
         ("SBIINB", "Rs 2000 credited to a/c XX5678 from RAVI KUMAR on 23-Jul-26"),
         ("ICICIB", "Rs.150 debited via UPI to rahul@oksbi on 23-07-26. Ref 987654321"),
         ("AXISBK", "Rs.3,499 spent on your Axis Bank Credit Card XX9876 at FLIPKART on 23-07-26"),
+        (
+            "ICICIB",
+            "INR 2,411.00 spent using ICICI Bank Card XX4001 on 25-Jul-26 on WEFIVE HYPERMAR. "
+            "Avl Limit: INR 1,31,260.41. If not you, call 1800 2662/SMS BLOCK 4001 to 9215676766",
+        ),
         ("VM-HDFCBK", "Your OTP is 123456. Do not share with anyone."),
         ("HDFCBK", "Pre-approved loan offer waiting. Click here now!"),
         ("JD-SBIINB", "Dear SBI User, your A/c X9876-debited by Rs.250.00 on 24Jul26 to SWIGGY. Avl Bal Rs 1000"),

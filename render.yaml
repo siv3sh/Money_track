@@ -14,3 +14,36 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: "3.12.0"
+      - key: LLM_PROVIDER
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MARKETAUX_API_KEY
+        sync: false
+      - key: ALPHAVANTAGE_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+
+  # Runs on the 1st of each month (UTC) — generates prior-month report + email
+  - type: cron
+    name: siv3sh-money-track-monthly-report
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    schedule: "0 6 1 * *"
+    dockerCommand: >-
+      python -c "import os,urllib.request; req=urllib.request.Request(os.environ['REPORT_JOB_URL'], method='POST', headers={'X-API-Key': os.environ['API_KEY']}); urllib.request.urlopen(req, timeout=300).read()"
+    envVars:
+      - key: API_KEY
+        sync: false
+      - key: REPORT_JOB_URL
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.0"
