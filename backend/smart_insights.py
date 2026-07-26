@@ -18,6 +18,13 @@ from analytics import NON_LIFESTYLE_CATEGORIES, _instrument_for, _clean_merchant
 from merchant_label import clean_merchant_label
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """Mongo returns naive UTC datetimes; make them aware so math with now() works."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _month_key(dt: datetime) -> str:
     return dt.strftime("%Y-%m")
 
@@ -63,6 +70,7 @@ def build_sip_tracker(
         ts = doc.get("received_at")
         if not isinstance(ts, datetime):
             continue
+        ts = _as_utc(ts)
         name, asset_class = _instrument_for(doc.get("merchant"), doc.get("raw_text"))
         by_inst[name].append(
             {
@@ -304,6 +312,7 @@ def build_subscription_creep(
         ts = doc.get("received_at")
         if not isinstance(ts, datetime):
             continue
+        ts = _as_utc(ts)
         name = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
         if name in {"Unknown", "Bank transfer", "UPI transfer"}:
             continue
