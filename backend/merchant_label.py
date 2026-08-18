@@ -61,6 +61,10 @@ _BANK_NOISE = re.compile(
 
 # (substring/regex needle in lowercase blob, display name) — first match wins
 _BRAND_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"idea\s*elan"), "IDEA ELAN India (Salary)"),
+    (re.compile(r"geetha"), "Geetha (Family)"),
+    (re.compile(r"greeshma"), "Greeshma (Family)"),
+    (re.compile(r"pvbalan|\bbalan\d"), "Balan (Family)"),
     (re.compile(r"christ\s*universi"), "Christ University"),
     (re.compile(r"digital\s*gold|neosie"), "Digital Gold"),
     (re.compile(r"zerodha"), "Zerodha"),
@@ -80,7 +84,10 @@ _BRAND_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"phonepe"), "PhonePe"),
     (re.compile(r"google\s*pay|gpay|goog"), "Google Pay"),
     (re.compile(r"indian\s*clearing|clearingcorp|iccl"), "Indian Clearing (MF)"),
-    (re.compile(r"oxygen"), "Oxygen"),
+    (re.compile(r"oxygen"), "Oxygen Digital"),
+    (re.compile(r"redbus"), "Redbus"),
+    (re.compile(r"nesto"), "Nesto Hypermarket"),
+    (re.compile(r"paramount"), "Paramount Restaurant"),
     (re.compile(r"makemytrip|mmt"), "MakeMyTrip"),
     (re.compile(r"idea\s*elan"), "Idea Elan"),
     (re.compile(r"vodafone|\bvi\b|idea\s*cellular"), "Vi (Vodafone Idea)"),
@@ -93,6 +100,13 @@ _SALARY_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"(?i)idea\s*elan"),
     re.compile(r"(?i)\bsalary\b"),
     re.compile(r"(?i)\bpayroll\b"),
+]
+
+# Family UPI / people — transfers both ways, not income or lifestyle
+_FAMILY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)geetha"), "Geetha"),
+    (re.compile(r"(?i)greeshma"), "Greeshma"),
+    (re.compile(r"(?i)pvbalan|\bbalan\d"), "Balan"),
 ]
 
 _LOCAL_BRANDS: list[tuple[str, str]] = [
@@ -150,6 +164,21 @@ def is_salary_source(*texts: str | None) -> bool:
     if not blob:
         return False
     return any(pattern.search(blob) for pattern in _SALARY_PATTERNS)
+
+
+def family_person(*texts: str | None) -> Optional[str]:
+    """Return family display name if narration matches a known relative."""
+    blob = " ".join(t for t in texts if t)
+    if not blob:
+        return None
+    for pattern, name in _FAMILY_PATTERNS:
+        if pattern.search(blob):
+            return name
+    return None
+
+
+def is_family_transfer(*texts: str | None) -> bool:
+    return family_person(*texts) is not None
 
 
 _WEAK_LABELS = frozenset({"Bank transfer", "Unknown", "UPI transfer", "UPI merchant"})

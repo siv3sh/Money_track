@@ -9,11 +9,46 @@ from categorizer import CATEGORIES, categorize
 from llm import LLMError, extract_json, get_provider
 
 SYSTEM = (
-    "You are a careful personal-finance assistant for a single user in India (INR). "
-    "Use only the structured context provided. Do not invent numbers. "
+    "Task: careful personal-finance help for one user in India (INR). "
     "If data is missing, say so. Be concise and practical. "
     "Never ask for account numbers, OTP, or passwords."
 )
+
+
+def _persona_system(
+    base: str,
+    *,
+    settings: Any = None,
+    learned_facts: Any = None,
+    analytics: dict[str, Any] | None = None,
+    goals_col: Any = None,
+    planning_advisor: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Return (system_prompt, severity_dict). Severity is deterministic."""
+    try:
+        from advisor_persona import build_persona_system_prompt, severity_from_analytics_bundle
+
+        severity = severity_from_analytics_bundle(
+            analytics,
+            settings=settings,
+            learned_facts=learned_facts,
+            planning_advisor=planning_advisor,
+            goals_col=goals_col,
+        )
+        prompt = build_persona_system_prompt(
+            base,
+            settings=settings,
+            learned_facts=learned_facts,
+            severity=severity,
+        )
+        return prompt, severity
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: advisor persona fallback: {exc}")
+        return base, {
+            "level": "informational",
+            "reasons": ["persona_unavailable"],
+            "context_line": "tone: informational",
+        }
 
 
 def build_finance_context(analytics: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +122,7 @@ def build_finance_context(analytics: dict[str, Any]) -> dict[str, Any]:
             "top": (analytics.get("recurring") or {}).get("merchants", [])[:5],
         },
         "smart": _smart_context(analytics.get("smart")),
+        "learned_about_you": analytics.get("learned_about_you") or [],
     }
 
 
@@ -118,21 +154,33 @@ def ask(
     analytics: dict[str, Any],
     *,
     provider_name: str | None = None,
+    settings: Any = None,
+    learned_facts: Any = None,
+    goals_col: Any = None,
 ) -> dict[str, Any]:
     provider = get_provider(provider_name)
     context = build_finance_context(analytics)
+    system, severity = _persona_system(
+        SYSTEM,
+        settings=settings,
+        learned_facts=learned_facts,
+        analytics=analytics,
+        goals_col=goals_col,
+    )
     user = (
         "Structured finance context (JSON):\n"
         f"{_compact(context)}\n\n"
         f"Question: {question.strip()}\n\n"
-        "Answer in clear prose with INR figures from the context. "
+        "Answer as their trained Money Advisor — use their name, soft spots, and goals "
+        "from the system prompt when relevant. Cite INR figures from the context only. "
         "If the question cannot be answered from context, say what is missing."
     )
-    answer = provider.complete(SYSTEM, user, temperature=0.25)
+    answer = provider.complete(system, user, temperature=0.25)
     return {
         "answer": answer,
         "provider": provider.name,
         "context_keys": list(context.keys()),
+        "advisor_severity": severity,
     }
 
 
@@ -140,27 +188,49 @@ def monthly_summary(
     analytics: dict[str, Any],
     *,
     provider_name: str | None = None,
+    settings: Any = None,
+    learned_facts: Any = None,
+    goals_col: Any = None,
 ) -> dict[str, Any]:
     provider = get_provider(provider_name)
     context = build_finance_context(analytics)
+    system, severity = _persona_system(
+        SYSTEM,
+        settings=settings,
+        learned_facts=learned_facts,
+        analytics=analytics,
+        goals_col=goals_col,
+    )
     user = (
         "Write a monthly personal finance briefing from this JSON context.\n"
         f"{_compact(context)}\n\n"
+        "Speak as their trained Money Advisor (same voice as the Advisor page) — "
+        "use their name, soft spots, and stated goals when relevant. "
         "Cover: (1) income vs spend and savings rate, (2) biggest category shifts, "
         "(3) investment performance snapshot, (4) 2–3 actionable tips. "
         "Use short paragraphs or bullets. No markdown tables."
     )
-    text = provider.complete(SYSTEM, user, temperature=0.3)
-    return {"summary": text, "provider": provider.name}
+    text = provider.complete(system, user, temperature=0.3)
+    return {"summary": text, "provider": provider.name, "advisor_severity": severity}
 
 
 def explain_anomalies(
     analytics: dict[str, Any],
     *,
     provider_name: str | None = None,
+    settings: Any = None,
+    learned_facts: Any = None,
+    goals_col: Any = None,
 ) -> dict[str, Any]:
     provider = get_provider(provider_name)
     alerts = analytics.get("alerts") or []
+    system, severity = _persona_system(
+        SYSTEM + " Respond with JSON only.",
+        settings=settings,
+        learned_facts=learned_facts,
+        analytics=analytics,
+        goals_col=goals_col,
+    )
     context = {
         "alerts": [
             {
@@ -179,19 +249,21 @@ def explain_anomalies(
             "debit": (analytics.get("overview") or {}).get("total_debit"),
             "credit": (analytics.get("overview") or {}).get("total_credit"),
         },
+        "advisor_severity": severity,
     }
     if not alerts:
         return {
             "insights": ["No unusual activity flagged in the current period."],
             "provider": provider.name,
             "raw": "",
+            "advisor_severity": severity,
         }
     user = (
         "Explain these finance alerts in plain language for the user. "
         "Return JSON: {\"insights\": [\"...\"]} with 3–6 short sentences.\n"
         f"{_compact(context)}"
     )
-    raw = provider.complete(SYSTEM + " Respond with JSON only.", user, temperature=0.2)
+    raw = provider.complete(system, user, temperature=0.2)
     try:
         parsed = extract_json(raw)
         insights = parsed.get("insights") if isinstance(parsed, dict) else parsed
@@ -199,7 +271,12 @@ def explain_anomalies(
             insights = [str(raw)]
     except LLMError:
         insights = [raw]
-    return {"insights": insights, "provider": provider.name, "raw": raw}
+    return {
+        "insights": insights,
+        "provider": provider.name,
+        "raw": raw,
+        "advisor_severity": severity,
+    }
 
 
 def categorize_batch(
@@ -209,6 +286,8 @@ def categorize_batch(
     use_llm: bool = True,
     provider_name: str | None = None,
     merchant_memory: dict[str, str] | None = None,
+    settings: Any = None,
+    learned_facts: Any = None,
 ) -> dict[str, Any]:
     """Categorize uncategorized / Other transactions. Memory → rules → LLM leftovers."""
     query = {
@@ -277,8 +356,21 @@ def categorize_batch(
                 "Return JSON array: [{\"id\":\"...\",\"category\":\"...\",\"reason\":\"...\"}].\n"
                 f"Transactions:\n{_compact(batch)}"
             )
+            cat_base = SYSTEM + " Respond with JSON only. Reasons stay short and factual."
+            try:
+                from advisor_persona import build_persona_system_prompt, compute_advisor_severity
+
+                sev = compute_advisor_severity(force="informational")
+                system = build_persona_system_prompt(
+                    cat_base,
+                    settings=settings,
+                    learned_facts=learned_facts,
+                    severity=sev,
+                )
+            except Exception:
+                system = cat_base
             raw = provider.complete(
-                SYSTEM + " Respond with JSON only.",
+                system,
                 user,
                 temperature=0.1,
             )
@@ -339,6 +431,8 @@ def disambiguate_transfers(
     *,
     known_accounts: list[str] | None = None,
     provider_name: str | None = None,
+    settings: Any = None,
+    learned_facts: Any = None,
 ) -> dict[str, Any]:
     """LLM classifies ambiguous debits as self-transfer vs spend. Suggestions only."""
     if not candidates:
@@ -365,12 +459,27 @@ def disambiguate_transfers(
         "between the user's own accounts/cards/wallets) or actual_spend (lifestyle expense).\n"
         "Ground your decision in the merchant name, narration snippet, round amounts, "
         "and known_accounts_banks list — do not invent account names.\n"
+        "If learned preferences mark a merchant as planned/family, bias toward actual_spend "
+        "with the category they already use — do not invent new stories.\n"
         "Return JSON: {\"items\":[{\"id\":\"...\",\"label\":\"self_transfer\"|\"actual_spend\","
         "\"confidence\":0-1,\"suggested_category\":\"Transfers\"|\"Other\"|a spend category,"
         "\"reason\":\"...\"}]}.\n"
         f"Context:\n{_compact(payload)}"
     )
-    raw = provider.complete(SYSTEM + " Respond with JSON only.", user, temperature=0.1)
+    cat_base = SYSTEM + " Respond with JSON only. Reasons stay short and in advisor voice."
+    try:
+        from advisor_persona import build_persona_system_prompt, compute_advisor_severity
+
+        sev = compute_advisor_severity(force="informational")
+        system = build_persona_system_prompt(
+            cat_base,
+            settings=settings,
+            learned_facts=learned_facts,
+            severity=sev,
+        )
+    except Exception:
+        system = cat_base
+    raw = provider.complete(system, user, temperature=0.1)
     parsed = extract_json(raw)
     items = parsed.get("items") if isinstance(parsed, dict) else parsed
     if not isinstance(items, list):

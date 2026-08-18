@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from parser import Transaction, _detect_bank, parse_sms
+from parser import ALLOWED_BANKS, Transaction, _detect_bank, _detect_card_type, parse_sms
 
 DATE_FORMATS = (
     "%Y-%m-%d",
@@ -47,9 +47,132 @@ HEADER_ALIASES = {
     "balance": {"balance", "closing balance", "available balance", "bal"},
 }
 
+INVESTMENT_HINTS = (
+    "zerodha",
+    "groww",
+    "upstox",
+    "kuvera",
+    "indmoney",
+    "mutual fund",
+    "mutualfund",
+    "sip ",
+    " sip",
+    "nse",
+    "bse",
+    "cdsl",
+    "nsdl",
+    "clearing corporation",
+    "indian clearing",
+    "stocksip",
+    "digital gold",
+    "nps ",
+    "ppf",
+    "broker",
+    "demat",
+)
+
+CREDIT_CARD_HINTS = (
+    "credit card",
+    "cc xx",
+    "card xx",
+    "avl limit",
+    "available limit",
+    "spent using",
+    "spent on your",
+    "icici bank card",
+    "purchase on card",
+)
+
 
 def _norm_header(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
+def detect_statement_profile(
+    sample: str,
+    filename: str = "",
+) -> dict[str, Any]:
+    """
+    Infer bank + product (savings vs ICICI credit card) from filename / header text.
+    Only Federal Bank and ICICI Bank are allowed.
+    """
+    blob = f"{filename}\n{sample[:12000]}".lower()
+    name = (filename or "").lower()
+
+    scores = {"Federal Bank": 0, "ICICI Bank": 0}
+    if "federal" in blob or "fedbnk" in blob or "fedbk" in blob or "fed-" in name:
+        scores["Federal Bank"] += 5
+    if "icici" in blob or "icicib" in blob:
+        scores["ICICI Bank"] += 5
+
+    is_credit_card = any(h in blob for h in CREDIT_CARD_HINTS) or (
+        "credit" in name and "card" in name
+    ) or bool(re.search(r"\bcc\b|\bvisa\b|\bmastercard\b|\brupay\b", blob))
+
+    if is_credit_card:
+        # Credit-card statements in this household are ICICI
+        scores["ICICI Bank"] += 4
+
+    # Federal savings account cues
+    if any(k in blob for k in ("savings a/c", "savings account", "a/c no", "account statement")):
+        if scores["Federal Bank"] >= scores["ICICI Bank"]:
+            scores["Federal Bank"] += 1
+
+    bank = max(scores, key=scores.get)
+    if scores[bank] <= 0:
+        # Default: Federal is the primary bank account
+        bank = "Federal Bank"
+        confidence = "low"
+    elif scores[bank] >= 5:
+        confidence = "high"
+    else:
+        confidence = "medium"
+
+    if bank not in ALLOWED_BANKS:
+        bank = "Federal Bank"
+
+    product = "credit_card" if (is_credit_card and bank == "ICICI Bank") else "bank_account"
+    return {
+        "bank": bank,
+        "product": product,
+        "default_card_type": "credit_card" if product == "credit_card" else "bank_account",
+        "confidence": confidence,
+        "is_credit_card_statement": product == "credit_card",
+    }
+
+
+def enrich_imported_txn(txn: dict[str, Any], *, default_card_type: str = "bank_account") -> dict[str, Any]:
+    """Improve card_type / bank tagging from narration after CSV parse."""
+    raw = f"{txn.get('merchant') or ''} {txn.get('raw_text') or ''}".lower()
+    bank = txn.get("bank")
+    if not bank or bank not in ALLOWED_BANKS:
+        detected = _detect_bank(str(txn.get("sender") or ""), raw)
+        if detected in ALLOWED_BANKS:
+            txn["bank"] = detected
+
+    # Card type: prefer statement product, then SMS-style heuristics on narration
+    card = txn.get("card_type") or default_card_type
+    if default_card_type == "credit_card":
+        card = "credit_card"
+    else:
+        inferred = _detect_card_type(raw)
+        if inferred and inferred != "bank_account":
+            card = inferred
+        elif any(h in raw for h in CREDIT_CARD_HINTS):
+            card = "credit_card"
+    txn["card_type"] = card
+
+    # Soft investment flag for categorizer (also helps if keyword rules miss)
+    if any(h in raw for h in INVESTMENT_HINTS):
+        txn["_investment_hint"] = True
+
+    # ICICI credit card last4 from narration when possible
+    if card == "credit_card" and not txn.get("account_last4"):
+        m = re.search(r"(?:card|xx|x{2,})\s*(\d{4})\b", raw, re.I)
+        if m:
+            txn["account_last4"] = m.group(1)
+
+    return txn
 
 
 def _map_headers(fieldnames: list[str]) -> dict[str, str]:
@@ -218,7 +341,11 @@ def parse_statement_csv(
             balance = _parse_money(row.get(mapped["balance"], ""))
 
         # Prefer SMS-style parse on narration when it looks like an SMS
-        sms_txn = parse_sms(bank_name or "STATEMENT", desc)
+        sms_txn = parse_sms(bank_name or "STATEMENT", desc) if bank_name else None
+        if sms_txn is None and bank_name:
+            # Retry with bank code-like sender for ICICI/Federal SMS embedded in statements
+            sender_hint = "ICICIB" if "icici" in bank_name.lower() else "FEDBNK"
+            sms_txn = parse_sms(sender_hint, desc)
         if sms_txn is not None:
             txn = sms_txn
             if bank_name:
@@ -226,6 +353,8 @@ def parse_statement_csv(
             txn["raw_text"] = desc
             if balance is not None:
                 txn["balance"] = balance
+            if default_card_type == "credit_card":
+                txn["card_type"] = "credit_card"
         else:
             merchant = desc[:60]
             # Strip leading ref codes
@@ -237,10 +366,11 @@ def parse_statement_csv(
                 card_type=default_card_type,
                 merchant=merchant.strip() or None,
                 balance=balance,
-                bank=bank_name or _detect_bank(bank_name or ""),
+                bank=bank_name,
                 raw_text=desc,
             )
 
+        enrich_imported_txn(txn, default_card_type=default_card_type)
         results.append((txn, received_at))
 
     return results
@@ -369,42 +499,44 @@ def parse_statement_excel(
     bank: Optional[str] = None,
     filename: str = "",
 ) -> list[tuple[Transaction, datetime]]:
-    """Parse .xlsx (openpyxl) or .xls (xlrd) into transactions."""
+    """Parse .xlsx/.xls — tries every sheet and keeps the richest parse."""
     name = (filename or "").lower()
-    rows: list[list[Any]] = []
+    best: list[tuple[Transaction, datetime]] = []
+
+    def _parse_rows(rows: list[list[Any]]) -> list[tuple[Transaction, datetime]]:
+        if not rows:
+            return []
+        header_idx = _find_header_row(rows)
+        table = [r for r in rows[header_idx:] if any(c is not None and str(c).strip() for c in r)]
+        if len(table) < 2:
+            return []
+        return parse_statement_csv(_rows_to_csv_text(table), bank=bank)
 
     if name.endswith(".xls") and not name.endswith(".xlsx"):
         import xlrd  # type: ignore
 
         book = xlrd.open_workbook(file_contents=raw)
-        sheet = book.sheet_by_index(0)
-        for r in range(sheet.nrows):
-            rows.append([sheet.cell_value(r, c) for c in range(sheet.ncols)])
+        for i in range(book.nsheets):
+            sheet = book.sheet_by_index(i)
+            rows = [[sheet.cell_value(r, c) for c in range(sheet.ncols)] for r in range(sheet.nrows)]
+            pairs = _parse_rows(rows)
+            if len(pairs) > len(best):
+                best = pairs
     else:
         from openpyxl import load_workbook
 
         wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
         try:
-            ws = wb.active
-            for row in ws.iter_rows(values_only=True):
-                if row is None:
-                    continue
-                rows.append(list(row))
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = [list(row) for row in ws.iter_rows(values_only=True) if row]
+                pairs = _parse_rows(rows)
+                if len(pairs) > len(best):
+                    best = pairs
         finally:
             wb.close()
 
-    if not rows:
-        return []
-
-    header_idx = _find_header_row(rows)
-    table = rows[header_idx:]
-    # Drop fully empty rows
-    table = [r for r in table if any(c is not None and str(c).strip() for c in r)]
-    if len(table) < 2:
-        return []
-
-    csv_text = _rows_to_csv_text(table)
-    return parse_statement_csv(csv_text, bank=bank)
+    return best
 
 
 def parse_statement_pdf(
@@ -415,11 +547,12 @@ def parse_statement_pdf(
     """
     Parse PDF bank statements:
     1) extract tables → CSV path
-    2) fallback to plain text line parsing
+    2) plain text line parsing
+    Prefer whichever yields more unique rows (tables can be partial).
     """
     import pdfplumber
 
-    all_pairs: list[tuple[Transaction, datetime]] = []
+    table_pairs: list[tuple[Transaction, datetime]] = []
     text_chunks: list[str] = []
 
     with pdfplumber.open(io.BytesIO(raw)) as pdf:
@@ -438,19 +571,20 @@ def parse_statement_pdf(
                 header_idx = _find_header_row(cleaned)
                 slice_rows = cleaned[header_idx:]
                 pairs = parse_statement_csv(_rows_to_csv_text(slice_rows), bank=bank)
-                all_pairs.extend(pairs)
+                table_pairs.extend(pairs)
 
             page_text = page.extract_text() or ""
             if page_text.strip():
                 text_chunks.append(page_text)
 
-    if all_pairs:
-        return all_pairs
-
     combined = "\n".join(text_chunks)
-    if combined.strip():
-        return parse_statement_text(combined, bank=bank)
-    return []
+    text_pairs = parse_statement_text(combined, bank=bank) if combined.strip() else []
+
+    if len(table_pairs) >= max(3, len(text_pairs)):
+        return table_pairs
+    if text_pairs:
+        return text_pairs
+    return table_pairs
 
 
 def parse_statement(
@@ -458,22 +592,27 @@ def parse_statement(
     *,
     bank: Optional[str] = None,
     fmt: str = "auto",
+    filename: str = "",
 ) -> list[dict[str, Any]]:
     """
     Unified entry for text/CSV: returns docs ready for Mongo insert.
+    Auto-detects Federal vs ICICI (+ credit-card product) when bank is omitted.
     """
+    profile = detect_statement_profile(content, filename)
+    bank_name = bank if bank in ALLOWED_BANKS else profile["bank"]
+    default_card = profile["default_card_type"]
+
     fmt = (fmt or "auto").lower()
     if fmt == "csv":
-        pairs = parse_statement_csv(content, bank=bank)
+        pairs = parse_statement_csv(content, bank=bank_name, default_card_type=default_card)
     elif fmt == "text":
-        pairs = parse_statement_text(content, bank=bank)
+        pairs = parse_statement_text(content, bank=bank_name)
     else:
-        # auto: prefer CSV if headers look right
-        pairs = parse_statement_csv(content, bank=bank)
+        pairs = parse_statement_csv(content, bank=bank_name, default_card_type=default_card)
         if not pairs:
-            pairs = parse_statement_text(content, bank=bank)
+            pairs = parse_statement_text(content, bank=bank_name)
 
-    return _pairs_to_docs(pairs)
+    return _pairs_to_docs(pairs, default_card_type=default_card, bank=bank_name)
 
 
 def parse_statement_file(
@@ -482,43 +621,75 @@ def parse_statement_file(
     *,
     bank: Optional[str] = None,
     fmt: str = "auto",
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     Parse uploaded file bytes (.csv/.txt/.tsv/.xlsx/.xls/.pdf).
+    Returns (docs, detected_profile).
     """
     name = (filename or "").lower()
     fmt = (fmt or "auto").lower()
 
+    # Peek text for bank detection
+    peek = ""
+    try:
+        peek = raw[:8000].decode("utf-8-sig", errors="ignore")
+    except Exception:  # noqa: BLE001
+        peek = ""
+    profile = detect_statement_profile(f"{filename}\n{peek}", filename)
+    bank_name = bank if bank in ALLOWED_BANKS else profile["bank"]
+    default_card = profile["default_card_type"]
+    # If user forced bank but profile says credit card and bank is ICICI, keep CC
+    if bank_name == "ICICI Bank" and profile["is_credit_card_statement"]:
+        default_card = "credit_card"
+
     if name.endswith(".pdf") or fmt == "pdf":
-        pairs = parse_statement_pdf(raw, bank=bank)
-        return _pairs_to_docs(pairs)
+        pairs = parse_statement_pdf(raw, bank=bank_name)
+        docs = _pairs_to_docs(pairs, default_card_type=default_card, bank=bank_name)
+        return docs, {**profile, "bank": bank_name, "default_card_type": default_card}
 
     if name.endswith(".xlsx") or name.endswith(".xls") or fmt in {"xlsx", "xls", "excel"}:
-        pairs = parse_statement_excel(raw, bank=bank, filename=name)
-        return _pairs_to_docs(pairs)
+        pairs = parse_statement_excel(raw, bank=bank_name, filename=name)
+        docs = _pairs_to_docs(pairs, default_card_type=default_card, bank=bank_name)
+        return docs, {**profile, "bank": bank_name, "default_card_type": default_card}
 
-    # Text-like formats
     try:
         content = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         content = raw.decode("latin-1")
 
+    profile = detect_statement_profile(content, filename)
+    bank_name = bank if bank in ALLOWED_BANKS else profile["bank"]
+    default_card = profile["default_card_type"]
+
     if name.endswith(".csv") or fmt == "csv":
-        return parse_statement(content, bank=bank, fmt="csv")
-    if name.endswith(".txt") or name.endswith(".tsv") or fmt == "text":
-        return parse_statement(content, bank=bank, fmt="text" if name.endswith(".txt") else "auto")
-    return parse_statement(content, bank=bank, fmt="auto")
+        pairs = parse_statement_csv(content, bank=bank_name, default_card_type=default_card)
+    elif name.endswith(".txt") or fmt == "text":
+        pairs = parse_statement_text(content, bank=bank_name)
+    else:
+        pairs = parse_statement_csv(content, bank=bank_name, default_card_type=default_card)
+        if not pairs:
+            pairs = parse_statement_text(content, bank=bank_name)
+
+    docs = _pairs_to_docs(pairs, default_card_type=default_card, bank=bank_name)
+    return docs, {**profile, "bank": bank_name, "default_card_type": default_card}
 
 
-def _pairs_to_docs(pairs: list[tuple[Transaction, datetime]]) -> list[dict[str, Any]]:
+def _pairs_to_docs(
+    pairs: list[tuple[Transaction, datetime]],
+    *,
+    default_card_type: str = "bank_account",
+    bank: Optional[str] = None,
+) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for txn, received_at in pairs:
-        docs.append(
-            {
-                **txn,
-                "sender": "STATEMENT",
-                "received_at": received_at,
-                "source": "statement",
-            }
-        )
+        doc = {
+            **txn,
+            "sender": "STATEMENT",
+            "received_at": received_at,
+            "source": "statement",
+        }
+        if bank:
+            doc["bank"] = bank
+        enrich_imported_txn(doc, default_card_type=default_card_type)
+        docs.append(doc)
     return docs

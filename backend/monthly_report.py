@@ -3,23 +3,25 @@
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pymongo.collection import Collection
 
 from analytics import NON_LIFESTYLE_CATEGORIES, build_analytics
+from learned_facts import planned_spend_keys
 from llm import LLMError, extract_json, get_provider
+from merchant_label import clean_merchant_label
 from news_service import fetch_relevant_news
 from smart_insights import attach_smart_insights
 
 REPORT_SYSTEM = (
-    "You are a careful personal-finance analyst for one user in India (INR). "
-    "Use ONLY the structured JSON context. Never invent numbers, tickers, or tax figures. "
-    "If a comparison cannot be made for lack of history, say so plainly. "
+    "Task: write a monthly personal-finance report for one person in India (INR). "
+    "Respond with JSON only. "
     "Always include at least one genuinely positive observation in going_well. "
     "Suggestions must reference exact ₹ amounts from the context. "
-    "Respond with JSON only."
+    "Write directly as 'you'/'your'. Never say 'the user'."
 )
 
 
@@ -83,14 +85,62 @@ def _overview_slice(analytics: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _top_lifestyle_merchants(
+    transactions: Collection,
+    start: datetime,
+    end: datetime,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Largest lifestyle debit merchants for the month (excludes transfers/investments/income)."""
+    from collections import defaultdict
+
+    totals: dict[str, dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0.0})
+    match = {
+        "type": "debit",
+        "card_type": {"$ne": "wallet"},
+        "received_at": {"$gte": start, "$lte": end},
+        "category": {"$nin": list(NON_LIFESTYLE_CATEGORIES)},
+    }
+    for doc in transactions.find(match, {"merchant": 1, "raw_text": 1, "amount": 1, "category": 1}):
+        label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text"))
+        if not label or "(Family)" in label:
+            continue
+        lower = label.lower()
+        if lower.startswith("siv3sh") or "siv3sh@" in lower or lower in {"self", "self transfer"}:
+            continue
+        totals[label]["amount"] += float(doc.get("amount") or 0)
+        totals[label]["count"] += 1
+
+    ranked = sorted(totals.items(), key=lambda kv: -kv[1]["amount"])
+    total = sum(v["amount"] for _, v in ranked) or 1.0
+    return [
+        {
+            "name": name,
+            "amount": round(vals["amount"], 2),
+            "count": int(vals["count"]),
+            "share": round(vals["amount"] / total * 100, 1),
+        }
+        for name, vals in ranked[:limit]
+        if vals["amount"] > 0
+    ]
+
+
 def _category_deltas(
     current: list[dict[str, Any]],
     previous: list[dict[str, Any]],
+    *,
+    planned_keys: set[str] | None = None,
+    current_month: str | None = None,
 ) -> list[dict[str, Any]]:
     prev_map = {r["name"]: float(r.get("debit") or 0) for r in previous}
+    planned = planned_keys or set()
     deltas: list[dict[str, Any]] = []
     for row in current:
         name = row["name"]
+        # Skip categories the user marked as planned one-offs for this month
+        if current_month and f"{current_month}|{name}" in planned:
+            continue
         cur = float(row.get("debit") or 0)
         prev = prev_map.get(name, 0.0)
         abs_change = round(cur - prev, 2)
@@ -210,6 +260,7 @@ def build_report_stats(
     sip_overrides: Collection | None = None,
     settings: Collection | None = None,
     news_cache: Collection | None = None,
+    learned_facts: Collection | None = None,
 ) -> dict[str, Any]:
     """Pre-compute all numbers for the monthly report (no LLM)."""
     start, end = _month_bounds(year, month)
@@ -228,10 +279,15 @@ def build_report_stats(
             networth_snapshots=networth_snapshots,
             liabilities=liabilities,
             budgets=budgets,
+            learned_facts=learned_facts,
         )
         if with_smart:
             return attach_smart_insights(
-                raw, transactions, sip_overrides=sip_overrides, settings=settings
+                raw,
+                transactions,
+                sip_overrides=sip_overrides,
+                settings=settings,
+                learned_facts=learned_facts,
             )
         return raw
 
@@ -244,6 +300,7 @@ def build_report_stats(
     current = _overview_slice(current_a)
     previous = _overview_slice(previous_a)
     ytd = _overview_slice(ytd_a)
+    current["top_merchants"] = _top_lifestyle_merchants(transactions, start, end)
 
     # Trailing 6-month averages from monthly cashflow rows in the window
     month_keys = {_ym(*_add_months(year, month, -i)) for i in range(0, 6)}
@@ -292,7 +349,13 @@ def build_report_stats(
         "note": "Trailing averages use monthly cashflow; lifestyle approximated when category history is thin",
     }
 
-    deltas = _category_deltas(current.get("categories") or [], previous.get("categories") or [])
+    planned = planned_spend_keys(learned_facts) if learned_facts is not None else set()
+    deltas = _category_deltas(
+        current.get("categories") or [],
+        previous.get("categories") or [],
+        planned_keys=planned,
+        current_month=_ym(year, month),
+    )
     smart = current_a.get("smart") or {}
     sip = smart.get("sip") or {}
     drift = smart.get("drift") or {}
@@ -366,7 +429,117 @@ def build_report_stats(
     }
 
 
-def _narrate_report(stats: dict[str, Any], *, provider_name: str | None = None) -> dict[str, Any]:
+def _repair_llm_json(text: str) -> str:
+    """Fix common LLM JSON mistakes before parsing."""
+    s = text.strip()
+    # Replace bogus inr_impact: suggestion_seeds[...] with a number if present
+    def _seed_impact(m: re.Match[str]) -> str:
+        blob = m.group(0)
+        nums = re.findall(r"halving_would_free_inr[\"']?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)", blob)
+        if nums:
+            return f'"inr_impact": {nums[0]}'
+        nums = re.findall(r"([0-9]+(?:\.[0-9]+)?)", blob)
+        return f'"inr_impact": {nums[-1]}' if nums else '"inr_impact": null'
+
+    s = re.sub(
+        r'"inr_impact"\s*:\s*suggestion_seeds\[[^\]]*\]',
+        _seed_impact,
+        s,
+        flags=re.I,
+    )
+    s = re.sub(
+        r'"inr_impact"\s*:\s*suggestion_seeds\{[^}]*\}',
+        _seed_impact,
+        s,
+        flags=re.I,
+    )
+    # Trailing commas before } or ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+    # Balance braces/brackets if the model truncated the closing
+    opens = s.count("{") - s.count("}")
+    open_arr = s.count("[") - s.count("]")
+    if opens > 0 or open_arr > 0:
+        s = s + ("]" * max(0, open_arr)) + ("}" * max(0, opens))
+    return s
+
+
+def _parse_report_narrative(raw: str) -> dict[str, Any]:
+    """Parse LLM report JSON with repair + field fallbacks."""
+    candidates = [raw, _repair_llm_json(raw)]
+    parsed: dict[str, Any] | None = None
+    for cand in candidates:
+        try:
+            data = extract_json(cand)
+            if isinstance(data, dict) and (
+                data.get("summary") or data.get("going_well") or data.get("suggestions")
+            ):
+                # If model stuffed whole JSON into summary again, unwrap
+                summary = data.get("summary")
+                if isinstance(summary, str) and summary.strip().startswith("{") and '"going_well"' in summary:
+                    try:
+                        inner = extract_json(_repair_llm_json(summary))
+                        if isinstance(inner, dict) and inner.get("summary"):
+                            data = inner
+                    except LLMError:
+                        pass
+                parsed = data
+                break
+        except LLMError:
+            continue
+
+    if parsed is None:
+        def _unescape(val: str) -> str:
+            return (
+                val.replace("\\n", "\n")
+                .replace('\\"', '"')
+                .replace("\\/", "/")
+            )
+
+        summary_m = re.search(r'"summary"\s*:\s*"((?:\\.|[^"\\])*)"', raw)
+        ytd_m = re.search(r'"ytd_snapshot"\s*:\s*"((?:\\.|[^"\\])*)"', raw)
+        well = re.findall(r'"going_well"\s*:\s*\[(.*?)\]', raw, flags=re.S)
+        going = []
+        if well:
+            going = re.findall(r'"((?:\\.|[^"\\])*)"', well[0])
+        # Pull suggestion texts even when inr_impact is broken
+        sug_texts = re.findall(
+            r'\{\s*"text"\s*:\s*"((?:\\.|[^"\\])*)"',
+            raw,
+        )
+        sug_impacts = re.findall(
+            r"halving_would_free_inr[\"']?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
+            raw,
+        )
+        suggestions = []
+        for i, t in enumerate(sug_texts):
+            impact = None
+            if i < len(sug_impacts):
+                try:
+                    impact = float(sug_impacts[i])
+                except ValueError:
+                    impact = None
+            suggestions.append({"text": _unescape(t), "inr_impact": impact})
+
+        parsed = {
+            "summary": _unescape(summary_m.group(1)) if summary_m else raw[:800],
+            "going_well": [_unescape(g) for g in going[:5]],
+            "suggestions": suggestions,
+            "market_context": "",
+            "tax_notes": [],
+            "ytd_snapshot": _unescape(ytd_m.group(1)) if ytd_m else "",
+        }
+
+    return parsed
+
+
+def _narrate_report(
+    stats: dict[str, Any],
+    *,
+    provider_name: str | None = None,
+    settings: Collection | None = None,
+    learned_facts: Collection | None = None,
+    goals_col: Collection | None = None,
+) -> dict[str, Any]:
     provider = get_provider(provider_name)
     # Slim payload for the model
     ctx = {
@@ -385,6 +558,59 @@ def _narrate_report(stats: dict[str, Any], *, provider_name: str | None = None) 
         "tax_flags": stats["tax_flags"],
         "holdings": stats["investments"]["holdings"],
     }
+    # Build a mini analytics bundle for severity from report stats
+    analytics_for_sev = {
+        "overview": {
+            "lifestyle_spend": (stats.get("current") or {}).get("lifestyle_spend"),
+            "salary_total": (stats.get("current") or {}).get("salary_total"),
+            "total_credit": (stats.get("current") or {}).get("total_credit"),
+            "lifestyle_to_salary": (stats.get("current") or {}).get("lifestyle_to_salary"),
+        },
+        "mom": (stats.get("current") or {}).get("mom") or {},
+        "smart": {
+            "sip": stats.get("sip") or {},
+            "drift": stats.get("drift") or {},
+            "subscription_creep": {},
+            "spend_forecast": {},
+        },
+    }
+    try:
+        from advisor_persona import build_persona_system_prompt, severity_from_analytics_bundle
+
+        severity = severity_from_analytics_bundle(
+            analytics_for_sev,
+            settings=settings,
+            learned_facts=learned_facts,
+            goals_col=goals_col,
+        )
+        system = build_persona_system_prompt(
+            REPORT_SYSTEM,
+            settings=settings,
+            learned_facts=learned_facts,
+            severity=severity,
+            extra_grounding=None,
+        )
+        try:
+            from advisor_memory import memories_for_prompt
+
+            # Optional: caller may pass memories via stats
+            mem_col = stats.get("_memories_col")
+            mem_lines = memories_for_prompt(mem_col, limit=10) if mem_col is not None else []
+            if mem_lines:
+                system = build_persona_system_prompt(
+                    REPORT_SYSTEM,
+                    settings=settings,
+                    learned_facts=learned_facts,
+                    severity=severity,
+                    extra_grounding="Advisor memory:\n" + "\n".join(mem_lines),
+                )
+        except Exception:
+            pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: report persona fallback: {exc}")
+        severity = {"level": "informational", "context_line": "tone: informational"}
+        system = REPORT_SYSTEM
+
     user = (
         "Generate a monthly finance report as JSON with keys:\n"
         "{\n"
@@ -397,24 +623,16 @@ def _narrate_report(stats: dict[str, Any], *, provider_name: str | None = None) 
         "}\n"
         "Rules: use only numbers from context; include ≥1 positive in going_well; "
         "suggestions must use suggestion_seeds ₹ amounts; "
+        "inr_impact must be a plain number (e.g. 1914) or null — never paste objects/code; "
         "leave market_context empty if headlines list is empty; "
-        "only mention tax_flags that are present.\n"
+        "only mention tax_flags that are present; "
+        "write in a warm, direct second-person voice using 'you'/'your'; "
+        "never say 'the user'.\n"
+        f"Advisor severity (deterministic, match tone): {_compact(severity)}\n"
         f"Context:\n{_compact(ctx)}"
     )
-    raw = provider.complete(REPORT_SYSTEM, user, temperature=0.25)
-    try:
-        parsed = extract_json(raw)
-        if not isinstance(parsed, dict):
-            parsed = {"summary": str(raw), "going_well": [], "suggestions": []}
-    except LLMError:
-        parsed = {
-            "summary": raw,
-            "going_well": [],
-            "suggestions": [],
-            "market_context": "",
-            "tax_notes": [],
-            "ytd_snapshot": "",
-        }
+    raw = provider.complete(system, user, temperature=0.25)
+    parsed = _parse_report_narrative(raw)
 
     market = str(parsed.get("market_context") or "").strip()
     if not (stats.get("news") or {}).get("headlines"):
@@ -423,10 +641,15 @@ def _narrate_report(stats: dict[str, Any], *, provider_name: str | None = None) 
     suggestions_out = []
     for s in parsed.get("suggestions") or []:
         if isinstance(s, dict):
+            impact = s.get("inr_impact")
+            try:
+                impact_n = float(impact) if impact is not None else None
+            except (TypeError, ValueError):
+                impact_n = None
             suggestions_out.append(
                 {
                     "text": str(s.get("text") or "")[:400],
-                    "inr_impact": s.get("inr_impact"),
+                    "inr_impact": impact_n,
                 }
             )
         elif isinstance(s, str):
@@ -441,6 +664,7 @@ def _narrate_report(stats: dict[str, Any], *, provider_name: str | None = None) 
         "ytd_snapshot": str(parsed.get("ytd_snapshot") or "")[:800],
         "provider": provider.name,
         "raw": raw[:4000],
+        "advisor_severity": severity,
     }
 
 
@@ -463,6 +687,9 @@ def generate_monthly_report(
     sip_overrides: Collection | None = None,
     settings: Collection | None = None,
     news_cache: Collection | None = None,
+    learned_facts: Collection | None = None,
+    goals_col: Collection | None = None,
+    memories_col: Collection | None = None,
     provider_name: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -489,8 +716,18 @@ def generate_monthly_report(
         sip_overrides=sip_overrides,
         settings=settings,
         news_cache=news_cache,
+        learned_facts=learned_facts,
     )
-    narrative = _narrate_report(stats, provider_name=provider_name)
+    if memories_col is not None:
+        stats["_memories_col"] = memories_col
+    narrative = _narrate_report(
+        stats,
+        provider_name=provider_name,
+        settings=settings,
+        learned_facts=learned_facts,
+        goals_col=goals_col,
+    )
+    stats.pop("_memories_col", None)
 
     doc = {
         "month": month_key,

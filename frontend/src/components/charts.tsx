@@ -107,7 +107,10 @@ export function CashflowBars({
           tickFormatter={(v) => formatCompactINR(Number(v))}
           width={56}
         />
-        <Tooltip content={<Tip />} />
+        <Tooltip
+          content={<Tip />}
+          cursor={{ fill: theme.accent, fillOpacity: 0.1 }}
+        />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Bar dataKey="credit" name="Credited" fill={theme.credit} radius={[4, 4, 0, 0]} />
         <Bar dataKey="debit" name="Debited" fill={theme.debit} radius={[4, 4, 0, 0]} />
@@ -119,14 +122,21 @@ export function CashflowBars({
 export function DailyCashflowBars({
   data,
   onPointClick,
+  selectedKey,
   height = 280,
 }: {
   data: Array<{ key: string; label: string; debit: number; credit: number; net?: number }>
   onPointClick?: (key: string) => void
+  selectedKey?: string | null
   height?: number
 }) {
   const theme = useChartTheme()
   if (!data.length) return <EmptyState message="No activity in this period" />
+
+  const handleSelect = (key?: string) => {
+    if (key && onPointClick) onPointClick(key)
+  }
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart
@@ -136,8 +146,7 @@ export function DailyCashflowBars({
         style={{ cursor: onPointClick ? 'pointer' : undefined }}
         onClick={(state) => {
           const payload = state as { activePayload?: Array<{ payload?: { key?: string } }> }
-          const key = payload.activePayload?.[0]?.payload?.key
-          if (key && onPointClick) onPointClick(key)
+          handleSelect(payload.activePayload?.[0]?.payload?.key)
         }}
       >
         <CartesianGrid stroke={theme.border} strokeDasharray="3 3" vertical={false} />
@@ -156,10 +165,49 @@ export function DailyCashflowBars({
           tickFormatter={(v) => formatCompactINR(Number(v))}
           width={56}
         />
-        <Tooltip content={<Tip />} />
+        <Tooltip
+          content={<Tip />}
+          cursor={{ fill: theme.accent, fillOpacity: 0.1 }}
+        />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Bar dataKey="credit" name="Credited" fill={theme.credit} radius={[4, 4, 0, 0]} />
-        <Bar dataKey="debit" name="Debited" fill={theme.debit} radius={[4, 4, 0, 0]} />
+        <Bar
+          dataKey="credit"
+          name="Credited"
+          radius={[4, 4, 0, 0]}
+          onClick={(entry) => {
+            const row = entry as { key?: string; payload?: { key?: string } }
+            handleSelect(row.key ?? row.payload?.key)
+          }}
+        >
+          {data.map((row) => (
+            <Cell
+              key={`c-${row.key}`}
+              fill={theme.credit}
+              fillOpacity={selectedKey && selectedKey !== row.key ? 0.35 : 1}
+              stroke={selectedKey === row.key ? theme.accent : 'transparent'}
+              strokeWidth={selectedKey === row.key ? 1.5 : 0}
+            />
+          ))}
+        </Bar>
+        <Bar
+          dataKey="debit"
+          name="Debited"
+          radius={[4, 4, 0, 0]}
+          onClick={(entry) => {
+            const row = entry as { key?: string; payload?: { key?: string } }
+            handleSelect(row.key ?? row.payload?.key)
+          }}
+        >
+          {data.map((row) => (
+            <Cell
+              key={`d-${row.key}`}
+              fill={theme.debit}
+              fillOpacity={selectedKey && selectedKey !== row.key ? 0.35 : 1}
+              stroke={selectedKey === row.key ? theme.accent : 'transparent'}
+              strokeWidth={selectedKey === row.key ? 1.5 : 0}
+            />
+          ))}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
@@ -314,6 +362,42 @@ export function HorizontalBars({
         />
         <Tooltip content={<Tip />} />
         <Bar dataKey={valueKey} name="Amount" fill={color || theme.debit} radius={[0, 4, 4, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** Side-by-side template vs actual bars (budget framework). */
+export function GroupedComparisonBars({
+  data,
+}: {
+  data: Array<{ name: string; template: number; actual: number }>
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No budget comparison yet" />
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(260, data.length * 48)}>
+      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 12 }}>
+        <CartesianGrid stroke={theme.border} strokeDasharray="3 3" horizontal={false} />
+        <XAxis
+          type="number"
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={(v) => formatCompactINR(Number(v))}
+        />
+        <YAxis
+          type="category"
+          dataKey="name"
+          width={110}
+          tick={{ fill: theme.text, fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
+        />
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Bar dataKey="template" name="Template" fill={theme.accent} radius={[0, 4, 4, 0]} barSize={12} />
+        <Bar dataKey="actual" name="Actual" fill={theme.debit} radius={[0, 4, 4, 0]} barSize={12} />
       </BarChart>
     </ResponsiveContainer>
   )

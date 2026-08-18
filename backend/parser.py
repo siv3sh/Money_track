@@ -98,26 +98,22 @@ WALLET_HINTS = [
 ]
 
 BANK_SENDER_MAP = {
-    "HDFCBK": "HDFC Bank",
-    "HDFC": "HDFC Bank",
-    "SBIINB": "SBI",
-    "SBIPSG": "SBI",
-    "SBI": "SBI",
     "ICICIB": "ICICI Bank",
     "ICICI": "ICICI Bank",
-    "AXISBK": "Axis Bank",
-    "AXIS": "Axis Bank",
-    "KOTAKB": "Kotak Bank",
-    "KOTAK": "Kotak Bank",
-    "IDFCFB": "IDFC First Bank",
-    "IDFC": "IDFC First Bank",
-    "YESBNK": "Yes Bank",
-    "PAYTMB": "Paytm",
-    "PHONEPE": "PhonePe",
     "FEDBNK": "Federal Bank",
     "FEDBK": "Federal Bank",
     "FEDERAL": "Federal Bank",
 }
+
+# Only these banks are stored — everything else is ignored on SMS ingest / import UI
+ALLOWED_BANKS = frozenset({"Federal Bank", "ICICI Bank"})
+ALLOWED_BANK_HINTS = (
+    "federal",
+    "fedbnk",
+    "fedbk",
+    "icici",
+    "icicib",
+)
 
 _BAD_MERCHANT = re.compile(
     r"^(a/?c|acct|account|card|your|the|upi|ref|info|inr|rs\.?|xx+\d*)$",
@@ -190,13 +186,17 @@ def _detect_card_type(text_lower: str) -> Optional[str]:
     return "bank_account"
 
 
-def _detect_bank(sender: str) -> Optional[str]:
+def _detect_bank(sender: str, body: str = "") -> Optional[str]:
     cleaned = re.sub(r"[^A-Za-z0-9]", "", (sender or "")).upper()
-    if not cleaned:
-        return None
-    for key, name in sorted(BANK_SENDER_MAP.items(), key=lambda kv: -len(kv[0])):
-        if cleaned == key.upper() or cleaned.endswith(key.upper()):
-            return name
+    if cleaned:
+        for key, name in sorted(BANK_SENDER_MAP.items(), key=lambda kv: -len(kv[0])):
+            if cleaned == key.upper() or cleaned.endswith(key.upper()):
+                return name
+    blob = f"{sender} {body}".lower()
+    if "icici" in blob:
+        return "ICICI Bank"
+    if "federal" in blob or "fedbnk" in blob or "fedbk" in blob:
+        return "Federal Bank"
     return None
 
 
@@ -310,6 +310,11 @@ def parse_sms(sender: str, body: str) -> Optional[Transaction]:
     if amount is None or amount <= 0:
         return None
 
+    bank = _detect_bank(sender, text)
+    # Only Federal Bank + ICICI card — ignore every other bank/wallet SMS
+    if bank not in ALLOWED_BANKS:
+        return None
+
     account_match = ACCOUNT_RE.search(text)
     balance_match = BALANCE_RE.search(text)
     limit_match = LIMIT_RE.search(text)
@@ -327,7 +332,7 @@ def parse_sms(sender: str, body: str) -> Optional[Transaction]:
         card_type=_detect_card_type(text_lower),
         merchant=_extract_merchant(text, txn_type),
         balance=bal_value,
-        bank=_detect_bank(sender),
+        bank=bank,
         raw_text=text,
     )
 

@@ -9,6 +9,7 @@ import {
   StackedAreaChart,
 } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
+import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
 import { CARD_TYPE_LABELS, type CardType } from '../types'
 import { formatINR } from '../lib/format'
 import { transactionsHref } from '../lib/transactionsLink'
@@ -54,6 +55,7 @@ export function SpendingPage() {
         description="Lifestyle spend excludes Transfers and Investments. Click a category or merchant to open matching transactions."
       />
       <FilterBar />
+      {data?.advisor ? <AdvisorVoiceBanner advisor={data.advisor} /> : null}
 
       {error ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">

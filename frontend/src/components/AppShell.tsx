@@ -1,8 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import {
-  Bell,
   FileText,
-  Landmark,
   LayoutDashboard,
   List,
   Menu,
@@ -10,7 +8,7 @@ import {
   PieChart,
   Sparkles,
   Sun,
-  TrendingUp,
+  Target,
   Upload,
   Wallet,
   X,
@@ -18,20 +16,19 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
+import { AdvisorChatWidget } from './AdvisorChatWidget'
 
 const THEME_KEY = 'money-track-theme'
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/net-worth', label: 'Net Worth', icon: Wallet },
+  { to: '/wealth', label: 'Wealth', icon: Wallet },
+  { to: '/planning', label: 'Advisor', icon: Target },
   { to: '/cash-flow', label: 'Cash Flow', icon: ArrowLeftRight },
   { to: '/spending', label: 'Spending', icon: PieChart },
   { to: '/transactions', label: 'Transactions', icon: List },
-  { to: '/sources', label: 'Sources', icon: Landmark },
-  { to: '/investments', label: 'Investments', icon: TrendingUp },
   { to: '/ai', label: 'AI Insights', icon: Sparkles },
   { to: '/monthly-reports', label: 'Reports', icon: FileText },
-  { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/import', label: 'Import', icon: Upload },
 ] as const
 
@@ -40,7 +37,8 @@ function useDarkMode() {
     const saved = localStorage.getItem(THEME_KEY)
     if (saved === 'dark') return true
     if (saved === 'light') return false
-    return window.matchMedia('(prefers-color-scheme: dark)').matches
+    // Prefer premium dark for first visit
+    return true
   })
 
   useEffect(() => {
@@ -58,11 +56,10 @@ export function AppShell() {
   return (
     <FilterProvider>
       <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
-        {/* Mobile overlay */}
         {mobileOpen ? (
           <button
             type="button"
-            className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+            className="fixed inset-0 z-40 bg-black/50 lg:hidden"
             aria-label="Close menu"
             onClick={() => setMobileOpen(false)}
           />
@@ -140,7 +137,7 @@ export function AppShell() {
             </div>
             <div className="hidden items-center gap-2 text-xs text-[var(--muted)] sm:flex">
               <Wallet size={14} />
-              Premium dashboard
+              Money Track
             </div>
           </header>
 
@@ -148,6 +145,7 @@ export function AppShell() {
             <Outlet />
           </main>
         </div>
+        <AdvisorChatWidget />
       </div>
     </FilterProvider>
   )

@@ -43,7 +43,7 @@ export function FilterBar({ showBanks = true }: { showBanks?: boolean }) {
               type="button"
               className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
                 preset === p.id
-                  ? 'bg-[var(--accent)] text-white'
+                  ? 'seg-active'
                   : 'text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]'
               }`}
               onClick={() => setPreset(p.id)}

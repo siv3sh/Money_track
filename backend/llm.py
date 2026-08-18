@@ -11,7 +11,7 @@ from typing import Any, Optional
 import httpx
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # auto | ollama | gemini
@@ -58,9 +58,17 @@ class OllamaProvider(LLMProvider):
         try:
             with httpx.Client(timeout=120.0) as client:
                 r = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+                if r.status_code == 404:
+                    detail = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else r.text
+                    raise LLMError(
+                        f"Ollama model '{OLLAMA_MODEL}' not found ({detail}). "
+                        f"Run `ollama pull {OLLAMA_MODEL}` or set OLLAMA_MODEL to an installed model."
+                    )
                 r.raise_for_status()
                 data = r.json()
                 return str(data.get("message", {}).get("content") or "").strip()
+        except LLMError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise LLMError(f"Ollama failed: {exc}") from exc
 

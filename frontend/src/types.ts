@@ -60,6 +60,8 @@ export interface AnalyticsAlert {
   avg?: number
   count?: number
   created_at?: string
+  advisor_severity?: 'informational' | 'concerned' | 'strict'
+  advisor_message?: string
 }
 
 export interface AnalyticsPayload {
@@ -94,6 +96,9 @@ export interface AnalyticsPayload {
     salary_count: number
     other_income_total: number
     lifestyle_to_salary: number
+    expected_net_monthly?: number | null
+    ctc_lpa?: number | null
+    employer?: string | null
     total_invested: number
     liabilities_total: number
     assets_total: number
@@ -162,6 +167,7 @@ export interface AnalyticsPayload {
     count: number
     is_salary?: boolean
   }>
+  income_profile?: Record<string, string | number | null>
   investments: {
     total_invested: number
     total_current: number
@@ -207,6 +213,29 @@ export interface AnalyticsPayload {
     last_indmoney_at: string | null
   }
   alerts: AnalyticsAlert[]
+  advisor_severity?: {
+    level?: string
+    reasons?: string[]
+    context_line?: string
+  }
+  advisor?: {
+    preferred_name?: string
+    level?: string
+    headline?: string
+    reasons?: string[]
+    profile?: {
+      preferred_name?: string | null
+      coach_tone?: string | null
+      soft_spot?: string | null
+      dealbreaker?: string | null
+      why_money?: string | null
+      pride?: string | null
+      strict_on?: string | null
+      motivation?: string | null
+      completeness?: number
+    }
+    context_line?: string | null
+  }
   smart?: {
     sip: {
       current_month: string

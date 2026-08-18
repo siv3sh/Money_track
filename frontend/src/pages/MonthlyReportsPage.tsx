@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { FileText, Loader2, Mail, RefreshCw, Settings2 } from 'lucide-react'
 import {
@@ -10,8 +10,30 @@ import {
   type MonthlyReportListItem,
   type MonthlyReportSettings,
 } from '../api'
+import { HorizontalBars } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
+
+function normalizeNarrative(n: MonthlyReport['narrative']): MonthlyReport['narrative'] {
+  const summary = n?.summary || ''
+  if (summary.trim().startsWith('{') && summary.includes('"going_well"')) {
+    try {
+      const parsed = JSON.parse(summary) as MonthlyReport['narrative']
+      return {
+        ...n,
+        summary: parsed.summary || summary,
+        going_well: parsed.going_well?.length ? parsed.going_well : n.going_well,
+        suggestions: parsed.suggestions?.length ? parsed.suggestions : n.suggestions,
+        market_context: parsed.market_context ?? n.market_context,
+        tax_notes: parsed.tax_notes?.length ? parsed.tax_notes : n.tax_notes,
+        ytd_snapshot: parsed.ytd_snapshot || n.ytd_snapshot,
+      }
+    } catch {
+      /* keep original */
+    }
+  }
+  return n
+}
 
 function ReportDetail({
   report,
@@ -20,9 +42,30 @@ function ReportDetail({
   report: MonthlyReport
   onBack?: () => void
 }) {
-  const n = report.narrative
+  const n = normalizeNarrative(report.narrative)
   const s = report.stats
   const h = s.headline_metric
+
+  const categoryBars = useMemo(() => {
+    const cats = (s.current?.categories || [])
+      .filter((c) => (c.debit || 0) > 0)
+      .map((c) => ({ name: c.name, value: c.debit }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8)
+    if (cats.length) return cats
+    return (s.category_changes || [])
+      .filter((c) => (c.current || 0) > 0)
+      .map((c) => ({ name: c.name, value: c.current }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8)
+  }, [s])
+
+  const merchantBars = useMemo(() => {
+    return (s.current?.top_merchants || [])
+      .filter((m) => (m.amount || 0) > 0)
+      .map((m) => ({ name: m.name, value: m.amount }))
+      .slice(0, 8)
+  }, [s])
 
   return (
     <div className="space-y-5">
@@ -69,33 +112,54 @@ function ReportDetail({
       </ChartCard>
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Spend by category" subtitle="Lifestyle this month">
+          <HorizontalBars data={categoryBars} />
+        </ChartCard>
+        <ChartCard title="Top spend" subtitle="Largest merchants">
+          {merchantBars.length ? (
+            <HorizontalBars data={merchantBars} />
+          ) : (
+            <p className="text-sm text-[var(--muted)]">No merchant ranking for this month yet.</p>
+          )}
+        </ChartCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
         <ChartCard title="What's going well">
           <ul className="space-y-2">
-            {(n.going_well || []).map((item, i) => (
-              <li
-                key={i}
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
-              >
-                {item}
-              </li>
-            ))}
+            {(n.going_well || []).length ? (
+              (n.going_well || []).map((item, i) => (
+                <li
+                  key={i}
+                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                >
+                  {item}
+                </li>
+              ))
+            ) : (
+              <li className="text-sm text-[var(--muted)]">Not enough highlights yet.</li>
+            )}
           </ul>
         </ChartCard>
         <ChartCard title="Suggestions">
           <ul className="space-y-2">
-            {(n.suggestions || []).map((item, i) => (
-              <li
-                key={i}
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
-              >
-                {item.text}
-                {item.inr_impact != null ? (
-                  <span className="ml-1 text-[var(--credit)]">
-                    (~{formatINR(item.inr_impact)})
-                  </span>
-                ) : null}
-              </li>
-            ))}
+            {(n.suggestions || []).length ? (
+              (n.suggestions || []).map((item, i) => (
+                <li
+                  key={i}
+                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
+                >
+                  {item.text}
+                  {item.inr_impact != null ? (
+                    <span className="ml-1 text-[var(--credit)]">
+                      (~{formatINR(item.inr_impact)})
+                    </span>
+                  ) : null}
+                </li>
+              ))
+            ) : (
+              <li className="text-sm text-[var(--muted)]">No specific suggestions this month.</li>
+            )}
           </ul>
         </ChartCard>
       </div>

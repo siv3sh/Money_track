@@ -264,9 +264,13 @@ export function TransactionsPage() {
           refreshAnalytics()
         }}
         onCategoryChange={async (id, category) => {
-          await updateTransactionCategory(id, category)
+          const res = await updateTransactionCategory(id, category)
           await load()
           refreshAnalytics()
+          return {
+            advisor_comment: res.advisor_comment,
+            goal_impact: res.goal_impact,
+          }
         }}
       />
     </div>

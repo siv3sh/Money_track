@@ -9,3 +9,12 @@ openpyxl
 xlrd
 pdfplumber
 httpx
+numpy
+langchain
+langgraph
+langchain-core
+langchain-google-genai
+# Optional OCR for scanned PDFs:
+# pytesseract
+# pdf2image
+# Pillow

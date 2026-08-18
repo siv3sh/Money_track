@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from merchant_label import clean_merchant_label, is_salary_source
+from merchant_label import clean_merchant_label, is_family_transfer, is_salary_source
 
 # Stable category labels used across API + UI
 CATEGORIES = [
@@ -291,6 +291,11 @@ def categorize(
     raw = (raw_text or "").strip()
     blob = f"{merchant_s} {raw}".strip()
 
+    # Family transfers beat MCC/Income defaults (credits from relatives are not salary)
+    if is_family_transfer(merchant_s, raw):
+        mcc_early = extract_mcc(raw) or extract_mcc(merchant_s)
+        return {"category": "Transfers", "mcc": mcc_early, "source": "family"}
+
     mcc = extract_mcc(raw) or extract_mcc(merchant_s)
     if mcc and mcc in MCC_MAP:
         # 0000 on credits is Income; on debits Transfers
@@ -330,13 +335,49 @@ def categorize(
 
 def apply_category(doc: dict[str, Any], merchant_memory: dict[str, str] | None = None) -> dict[str, Any]:
     """Mutate/return doc with category (+ mcc, category_source) fields."""
+    invest_hint = bool(doc.pop("_investment_hint", None))
+    existing_source = str(doc.get("category_source") or "")
+    existing_cat = str(doc.get("category") or "").strip()
+    # Keep high-signal RAG hits unless investment cue forces Investments
+    if (
+        existing_source.startswith("rag:")
+        and existing_cat
+        and existing_cat != "Other"
+        and not invest_hint
+    ):
+        return doc
+
     result = categorize(
         merchant=doc.get("merchant"),
         raw_text=doc.get("raw_text"),
         txn_type=doc.get("type"),
         merchant_memory=merchant_memory,
     )
+    # Statement investment cues beat weak Other/type_default — not merchant memory
+    if (
+        invest_hint
+        and doc.get("type") == "debit"
+        and result["source"] in {"other", "type_default"}
+    ):
+        result = {
+            "category": "Investments",
+            "mcc": result.get("mcc"),
+            "source": "keyword",
+        }
+    # Prefer RAG over weak Other when both exist
+    if (
+        existing_source.startswith("rag:")
+        and existing_cat
+        and existing_cat != "Other"
+        and result["source"] in {"other", "type_default"}
+    ):
+        doc["category"] = existing_cat
+        doc["category_source"] = existing_source
+        if "category_confidence" in doc:
+            pass
+        return doc
+
     doc["category"] = result["category"]
-    doc["mcc"] = result["mcc"]
+    doc["mcc"] = result.get("mcc")
     doc["category_source"] = result["source"]
     return doc

@@ -110,6 +110,7 @@ def build_analytics(
     networth_snapshots: Collection | None = None,
     liabilities: Collection | None = None,
     budgets: Collection | None = None,
+    learned_facts: Collection | None = None,
 ) -> dict[str, Any]:
     match = _match_range(date_from, date_to, banks=banks)
     base = [{"$match": match}] if match else []
@@ -769,6 +770,25 @@ def build_analytics(
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load budgets: {exc}")
 
+    one_off_fps: set[str] = set()
+    income_profile: dict[str, Any] = {}
+    if learned_facts is not None:
+        try:
+            from learned_facts import (
+                budget_targets_from_facts,
+                income_profile_from_facts,
+                one_off_fingerprints,
+            )
+
+            # Learned budget targets fill gaps; explicit budgets_col wins on conflict
+            learned_budgets = budget_targets_from_facts(learned_facts)
+            for cat, amt in learned_budgets.items():
+                budget_map.setdefault(cat, amt)
+            one_off_fps = one_off_fingerprints(learned_facts)
+            income_profile = income_profile_from_facts(learned_facts)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load learned facts for analytics: {exc}")
+
     # Freshness timestamps
     freshness: dict[str, Any] = {
         "last_sms_at": None,
@@ -809,6 +829,7 @@ def build_analytics(
         total_credit=total_credit,
         total_invested=total_invested,
         budgets=budget_map,
+        one_off_fingerprints=one_off_fps,
     )
 
     return {
@@ -844,6 +865,11 @@ def build_analytics(
             "lifestyle_to_salary": round(lifestyle_spend / salary_total * 100, 1)
             if salary_total
             else 0.0,
+            "expected_net_monthly": float(income_profile.get("expected_net_monthly") or 0) or None,
+            "ctc_lpa": float(income_profile["ctc_lpa"])
+            if income_profile.get("ctc_lpa") is not None
+            else None,
+            "employer": income_profile.get("employer"),
             "avg_daily_lifestyle": round(lifestyle_spend / active_days, 2)
             if active_days
             else 0.0,
@@ -894,6 +920,9 @@ def build_analytics(
         },
         "accounts": accounts,
         "income_sources": income_rows,
+        "income_profile": {
+            k: v for k, v in income_profile.items() if not str(k).startswith("_")
+        },
         "investments": {
             "total_invested": total_invested,
             "total_current": total_current,
@@ -951,9 +980,11 @@ def _build_alerts(
     total_credit: float,
     total_invested: float,
     budgets: dict[str, float] | None = None,
+    one_off_fingerprints: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     alerts: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
+    skip_fps = one_off_fingerprints or set()
 
     # Budget vs actual — user-defined targets, else soft defaults
     default_budgets = {
@@ -991,7 +1022,7 @@ def _build_alerts(
             }
         )
 
-    # Unusual spends (> 3× average debit)
+    # Unusual spends (> 3× average debit) — skip learned one-offs
     if avg_debit > 0:
         threshold = avg_debit * 3
         unusual = list(
@@ -1000,11 +1031,14 @@ def _build_alerts(
                 {"amount": 1, "merchant": 1, "raw_text": 1, "received_at": 1, "category": 1},
             )
             .sort("amount", -1)
-            .limit(5)
+            .limit(8)
         )
         for u in unusual:
             merch = _clean_merchant_label(u.get("merchant"), u.get("raw_text"))
             amt = float(u.get("amount") or 0)
+            fp = f"{merch.lower()}|{int(amt)}"
+            if fp in skip_fps or str(u.get("_id")) in skip_fps:
+                continue
             alerts.append(
                 {
                     "type": "anomaly",
@@ -1015,6 +1049,8 @@ def _build_alerts(
                     "merchant": merch,
                 }
             )
+            if sum(1 for a in alerts if a.get("type") == "anomaly") >= 5:
+                break
 
     # Subscription renewals (recurring in Subscriptions / Entertainment)
     for m in recurring_merchants:

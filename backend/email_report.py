@@ -31,15 +31,105 @@ def _pct(value: Any) -> str:
         return "—"
 
 
-def _bar(pct: float, color: str) -> str:
+def _friendly(text: Any) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    replacements = {
+        "The user has ": "You have ",
+        "The user is ": "You are ",
+        "The user was ": "You were ",
+        "The user ": "You ",
+        "this user": "you",
+        "the user": "you",
+        "their ": "your ",
+        "Their ": "Your ",
+        "they have ": "you have ",
+        "They have ": "You have ",
+    }
+    for old, new in replacements.items():
+        s = s.replace(old, new)
+    return s
+
+
+def _bar(pct: float, color: str, *, height: int = 8, max_width: str = "220px") -> str:
     width = max(0, min(100, abs(pct)))
     return (
-        f'<div style="background:#e8e6e1;border-radius:4px;height:8px;width:100%;max-width:220px;">'
-        f'<div style="background:{color};height:8px;border-radius:4px;width:{width}%;"></div></div>'
+        f'<div style="background:#e8e6e1;border-radius:4px;height:{height}px;width:100%;'
+        f'max-width:{max_width};">'
+        f'<div style="background:{color};height:{height}px;border-radius:4px;width:{width}%;"></div></div>'
     )
 
 
-def render_report_html(report: dict[str, Any]) -> str:
+_CHART_COLORS = (
+    "#1a7f4b",
+    "#1a5f8a",
+    "#b45309",
+    "#b42318",
+    "#5b6e4e",
+    "#6b4f3a",
+    "#3d6b6b",
+    "#8a6d3b",
+)
+
+
+def _spend_chart_rows(
+    rows: list[dict[str, Any]],
+    *,
+    name_key: str,
+    amount_key: str,
+    muted: str,
+    text: str,
+    border: str,
+) -> str:
+    """Horizontal bar chart rows — works in major email clients (no JS)."""
+    cleaned: list[tuple[str, float]] = []
+    for r in rows:
+        try:
+            amt = float(r.get(amount_key) or 0)
+        except (TypeError, ValueError):
+            continue
+        name = str(r.get(name_key) or "").strip()
+        if amt <= 0 or not name:
+            continue
+        cleaned.append((name, amt))
+    if not cleaned:
+        return f'<p style="margin:0;color:{muted};font-size:14px;">No spend data for this chart.</p>'
+
+    peak = max(a for _, a in cleaned) or 1.0
+    total = sum(a for _, a in cleaned) or 1.0
+    parts: list[str] = []
+    for i, (name, amt) in enumerate(cleaned):
+        color = _CHART_COLORS[i % len(_CHART_COLORS)]
+        pct_of_peak = amt / peak * 100
+        share = amt / total * 100
+        safe_name = name[:36] + ("…" if len(name) > 36 else "")
+        parts.append(
+            f"""
+        <tr>
+          <td style="padding:8px 12px 8px 0;border-bottom:1px solid {border};width:34%;
+              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:{text};">
+            {safe_name}
+          </td>
+          <td style="padding:8px 0;border-bottom:1px solid {border};width:46%;">
+            {_bar(pct_of_peak, color, height=12, max_width="100%")}
+          </td>
+          <td style="padding:8px 0 8px 12px;border-bottom:1px solid {border};text-align:right;
+              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;
+              font-variant-numeric:tabular-nums;color:{text};white-space:nowrap;">
+            {_fmt_inr(amt)}
+            <span style="color:{muted};font-size:11px;"> · {share:.0f}%</span>
+          </td>
+        </tr>"""
+        )
+    return (
+        '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+        + "".join(parts)
+        + "</table>"
+    )
+
+
+def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any] | None = None) -> str:
     stats = report.get("stats") or {}
     narrative = report.get("narrative") or {}
     current = stats.get("current") or {}
@@ -54,18 +144,27 @@ def render_report_html(report: dict[str, Any]) -> str:
     border = "#e5e2dc"
     bg = "#f7f5f0"
 
+    profile = advisor_profile or {}
+    who = profile.get("preferred_name") or "you"
+    motivation = profile.get("motivation")
+    severity = (narrative.get("advisor_severity") or {}).get("level") or "informational"
+    sev_color = debit if severity in {"concerned", "strict"} else credit
+    advisor_from = f"Your Money Advisor · for {who}"
+    goal_line = f" · Goal in frame: {motivation}" if motivation else ""
+    tone_line = f"Tone: {severity}{goal_line}"
+
     lifestyle_delta = headline.get("vs_prior_lifestyle_pct")
     delta_color = debit if (lifestyle_delta or 0) > 0 else credit
     savings = headline.get("savings_rate_pct")
 
     going_well = "".join(
-        f'<li style="margin:0 0 8px;color:{text};">{item}</li>'
+        f'<li style="margin:0 0 8px;color:{text};">{_friendly(item)}</li>'
         for item in (narrative.get("going_well") or [])
     ) or f'<li style="color:{muted};">Not enough history for highlights yet.</li>'
 
     suggestions = ""
     for s in narrative.get("suggestions") or []:
-        text_s = s.get("text") if isinstance(s, dict) else str(s)
+        text_s = _friendly(s.get("text") if isinstance(s, dict) else str(s))
         impact = s.get("inr_impact") if isinstance(s, dict) else None
         extra = f' <span style="color:{credit};font-weight:600;">(~{_fmt_inr(impact)})</span>' if impact else ""
         suggestions += f'<li style="margin:0 0 10px;color:{text};">{text_s}{extra}</li>'
@@ -77,7 +176,7 @@ def render_report_html(report: dict[str, Any]) -> str:
     tax_flags = stats.get("tax_flags") or []
     if tax_notes or tax_flags:
         items = tax_notes or [f.get("message") for f in tax_flags]
-        lis = "".join(f'<li style="margin:0 0 8px;">{t}</li>' for t in items if t)
+        lis = "".join(f'<li style="margin:0 0 8px;">{_friendly(t)}</li>' for t in items if t)
         tax_block = f"""
         <tr><td style="padding:24px 0 8px;">
           <h2 style="margin:0;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Tax notes</h2>
@@ -92,7 +191,7 @@ def render_report_html(report: dict[str, Any]) -> str:
         <tr><td style="padding:24px 0 8px;">
           <h2 style="margin:0;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Market context</h2>
         </td></tr>
-        <tr><td style="padding:0 0 8px;color:{text};font-size:15px;line-height:1.55;">{market}</td></tr>
+        <tr><td style="padding:0 0 8px;color:{text};font-size:15px;line-height:1.55;">{_friendly(market)}</td></tr>
         """
 
     # KPI comparison rows
@@ -134,6 +233,50 @@ def render_report_html(report: dict[str, Any]) -> str:
     </table>
     """
 
+    categories = list(current.get("categories") or [])
+    # Fallback: derive from category_changes if older reports lack categories
+    if not categories:
+        categories = [
+            {"name": r.get("name"), "debit": r.get("current")}
+            for r in (stats.get("category_changes") or [])
+            if float(r.get("current") or 0) > 0
+        ]
+    categories = sorted(categories, key=lambda r: -float(r.get("debit") or 0))[:8]
+
+    top_merchants = list(current.get("top_merchants") or stats.get("top_merchants") or [])
+    top_merchants = sorted(top_merchants, key=lambda r: -float(r.get("amount") or 0))[:8]
+
+    category_chart = _spend_chart_rows(
+        categories,
+        name_key="name",
+        amount_key="debit",
+        muted=muted,
+        text=text,
+        border=border,
+    )
+    merchant_chart = _spend_chart_rows(
+        top_merchants,
+        name_key="name",
+        amount_key="amount",
+        muted=muted,
+        text=text,
+        border=border,
+    )
+
+    charts_block = f"""
+        <tr><td style="padding:24px 0 8px;">
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Spend by category</h2>
+          <p style="margin:6px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:{muted};">Lifestyle spend this month</p>
+        </td></tr>
+        <tr><td style="padding:12px 0 8px;">{category_chart}</td></tr>
+
+        <tr><td style="padding:20px 0 8px;">
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Top spend</h2>
+          <p style="margin:6px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:{muted};">Largest merchants / pays</p>
+        </td></tr>
+        <tr><td style="padding:12px 0 8px;">{merchant_chart}</td></tr>
+    """
+
     report_url = f"{APP_BASE_URL}/monthly-reports/{month}" if month else f"{APP_BASE_URL}/monthly-reports"
 
     return f"""<!DOCTYPE html>
@@ -145,8 +288,11 @@ def render_report_html(report: dict[str, Any]) -> str:
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid {border};border-radius:12px;padding:36px 32px;">
         <tr><td>
-          <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:{muted};">Money Track</p>
+          <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:{muted};">{advisor_from}</p>
           <h1 style="margin:8px 0 4px;font-size:28px;font-weight:normal;">{label}</h1>
+          <p style="margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:{sev_color};">
+            {tone_line}
+          </p>
           <p style="margin:0 0 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;color:{muted};">
             Savings rate <strong style="color:{text};">{savings if savings is not None else "—"}%</strong>
             &nbsp;·&nbsp; Lifestyle vs prior
@@ -157,9 +303,11 @@ def render_report_html(report: dict[str, Any]) -> str:
         <tr><td style="padding:0 0 8px;">
           <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Summary</h2>
         </td></tr>
-        <tr><td style="padding:0 0 20px;font-size:16px;line-height:1.6;">{narrative.get("summary") or "Report generated."}</td></tr>
+        <tr><td style="padding:0 0 20px;font-size:16px;line-height:1.6;">{_friendly(narrative.get("summary") or "Report generated.")}</td></tr>
 
         <tr><td style="padding:8px 0 20px;">{kpi_table}</td></tr>
+
+        {charts_block}
 
         <tr><td style="padding:16px 0 8px;">
           <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">What's going well</h2>
@@ -177,7 +325,7 @@ def render_report_html(report: dict[str, Any]) -> str:
         <tr><td style="padding:24px 0 8px;">
           <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Year to date</h2>
         </td></tr>
-        <tr><td style="padding:0 0 24px;font-size:15px;line-height:1.55;">{narrative.get("ytd_snapshot") or "YTD data included in the app report."}</td></tr>
+        <tr><td style="padding:0 0 24px;font-size:15px;line-height:1.55;">{_friendly(narrative.get("ytd_snapshot") or "YTD data included in the app report.")}</td></tr>
 
         <tr><td style="padding:20px 0 0;border-top:1px solid {border};">
           <p style="margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;">
@@ -199,6 +347,7 @@ def send_report_email(
     *,
     to_email: str,
     from_email: str | None = None,
+    advisor_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not RESEND_API_KEY:
         raise RuntimeError("RESEND_API_KEY is not configured")
@@ -206,11 +355,15 @@ def send_report_email(
         raise RuntimeError("Invalid recipient email")
 
     label = report.get("label") or report.get("month") or "Monthly report"
-    html = render_report_html(report)
+    who = (advisor_profile or {}).get("preferred_name")
+    html = render_report_html(report, advisor_profile=advisor_profile)
+    subject = (
+        f"Your Money Advisor — {label}" + (f" · {who}" if who else "")
+    )
     payload = {
         "from": from_email or RESEND_FROM,
         "to": [to_email.strip()],
-        "subject": f"Money Track — {label} analysis",
+        "subject": subject,
         "html": html,
     }
     with httpx.Client(timeout=30.0) as client:

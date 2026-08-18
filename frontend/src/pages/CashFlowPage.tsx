@@ -8,6 +8,7 @@ import {
   NetTrendLine,
 } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
+import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
 import { PeriodCompare } from '../components/PeriodCompare'
 import { formatINR } from '../lib/format'
 import { transactionsHref } from '../lib/transactionsLink'
@@ -27,6 +28,7 @@ export function CashFlowPage() {
         description="Monthly credited vs debited, savings trend, and income sources. Click a month to open its transactions."
       />
       <FilterBar />
+      {data?.advisor ? <AdvisorVoiceBanner advisor={data.advisor} /> : null}
 
       {error ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">

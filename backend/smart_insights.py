@@ -211,6 +211,7 @@ def build_portfolio_drift(
     targets: dict[str, float] | None = None,
     threshold_pp: float = 10.0,
     baseline: dict[str, float] | None = None,
+    thresholds_by_asset: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Compare current allocation % to targets or rolling baseline."""
     total = sum(float(h.get("current_value") or 0) for h in holdings)
@@ -235,6 +236,7 @@ def build_portfolio_drift(
             "reference": [],
             "reference_source": reference_source,
             "threshold_pp": threshold_pp,
+            "thresholds_by_asset": thresholds_by_asset or {},
             "drifts": [],
             "alerts": [],
             "suggested_baseline": current_pct,
@@ -242,8 +244,12 @@ def build_portfolio_drift(
 
     # Normalize reference to %
     ref_sum = sum(reference.values()) or 100.0
-    ref_pct = {k: round(v / ref_sum * 100, 1) if ref_sum > 1.5 else round(v, 1) for k, v in reference.items()}
+    ref_pct = {
+        k: round(v / ref_sum * 100, 1) if ref_sum > 1.5 else round(v, 1)
+        for k, v in reference.items()
+    }
 
+    per_asset = thresholds_by_asset or {}
     all_keys = sorted(set(current_pct) | set(ref_pct), key=lambda k: -current_pct.get(k, 0))
     drifts: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
@@ -251,7 +257,8 @@ def build_portfolio_drift(
         cur = current_pct.get(key, 0.0)
         ref = ref_pct.get(key, 0.0)
         delta = round(cur - ref, 1)
-        if abs(delta) >= threshold_pp:
+        asset_threshold = float(per_asset.get(key, threshold_pp))
+        if abs(delta) >= asset_threshold:
             direction = "up" if delta > 0 else "down"
             drifts.append(
                 {
@@ -260,6 +267,7 @@ def build_portfolio_drift(
                     "reference_pct": ref,
                     "delta_pp": delta,
                     "direction": direction,
+                    "threshold_pp": asset_threshold,
                 }
             )
             alerts.append(
@@ -276,6 +284,7 @@ def build_portfolio_drift(
                     "current_pct": cur,
                     "reference_pct": ref,
                     "delta_pp": delta,
+                    "threshold_pp": asset_threshold,
                 }
             )
 
@@ -287,6 +296,7 @@ def build_portfolio_drift(
         "reference": [{"name": k, "pct": ref_pct.get(k, 0)} for k in all_keys],
         "reference_source": reference_source,
         "threshold_pp": threshold_pp,
+        "thresholds_by_asset": per_asset,
         "drifts": drifts,
         "alerts": alerts,
         "suggested_baseline": None,
@@ -523,6 +533,8 @@ def attach_smart_insights(
     *,
     sip_overrides: Collection | None = None,
     settings: Collection | None = None,
+    learned_facts: Collection | None = None,
+    goals_col: Collection | None = None,
 ) -> dict[str, Any]:
     """Mutate analytics payload with SIP / drift / creep / forecast blocks + alerts."""
     holdings = (analytics.get("investments") or {}).get("holdings") or []
@@ -530,6 +542,7 @@ def attach_smart_insights(
     targets: dict[str, float] | None = None
     baseline: dict[str, float] | None = None
     threshold_pp = 10.0
+    thresholds_by_asset: dict[str, float] = {}
     if settings is not None:
         try:
             doc = settings.find_one({"_id": "allocation"}) or {}
@@ -544,12 +557,21 @@ def attach_smart_insights(
         except Exception:  # noqa: BLE001
             pass
 
+    if learned_facts is not None:
+        try:
+            from learned_facts import drift_thresholds_from_facts
+
+            thresholds_by_asset = drift_thresholds_from_facts(learned_facts)
+        except Exception:  # noqa: BLE001
+            pass
+
     sip = build_sip_tracker(transactions, overrides=sip_overrides)
     drift = build_portfolio_drift(
         holdings,
         targets=targets,
         threshold_pp=threshold_pp,
         baseline=baseline,
+        thresholds_by_asset=thresholds_by_asset,
     )
     # Persist suggested baseline once so drift has something to compare against
     if (
@@ -576,6 +598,7 @@ def attach_smart_insights(
                 targets=None,
                 threshold_pp=threshold_pp,
                 baseline=drift["suggested_baseline"],
+                thresholds_by_asset=thresholds_by_asset,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -609,4 +632,15 @@ def attach_smart_insights(
     for a in merged:
         a.setdefault("created_at", now)
     analytics["alerts"] = merged[:40]
+    try:
+        from advisor_persona import enrich_alerts_with_persona
+
+        enrich_alerts_with_persona(
+            analytics,
+            settings=settings,
+            learned_facts=learned_facts,
+            goals_col=goals_col,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: advisor alert enrich skipped: {exc}")
     return analytics

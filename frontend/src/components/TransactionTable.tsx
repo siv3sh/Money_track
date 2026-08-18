@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
+import type { AdvisorComment, GoalImpact } from '../api'
 import type { CardType, Transaction, TxnType } from '../types'
 import { CARD_TYPE_LABELS, DEFAULT_CATEGORIES } from '../types'
 import { bankLabel, formatDate, formatINR } from '../lib/format'
+import { AdvisorCommentBubble } from './AdvisorCommentBubble'
 
 export interface Filters {
   card_type: CardType | ''
@@ -14,6 +16,11 @@ export interface Filters {
   order: 'asc' | 'desc'
   bank?: string
   q?: string
+}
+
+export type CategoryChangeResult = {
+  advisor_comment?: AdvisorComment
+  goal_impact?: GoalImpact
 }
 
 interface Props {
@@ -29,7 +36,10 @@ interface Props {
   onFiltersChange: (next: Filters) => void
   onPageChange: (page: number) => void
   onDelete: (id: string) => void
-  onCategoryChange?: (id: string, category: string) => void
+  onCategoryChange?: (
+    id: string,
+    category: string,
+  ) => void | Promise<void | CategoryChangeResult | null | undefined>
 }
 
 const selectClass =
@@ -46,10 +56,14 @@ export function TransactionRow({
   txn: Transaction
   categories: string[]
   onDelete: (id: string) => void
-  onCategoryChange?: (id: string, category: string) => void
+  onCategoryChange?: (
+    id: string,
+    category: string,
+  ) => void | Promise<void | CategoryChangeResult | null | undefined>
 }) {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [advisorNote, setAdvisorNote] = useState<CategoryChangeResult | null>(null)
   const message = txn.raw_text || '—'
 
   return (
@@ -130,9 +144,11 @@ export function TransactionRow({
                   if (!onCategoryChange) return
                   const next = e.target.value
                   setSaving(true)
-                  void Promise.resolve(onCategoryChange(txn._id, next)).finally(() =>
-                    setSaving(false),
-                  )
+                  void Promise.resolve(onCategoryChange(txn._id, next))
+                    .then((res) => {
+                      if (res && typeof res === 'object') setAdvisorNote(res)
+                    })
+                    .finally(() => setSaving(false))
                 }}
               >
                 {categories.map((cat) => (
@@ -150,6 +166,10 @@ export function TransactionRow({
                   : 'Change to remember this merchant'}
             </p>
           </div>
+          <AdvisorCommentBubble
+            comment={advisorNote?.advisor_comment}
+            impact={advisorNote?.goal_impact}
+          />
           <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
             SMS message
           </div>

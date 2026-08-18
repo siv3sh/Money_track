@@ -33,11 +33,15 @@ export function IndmoneyImportPage() {
     setError(null)
     try {
       const data = await previewIndmoneyFile(f)
-      setFile(f)
       setPreview(data)
+      setFile(f)
       setMapping({ ...data.suggested_mapping })
       setValidation(null)
+      // High-confidence RAG mapping can still be edited — UI always available as fallback
       setStep('map')
+      if (data.mapping_confidence != null && data.mapping_confidence >= 0.62) {
+        setError(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview failed')
     } finally {
@@ -85,9 +89,9 @@ export function IndmoneyImportPage() {
         title="Import from INDmoney"
         description="Upload a CSV/Excel portfolio export, map columns, preview, then upsert into your portfolio."
         actions={
-          <Link to="/investments" className="btn">
+          <Link to="/wealth" className="btn">
             <ArrowLeft size={14} />
-            Back to Investments
+            Back to Wealth
           </Link>
         }
       />
@@ -142,8 +146,36 @@ export function IndmoneyImportPage() {
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h2 className="text-sm font-semibold">Column mapping</h2>
             <p className="text-xs text-[var(--muted)]">
-              {preview.filename} · {preview.row_count} rows · auto-mapped where possible
+              {preview.filename} · {preview.row_count} rows
+              {preview.mapping_confidence != null
+                ? ` · RAG confidence ${(preview.mapping_confidence * 100).toFixed(0)}%`
+                : ' · auto-mapped where possible'}
+              {preview.needs_mapping_ui === false
+                ? ' · high confidence (still editable)'
+                : ' · please confirm mapping'}
             </p>
+            {preview.pipeline_stages?.length ? (
+              <ol className="mt-2 flex flex-wrap gap-1 text-[10px] font-semibold uppercase">
+                {preview.pipeline_stages.map((s) => {
+                  const stages = preview.pipeline_stages || []
+                  const cur = preview.pipeline_stage || ''
+                  const active =
+                    s === cur || (cur ? stages.indexOf(s) <= stages.indexOf(cur) : false)
+                  return (
+                    <li
+                      key={s}
+                      className={
+                        active
+                          ? 'rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[var(--accent)]'
+                          : 'rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-[var(--muted)]'
+                      }
+                    >
+                      {s.replaceAll('_', ' ')}
+                    </li>
+                  )
+                })}
+              </ol>
+            ) : null}
           </div>
           <div className="grid gap-3 p-4 sm:grid-cols-2">
             {fields.map((f) => (
@@ -312,8 +344,8 @@ export function IndmoneyImportPage() {
             csv_import.
           </p>
           <div className="mt-5 flex justify-center gap-2">
-            <Link to="/investments" className="btn btn-primary">
-              View investments
+            <Link to="/wealth" className="btn btn-primary">
+              View wealth
             </Link>
             <button
               type="button"
