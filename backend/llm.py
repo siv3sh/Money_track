@@ -12,6 +12,8 @@ import httpx
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# Advisor chat can use a larger local model without slowing import/parser/RAG
+OLLAMA_CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "llama3:8b")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # auto | ollama | gemini
@@ -37,6 +39,9 @@ class LLMProvider(ABC):
 class OllamaProvider(LLMProvider):
     name = "ollama"
 
+    def __init__(self, model: str | None = None) -> None:
+        self.model = (model or OLLAMA_MODEL).strip() or OLLAMA_MODEL
+
     def available(self) -> bool:
         try:
             with httpx.Client(timeout=2.0) as client:
@@ -45,9 +50,24 @@ class OllamaProvider(LLMProvider):
         except Exception:
             return False
 
+    def has_model(self, model: str | None = None) -> bool:
+        target = (model or self.model).strip()
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                r = client.get(f"{OLLAMA_BASE_URL}/api/tags")
+                if r.status_code != 200:
+                    return False
+                names = [str(m.get("name") or "") for m in (r.json().get("models") or [])]
+                if target in names:
+                    return True
+                # "llama3:8b" matches installed "llama3:8b" or "llama3:8b-instruct" etc.
+                return any(n == target or n.startswith(f"{target}-") for n in names)
+        except Exception:
+            return False
+
     def complete(self, system: str, user: str, *, temperature: float = 0.2) -> str:
         payload = {
-            "model": OLLAMA_MODEL,
+            "model": self.model,
             "stream": False,
             "options": {"temperature": temperature},
             "messages": [
@@ -56,13 +76,13 @@ class OllamaProvider(LLMProvider):
             ],
         }
         try:
-            with httpx.Client(timeout=120.0) as client:
+            with httpx.Client(timeout=180.0) as client:
                 r = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
                 if r.status_code == 404:
                     detail = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else r.text
                     raise LLMError(
-                        f"Ollama model '{OLLAMA_MODEL}' not found ({detail}). "
-                        f"Run `ollama pull {OLLAMA_MODEL}` or set OLLAMA_MODEL to an installed model."
+                        f"Ollama model '{self.model}' not found ({detail}). "
+                        f"Run `ollama pull {self.model}` or set OLLAMA_MODEL / OLLAMA_CHAT_MODEL."
                     )
                 r.raise_for_status()
                 data = r.json()
@@ -111,10 +131,17 @@ class GeminiProvider(LLMProvider):
             raise LLMError(f"Gemini failed: {exc}") from exc
 
 
-def get_provider(prefer: str | None = None) -> LLMProvider:
-    """Resolve provider from prefer / LLM_PROVIDER env."""
+def get_provider(
+    prefer: str | None = None,
+    *,
+    ollama_model: str | None = None,
+) -> LLMProvider:
+    """Resolve provider from prefer / LLM_PROVIDER env.
+
+    ollama_model: optional override (e.g. OLLAMA_CHAT_MODEL for advisor chat).
+    """
     choice = (prefer or LLM_PROVIDER or "auto").strip().lower()
-    ollama = OllamaProvider()
+    ollama = OllamaProvider(model=ollama_model)
     gemini = GeminiProvider()
 
     if choice == "ollama":
@@ -136,8 +163,14 @@ def get_provider(prefer: str | None = None) -> LLMProvider:
     )
 
 
+def get_chat_provider(prefer: str | None = None) -> LLMProvider:
+    """Provider for advisor chat — larger local model by default."""
+    return get_provider(prefer, ollama_model=OLLAMA_CHAT_MODEL)
+
+
 def provider_status() -> dict[str, Any]:
     ollama = OllamaProvider()
+    chat_ollama = OllamaProvider(model=OLLAMA_CHAT_MODEL)
     gemini = GeminiProvider()
     active: Optional[str] = None
     try:
@@ -151,6 +184,8 @@ def provider_status() -> dict[str, Any]:
             "available": ollama.available(),
             "base_url": OLLAMA_BASE_URL,
             "model": OLLAMA_MODEL,
+            "chat_model": OLLAMA_CHAT_MODEL,
+            "chat_model_installed": chat_ollama.has_model(OLLAMA_CHAT_MODEL),
         },
         "gemini": {
             "available": gemini.available(),

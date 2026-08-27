@@ -436,6 +436,134 @@ def _is_protected_merchant(name: str) -> bool:
     return any(p in lower for p in _PROTECTED_CUT_MERCHANTS)
 
 
+def format_name_list(names: list[str], *, max_items: int = 2, fallback: str = "") -> str:
+    cleaned = [str(n).strip() for n in names if n and str(n).strip()][:max_items]
+    if not cleaned:
+        return fallback
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} and {cleaned[1]}"
+    return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
+
+
+def top_lifestyle_merchant_names(
+    analytics: dict[str, Any] | None,
+    *,
+    limit: int = 2,
+    exclude_protected: bool = True,
+) -> list[str]:
+    out: list[str] = []
+    for row in (analytics or {}).get("merchants") or []:
+        name = str(row.get("merchant") or row.get("name") or "").strip()
+        if not name:
+            continue
+        if exclude_protected and _is_protected_merchant(name):
+            continue
+        out.append(name)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def top_discretionary_category_labels(
+    analytics: dict[str, Any] | None,
+    *,
+    limit: int = 2,
+) -> list[str]:
+    disc = {"Shopping", "Entertainment", "Subscriptions", "Other"}
+    rows = (analytics or {}).get("by_category_lifestyle") or (analytics or {}).get("by_category") or []
+    out: list[str] = []
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        if name in disc and float(row.get("debit") or 0) > 0:
+            out.append(name)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def temptation_label(
+    *,
+    profile: dict[str, Any] | None = None,
+    analytics: dict[str, Any] | None = None,
+    merchants: list[dict[str, Any]] | None = None,
+    transactions: Collection | None = None,
+    category_map: dict[str, str] | None = None,
+) -> str:
+    """Soft spot if trained; else top discretionary merchant/category from live data."""
+    soft = (profile or {}).get("soft_spot")
+    if soft:
+        return str(soft).strip()
+    if merchants:
+        for m in merchants:
+            if not m.get("protected"):
+                name = str(m.get("name") or "").strip()
+                if name:
+                    return name
+    if transactions is not None:
+        now = _now()
+        start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        live = load_discretionary_merchants(
+            transactions,
+            start,
+            now,
+            category_map=category_map or DEFAULT_CATEGORY_BUCKETS,
+            limit=4,
+        )
+        for m in live:
+            if not m.get("protected"):
+                name = str(m.get("name") or "").strip()
+                if name:
+                    return name
+    merch = top_lifestyle_merchant_names(analytics, limit=1)
+    if merch:
+        return merch[0]
+    cats = top_discretionary_category_labels(analytics, limit=1)
+    if cats:
+        return cats[0]
+    return "impulse spend"
+
+
+def build_calibration_personalization_note(
+    merchants: list[dict[str, Any]] | None,
+) -> str:
+    cut_names = [str(m["name"]) for m in (merchants or []) if not m.get("protected")][:2]
+    prot_names = [str(m["name"]) for m in (merchants or []) if m.get("protected")][:2]
+    disc_cats = sorted(
+        {str(m.get("category") or "Shopping") for m in (merchants or []) if not m.get("protected")}
+    )[:2]
+    disc_part = format_name_list(disc_cats, fallback="Discretionary")
+    cut_part = format_name_list(cut_names, fallback="discretionary one-offs")
+    prot_part = format_name_list(prot_names, fallback="SIPs and fixed subscriptions")
+    return (
+        f"Personal plan from your spend: lean Needs, step-up Investments, "
+        f"tighter {disc_part} ({cut_part}), Buffer funds goals — {prot_part} protected."
+    )
+
+
+def build_merchant_personalization_note(
+    merchants: list[dict[str, Any]] | None,
+) -> str:
+    cut_names = [str(m["name"]) for m in (merchants or []) if not m.get("protected")][:2]
+    prot_names = [str(m["name"]) for m in (merchants or []) if m.get("protected")][:2]
+    cut_part = format_name_list(cut_names, fallback="discretionary merchants")
+    prot_part = format_name_list(prot_names, fallback="SIPs on payday")
+    return f"Tuned to your merchants — trim {cut_part} first; keep {prot_part} protected."
+
+
+def build_cut_first_rule(merchants: list[dict[str, Any]] | None) -> str:
+    prot = format_name_list(
+        [str(m["name"]) for m in (merchants or []) if m.get("protected")][:2],
+        fallback="SIPs",
+    )
+    cut = format_name_list(
+        [str(m["name"]) for m in (merchants or []) if not m.get("protected")][:1],
+        fallback="discretionary one-offs",
+    )
+    return f"{prot} stay — cut {cut} first."
+
+
 def load_discretionary_merchants(
     transactions: Collection,
     start: datetime,
@@ -725,7 +853,7 @@ def build_advisor_voice(
     Mood prefers deterministic advisor_severity when provided.
     """
     name = _name(profile)
-    tone = str(profile.get("coach_tone") or "strict friend").lower()
+    tone = str(profile.get("coach_tone") or "").lower()
     soft = profile.get("soft_spot")
     deal = profile.get("dealbreaker")
     why = profile.get("why_money")
@@ -813,10 +941,11 @@ def build_advisor_voice(
 
     # Strict line
     if mood in {"strict", "firm"}:
+        drag = strict_on or soft or top or "discretionary spend"
         if "no-nonsense" in tone or "strict" in tone:
             strict_line = (
-                f"No debate: don’t open shopping apps until the salary-day split is done. "
-                f"If {strict_on or soft or 'Shopping'} calls, you hang up."
+                f"No debate: finish the salary-day split before chasing {drag}. "
+                f"If {drag} calls, you hang up."
             )
         else:
             strict_line = (
@@ -917,7 +1046,7 @@ def build_advisor(
     )
     payday = build_salary_day_allocation(framework, goals=goals, liquid=liquid)
 
-    shop = next((m for m in (merchants or []) if "oxygen" in str(m.get("name") or "").lower()), None)
+    shop = next((m for m in (merchants or []) if not m.get("protected")), None)
     soft = str(profile.get("soft_spot") or "").lower()
 
     methods_out = []
@@ -943,15 +1072,22 @@ def build_advisor(
                     f"Discretionary is ₹{over:,.0f} over — {shop['name']} alone is "
                     f"₹{float(shop['amount']):,.0f}. That’s the main goal blocker."
                 )
-                if soft and ("shop" in soft or "oxygen" in soft):
-                    verdict += f" You warned me about “{profile.get('soft_spot')}” — this is it."
+                if soft and shop:
+                    sn = str(shop.get("name") or "").lower()
+                    sc = str(shop.get("category") or "").lower()
+                    if soft in sn or sn in soft or soft in sc:
+                        verdict += f" You warned me about “{profile.get('soft_spot')}” — this is it."
             else:
                 verdict = f"Discretionary is ₹{over:,.0f} over — that’s why goal surplus is blocked."
         elif check == "lifestyle_vs_income":
             ok = lifestyle_pct <= 70
+            leak_cats = sorted(
+                {str(m.get("category") or "") for m in (merchants or []) if not m.get("protected")}
+            )[:2]
+            leak_part = format_name_list(leak_cats, fallback="discretionary categories")
             verdict = (
                 f"Needs + Discretionary are ~{lifestyle_pct}% of income — "
-                f"structurally fine; the leak is Shopping/Subs mix, not rent-level Needs."
+                f"structurally fine; the leak is {leak_part}, not rent-level Needs."
             )
         elif check == "goals_cash":
             ok = True
@@ -967,9 +1103,10 @@ def build_advisor(
                 verdict = "Add a goal and we’ll show the EMI interest you’d avoid by saving first."
         else:  # auto_allocate
             ok = float(framework.get("available_surplus") or 0) > 0 or float(framework.get("disc_overshoot") or 0) <= 0
+            drag = temptation_label(profile=profile, merchants=merchants)
             verdict = (
-                "On IDEA ELAN payday: Invest → Buffer → goal pot → then food/shopping. "
-                "Don’t open shopping apps before the split."
+                f"On payday: Invest → Buffer → goal pot → then {drag}. "
+                "Finish the split before discretionary spend."
             )
         methods_out.append(
             {
@@ -1076,7 +1213,7 @@ def build_advisor(
             "Never reduce the Investments bucket to fund a want.",
             "Goals only draw from Discretionary + Buffer room.",
             "On salary day: Invest → Buffer → Goals → then spend.",
-            "Cursor / SIPs stay — cut shopping one-offs first.",
+            build_cut_first_rule(merchants),
         ],
         "personalization_note": personalization_note,
         "your_spend": {
@@ -1650,6 +1787,14 @@ def build_planning_summary(
     # First pass framework (for calibration)
     base_framework = build_budget_framework(analytics, settings)
     personalization_note = settings.get("personalization_note")
+
+    merchants = load_discretionary_merchants(
+        transactions,
+        start,
+        end,
+        category_map=settings["category_buckets"],
+    )
+
     if apply_personal_calibration and not settings.get("personal_plan_locked"):
         doc = settings_col.find_one({"_id": SETTINGS_ID}) or {}
         # Calibrate once from live spend unless user locked percentages
@@ -1659,11 +1804,7 @@ def build_planning_summary(
                 settings_col,
                 bucket_pcts=calibrated,
             )
-            note = (
-                "Personal plan from your spend: lean Needs, step-up Investments, "
-                "tighter Discretionary (Shopping/Oxygen), Buffer funds goals — "
-                "Cursor/SIPs protected."
-            )
+            note = build_calibration_personalization_note(merchants)
             settings_col.update_one(
                 {"_id": SETTINGS_ID},
                 {"$set": {"personalization_note": note, "calibrated_at": _now()}},
@@ -1674,22 +1815,13 @@ def build_planning_summary(
         elif not personalization_note:
             personalization_note = doc.get("personalization_note")
 
-    merchants = load_discretionary_merchants(
-        transactions,
-        start,
-        end,
-        category_map=settings["category_buckets"],
-    )
     packed = list_goals_enriched(
         goals_col,
         analytics=analytics,
         settings=settings,
         merchants=merchants,
         personalization_note=personalization_note
-        or (
-            "Tuned to your merchants — Oxygen/Shopping first cuts, Cursor kept, "
-            "INDmoney SIPs on payday."
-        ),
+        or build_merchant_personalization_note(merchants),
         learned_facts=learned_facts,
         persona_settings=persona_settings if persona_settings is not None else settings_col,
     )

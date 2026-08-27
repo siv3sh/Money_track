@@ -15,6 +15,8 @@ from pymongo.collection import Collection
 from learned_facts import (
     advisor_profile_from_facts,
     facts_for_ai_context,
+    persona_is_trained,
+    trained_profile_fields,
 )
 
 Severity = Literal["informational", "concerned", "strict"]
@@ -316,15 +318,25 @@ def _tone_instructions(level: Severity) -> str:
 
 
 def _profile_grounding_block(profile: dict[str, Any]) -> list[str]:
-    """Same trained soul as Money Advisor page — injected into every LLM system prompt."""
-    name = profile.get("preferred_name") or "the user"
+    """Inject trained persona only when the user saved training answers."""
+    name = profile.get("preferred_name") or "you"
+    saved = trained_profile_fields(profile)
+
+    if not persona_is_trained(profile):
+        return [
+            "PERSONA:",
+            f"Address them as '{name}'.",
+            "Neutral, data-grounded money coach — cite UserState numbers only.",
+            "Do not assume a strict-friend, hype-coach, or casual-buddy voice until coach_tone is in UserState profile.",
+        ]
+
     lines = [
         "IDENTITY:",
-        f"You ARE their ongoing Money Advisor (same voice as the Advisor page). Address them as '{name}'.",
-        "You already trained on their answers — speak from that relationship, not as a fresh chatbot.",
-        "Reuse their words for soft spots, dealbreakers, why-money, motivation, and pride when relevant.",
-        "Match their preferred coach tone when writing.",
+        f"You ARE their ongoing Money Advisor. Address them as '{name}'.",
+        "Use their saved training answers from UserState profile — not a generic chatbot.",
     ]
+    if saved.get("coach_tone"):
+        lines.append(f"Match their coach tone: {saved['coach_tone']}.")
     bits: list[str] = []
     for key, label in (
         ("preferred_name", "Name"),
@@ -336,15 +348,54 @@ def _profile_grounding_block(profile: dict[str, Any]) -> list[str]:
         ("strict_on", "Be strict about"),
         ("motivation", "Motivation / goal feeling"),
     ):
-        val = profile.get(key)
+        val = saved.get(key)
         if val:
             bits.append(f"- {label}: {val}")
     if bits:
-        lines.extend(["", "TRAINED PROFILE (must use — do not invent a different persona):", *bits])
+        lines.extend(["", "TRAINED PROFILE (from their answers — do not invent):", *bits])
     completeness = profile.get("completeness")
     if completeness is not None:
         lines.append(f"- Training completeness: {completeness}%")
     return lines
+
+
+def build_chat_system_prompt(
+    *,
+    learned_facts: Collection | None = None,
+    severity: dict[str, Any] | None = None,
+) -> str:
+    """Slim system prompt for floating advisor chat — avoids full persona file + fact dump."""
+    profile = advisor_profile_from_facts(learned_facts)
+    sev = severity or {
+        "level": "informational",
+        "context_line": "tone: informational",
+        "reasons": [],
+    }
+    level: Severity = sev.get("level") or "informational"  # type: ignore[assignment]
+    name = profile.get("preferred_name") or "you"
+
+    parts = [
+        f"You are {name}'s Money Advisor (INR, India). Second person; 2–5 sentences unless they ask for detail.",
+        _tone_instructions(level),
+        sev.get("context_line") or f"tone: {level}",
+        "",
+        "RULES:",
+        "- Answer only what the user actually asked. Do not proactively bring up other "
+        "categories, subscriptions, or alerts from UserState unless the user's question "
+        "relates to them or explicitly asks for a broader check-in.",
+        "- Use ONLY UserState JSON and conversation history for numbers and facts.",
+        "- If UserState lacks what you need (specific txn, merchant, date, category, balance), "
+        "say clearly what is missing — never invent amounts, trends, or merchant names.",
+        "- Reuse profile, facts, and memory from UserState; never re-ask answered questions.",
+        "- Protect Investments/SIPs; do not suggest cutting them for discretionary spend.",
+        "- No OTP, passwords, or full account numbers.",
+        "- One concrete next step when tone is concerned or strict — and only if it relates "
+        "to the user's question.",
+    ]
+    profile_bits = _profile_grounding_block(profile)
+    if profile_bits:
+        parts.extend(["", *profile_bits])
+    return "\n".join(parts).strip()
 
 
 def build_persona_system_prompt(

@@ -978,6 +978,7 @@ async def receive_sms(request: Request):
             sessions=advisor_chat_sessions,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
+            transactions=transactions,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: advisor live nudge skipped: {exc}")

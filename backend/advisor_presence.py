@@ -21,15 +21,16 @@ from advisor_memory import (
     open_asks,
 )
 from advisor_persona import (
-    build_persona_system_prompt,
+    build_chat_system_prompt,
     get_advisor_persona_settings,
     severity_from_analytics_bundle,
     system_briefing,
 )
-from ai_insights import build_finance_context, _compact
-from learned_facts import advisor_profile_from_facts, facts_for_ai_context, upsert_fact
-from llm import LLMError, get_provider
+from ai_insights import _compact
+from learned_facts import advisor_profile_from_facts, facts_for_ai_context, trained_profile_fields, upsert_fact
+from llm import LLMError, get_chat_provider
 from merchant_label import is_salary_source
+from planning import temptation_label
 
 # Lifestyle spend worth a "why this much?" probe
 SPEND_PROBE_INR = 800.0
@@ -39,21 +40,111 @@ MONTH_START_DAYS = 3
 SALARY_WINDOW_DAYS = 10
 
 
-CHAT_SYSTEM = (
-    "Task: converse as the user's ongoing Money Advisor — a real relationship, not a one-shot bot. "
-    "Use second person. Keep replies to 2–5 sentences unless they ask for detail. "
-    "Cite only numbers from the structured context. "
-    "You remember what they told you (learned facts + advisor memory). Bring it up later naturally — "
-    "e.g. if they said a credit was family and another similar one arrives, reference that. "
-    "Never re-ask a question they already answered. "
-    "When they explain a credit or spend in free text, acknowledge specifically and remember it. "
-    "When salary just landed: be genuinely happy, then steer them to the salary-day split "
-    "(Invest → Buffer → Goals → play). "
-    "When they overspend: ask why — curious, not shaming — and tie it to their stated goal. "
-    "When an unexplained credit shows up and they haven't answered yet: ask where it came from. "
-    "At month start: be excited about fresh plans. "
-    "Chat like a sharp friend who tracks their money — warm, specific, brief. "
-    "End with one concrete next action when tone is concerned/strict."
+def _message_excluded_from_llm(msg: dict[str, Any]) -> bool:
+    """Template nudges / acks stay in the widget transcript but must not steer the LLM."""
+    meta = msg.get("meta") or {}
+    if meta.get("exclude_from_llm"):
+        return True
+    # Legacy rows written before exclude_from_llm existed
+    if meta.get("nudge") or meta.get("nudge_ack"):
+        return True
+    return False
+
+
+def _llm_history_lines(messages: list[dict[str, Any]], *, limit: int = 6) -> list[str]:
+    included = [m for m in messages if not _message_excluded_from_llm(m)]
+    return [
+        f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
+        for m in included[-limit:]
+    ]
+
+
+def build_compact_chat_user_state(
+    analytics: dict[str, Any],
+    *,
+    severity: dict[str, Any],
+    profile: dict[str, Any],
+    goals: list[dict[str, Any]],
+    memory_lines: list[str],
+    learned_facts: Collection | None,
+    just_remembered: str | None = None,
+) -> dict[str, Any]:
+    """Compact UserState for advisor chat — aggregates only, capped lists."""
+    o = analytics.get("overview") or {}
+    inv = analytics.get("investments") or {}
+    mom = analytics.get("mom") or {}
+
+    profile_bits = trained_profile_fields(profile)
+
+    facts: list[dict[str, str]] = []
+    if learned_facts is not None:
+        for row in facts_for_ai_context(learned_facts)[:8]:
+            if row.get("type") == "advisor_profile":
+                continue
+            facts.append(
+                {
+                    "type": str(row.get("type") or ""),
+                    "summary": str(row.get("summary") or ""),
+                }
+            )
+
+    totals = {
+        k: o[k]
+        for k in (
+            "total_debit",
+            "total_credit",
+            "net",
+            "lifestyle_spend",
+            "bank_upi_spend",
+            "credit_card_spend",
+            "salary_total",
+            "other_income_total",
+            "transfers_debit",
+            "investments_debit",
+            "lifestyle_to_salary",
+            "net_worth_estimate",
+            "liquid_total",
+            "liabilities_total",
+        )
+        if o.get(k) is not None
+    }
+
+    state: dict[str, Any] = {
+        "period": analytics.get("range"),
+        "totals": totals,
+        "mom": {k: mom[k] for k in ("net_pct", "debit_pct", "credit_pct") if mom.get(k) is not None},
+        "top_categories": [
+            {"name": r["name"], "debit": r["debit"]}
+            for r in (analytics.get("by_category_lifestyle") or analytics.get("by_category") or [])[:5]
+            if float(r.get("debit") or 0) > 0
+        ],
+        "top_merchants": [
+            {"merchant": m["merchant"], "amount": m["amount"]}
+            for m in (analytics.get("merchants") or [])[:5]
+        ],
+        "investments": {
+            k: inv.get(k) for k in ("total_invested", "total_current", "pnl") if inv.get(k) is not None
+        },
+        "goals": goals[:3],
+        "severity": {
+            "level": severity.get("level"),
+            "reasons": (severity.get("reasons") or [])[:4],
+        },
+        "profile": profile_bits,
+        "facts": facts,
+        "memory": memory_lines[:8],
+        "just_remembered": just_remembered,
+        "alerts": [
+            {"type": a.get("type"), "title": a.get("title")}
+            for a in (analytics.get("alerts") or [])[:4]
+        ],
+    }
+    return {k: v for k, v in state.items() if v not in (None, [], {})}
+
+
+CHAT_USER_SUFFIX = (
+    "Answer using UserState and conversation only. "
+    "If the data is not there, say what is missing instead of guessing."
 )
 
 DecisionAction = Literal[
@@ -258,7 +349,7 @@ def answer_lifecycle_nudge(
             session["session_key"],
             role="advisor",
             content=ack,
-            meta={"nudge_ack": True, "kind": kind_n, "remembered": True},
+            meta={"nudge_ack": True, "kind": kind_n, "remembered": True, "exclude_from_llm": True},
         )
 
     return {
@@ -494,27 +585,17 @@ def chat(
                 profile=profile,
             )
 
-    mem_lines = memories_for_prompt(memories, limit=16)
-    system = build_persona_system_prompt(
-        CHAT_SYSTEM,
-        settings=settings,
+    mem_lines = memories_for_prompt(memories, limit=8)
+    system = build_chat_system_prompt(
         learned_facts=learned_facts,
         severity=severity,
-        extra_grounding=(
-            "Advisor memory (continuity — reference when relevant, never re-ask answered items):\n"
-            + "\n".join(mem_lines)
-            if mem_lines
-            else None
-        ),
     )
 
     history = session.get("messages") or []
-    hist_txt = "\n".join(
-        f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in history[-20:]
-    )
+    hist_txt = "\n".join(_llm_history_lines(history, limit=6))
     goals_slim = []
     if goals_col is not None:
-        for g in goals_col.find({"status": "active"}).sort("priority", 1).limit(8):
+        for g in goals_col.find({"status": "active"}).sort("priority", 1).limit(3):
             target = float(g.get("manual_price") or g.get("target_price") or 0)
             saved = float(g.get("saved_amount") or 0)
             goals_slim.append(
@@ -523,36 +604,34 @@ def chat(
                     "saved": saved,
                     "target": target,
                     "progress_pct": round(min(100.0, saved / target * 100), 1) if target else 0,
-                    "status_line": (g.get("funding") or {}).get("status_line"),
                 }
             )
 
-    context = {
-        "finance": build_finance_context(analytics),
-        "goals": goals_slim,
-        "advisor_severity": severity,
-        "briefing": analytics.get("advisor"),
-        "learned_about_you": facts_for_ai_context(learned_facts)[:20] if learned_facts is not None else [],
-        "advisor_memory": mem_lines,
-        "just_remembered": (captured or {}).get("remembered"),
-    }
+    user_state = build_compact_chat_user_state(
+        analytics,
+        severity=severity,
+        profile=profile,
+        goals=goals_slim,
+        memory_lines=mem_lines,
+        learned_facts=learned_facts,
+        just_remembered=(captured or {}).get("remembered"),
+    )
     remember_bit = ""
     if captured:
         remember_bit = (
-            f"\nYou just saved this for future chats: {captured.get('remembered')}. "
-            "Acknowledge briefly and continue like a human who heard them.\n"
+            f"\nYou just saved: {captured.get('remembered')}. Acknowledge briefly.\n"
         )
     user = (
-        f"Conversation so far:\n{hist_txt or '(new session)'}\n\n"
-        f"Structured context (JSON):\n{_compact(context)}\n\n"
+        f"Conversation (last 6 turns):\n{hist_txt or '(new session)'}\n\n"
+        f"UserState (JSON):\n{_compact(user_state)}\n\n"
         f"User message: {question.strip()}\n"
-        f"{remember_bit}\n"
-        "Reply in persona. Do not invent numbers. Reference past answers when relevant."
+        f"{remember_bit}"
+        f"{CHAT_USER_SUFFIX}"
     )
 
     append_session_message(sessions, session["session_key"], role="user", content=question.strip())
-    provider = get_provider(provider_name)
-    answer = provider.complete(system, user, temperature=0.45)
+    provider = get_chat_provider(provider_name)
+    answer = provider.complete(system, user, temperature=0.3)
     session = append_session_message(
         sessions,
         session["session_key"],
@@ -561,12 +640,14 @@ def chat(
         meta={
             "severity": severity.get("level"),
             "provider": provider.name,
+            "model": getattr(provider, "model", None),
             "captured_nudge": (captured or {}).get("nudge_id"),
         },
     )
     return {
         "answer": answer,
         "provider": provider.name,
+        "model": getattr(provider, "model", None),
         "session": session,
         "advisor_severity": severity,
         "briefing": analytics.get("advisor"),
@@ -845,11 +926,16 @@ def detect_money_mood(
         amt = float((recent_salary or {}).get("amount") or salary_total or 0)
         # Prefer salary mood over generic month_start once money is in
         mood = "salary_happy"
+        drag = temptation_label(
+            profile=profile,
+            analytics=analytics,
+            transactions=transactions,
+        )
         headline = (
             f"{name}!!! Salary's in"
             + (f" — ₹{amt:,.0f}" if amt else "")
-            + ". Love that for you. Now the fun part: pay yourself first before Oxygen calls. "
-            f"Split today → SIPs, buffer, then {goal_name}. Shopping can wait an hour."
+            + f". Love that for you. Pay yourself first before {drag} tempts you. "
+            f"Split today → SIPs, buffer, then {goal_name}."
         )
         signals["salary"] = {"amount": amt, "merchant": (recent_salary or {}).get("merchant")}
 
@@ -877,7 +963,11 @@ def build_lifecycle_nudges(
     """Month-start excitement, salary cheer, spend 'why?', credit 'where from?'."""
     profile = advisor_profile_from_facts(learned_facts)
     name = profile.get("preferred_name") or "you"
-    soft = profile.get("soft_spot") or "Shopping"
+    soft = profile.get("soft_spot") or temptation_label(
+        profile=profile,
+        analytics=analytics,
+        transactions=transactions,
+    )
     mood = detect_money_mood(
         analytics=analytics,
         transactions=transactions,
@@ -1078,6 +1168,7 @@ def on_new_transaction(
     sessions: Collection | None = None,
     learned_facts: Collection | None = None,
     goals_col: Collection | None = None,
+    transactions: Collection | None = None,
 ) -> dict[str, Any] | None:
     """Realtime advisor reaction when an SMS/txn is stored."""
     profile = advisor_profile_from_facts(learned_facts)
@@ -1098,10 +1189,11 @@ def on_new_transaction(
 
     if typ == "credit" and is_salary_source(txn.get("merchant"), txn.get("raw_text"), cat):
         kind = "salary_day"
+        drag = temptation_label(profile=profile, transactions=transactions)
         message = (
             f"{name}!!! Salary hit — ₹{amt:,.0f}. I'm genuinely happy for you. "
             f"Do the split now: Invest → Buffer → {motivation} → then play. "
-            "Don't open shopping apps for one hour."
+            f"Hold off on {drag} until the split is done."
         )
         append_memory(
             memories,
@@ -1197,7 +1289,7 @@ def on_new_transaction(
             session["session_key"],
             role="advisor",
             content=message,
-            meta={"kind": kind, "nudge": True},
+            meta={"kind": kind, "nudge": True, "exclude_from_llm": True},
         )
     return nudge
 

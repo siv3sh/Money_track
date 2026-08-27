@@ -252,7 +252,7 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
         "prompt": "How do you want me to talk to you?",
         "placeholder": "strict friend / warm coach / no-nonsense",
         "options": ["strict friend", "warm coach", "no-nonsense"],
-        "hint": "Default is strict friend — caring, but I won’t sugarcoat overspending.",
+        "hint": "Optional — pick how you want me to talk to you once you start training.",
     },
     {
         "key": "pride",
@@ -278,11 +278,11 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
 def advisor_profile_from_facts(facts: Collection | None) -> dict[str, Any]:
     """Persona + training answers for the Money Advisor voice."""
     out: dict[str, Any] = {
-        "preferred_name": "you",
+        "preferred_name": None,
         "soft_spot": None,
         "dealbreaker": None,
         "why_money": None,
-        "coach_tone": "strict friend",
+        "coach_tone": None,
         "pride": None,
         "strict_on": None,
         "motivation": None,
@@ -302,9 +302,23 @@ def advisor_profile_from_facts(facts: Collection | None) -> dict[str, Any]:
         out[key] = str(val).strip()
         trained.append(key)
     out["trained_keys"] = sorted(set(trained))
-    core = [k for k in ADVISOR_TRAINING_KEYS if out.get(k)]
+    core = [k for k in ADVISOR_TRAINING_KEYS if k in out["trained_keys"]]
     out["completeness"] = round(len(core) / max(len(ADVISOR_TRAINING_KEYS), 1) * 100, 1)
     return out
+
+
+def trained_profile_fields(profile: dict[str, Any]) -> dict[str, Any]:
+    """Only advisor_profile keys the user explicitly saved — no baked-in defaults."""
+    keys = set(profile.get("trained_keys") or [])
+    return {
+        k: profile[k]
+        for k in ADVISOR_TRAINING_KEYS
+        if k in keys and profile.get(k) not in (None, "")
+    }
+
+
+def persona_is_trained(profile: dict[str, Any], *, min_keys: int = 1) -> bool:
+    return len(profile.get("trained_keys") or []) >= min_keys
 
 
 def advisor_training_status(facts: Collection | None) -> dict[str, Any]:
