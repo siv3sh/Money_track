@@ -7,6 +7,7 @@ import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { LedgerAmount } from '../components/LedgerAmount'
 import { TransactionRow } from '../components/TransactionTable'
 import { formatDate, formatINR, hasClockTime, hourInIST, nextSalaryPayday, toInputDate } from '../lib/format'
+import { resolveSalarySourceLabel } from '../lib/salarySource'
 import { DEFAULT_CATEGORIES, type AnalyticsPayload, type Transaction } from '../types'
 
 type Period = 'day' | 'week' | 'month' | 'year'
@@ -582,17 +583,16 @@ export function DashboardPage() {
               (typeof analytics?.income_profile?.expected_net_monthly === 'number'
                 ? analytics.income_profile.expected_net_monthly
                 : null)
-            const employer =
-              analytics?.overview?.employer ||
-              (typeof analytics?.income_profile?.employer === 'string'
-                ? analytics.income_profile.employer
-                : 'IDEA ELAN')
+            const employer = resolveSalarySourceLabel(analytics)
             const when =
               pay.isToday
                 ? 'Expected today'
                 : pay.daysUntil === 1
                   ? 'Tomorrow'
                   : `In ${pay.daysUntil} days`
+            const paydayNote = pay.rolledFromWeekend
+              ? '1st was a weekend → next business day'
+              : 'Usually 1st (or next business day if Sat/Sun)'
             return (
               <div className="elev-sheet mb-5 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div className="flex min-w-0 gap-3">
@@ -609,10 +609,7 @@ export function DashboardPage() {
                       <span className="ml-2 text-sm font-medium text-[var(--credit)]">{when}</span>
                     </p>
                     <p className="mt-0.5 text-xs text-[var(--muted)]">
-                      {employer}
-                      {pay.rolledFromWeekend
-                        ? ' · 1st was a weekend → next business day'
-                        : ' · Usually 1st (or next business day if Sat/Sun)'}
+                      {[employer, paydayNote].filter(Boolean).join(' · ')}
                     </p>
                   </div>
                 </div>

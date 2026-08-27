@@ -11,6 +11,7 @@ import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
 import { PeriodCompare } from '../components/PeriodCompare'
 import { formatINR } from '../lib/format'
+import { resolveSalarySourceLabel } from '../lib/salarySource'
 import { transactionsHref } from '../lib/transactionsLink'
 
 export function CashFlowPage() {
@@ -21,11 +22,7 @@ export function CashFlowPage() {
 
   const goMonth = (month: string) => navigate(transactionsHref({ month }))
 
-  const salarySource =
-    (typeof o?.employer === 'string' && o.employer.trim()) ||
-    data?.income_sources?.find((r) => r.is_salary)?.name ||
-    data?.income_sources?.[0]?.name ||
-    undefined
+  const salarySource = resolveSalarySourceLabel(data)
 
   return (
     <div className="fade-in">
