@@ -34,9 +34,9 @@ export function FilterBar({ showBanks = true }: { showBanks?: boolean }) {
   )
 
   return (
-    <div className="filter-bar sticky top-0 z-20 -mx-1 mb-5 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] px-1 py-3 backdrop-blur-md">
+    <div className="filter-bar sticky top-0 z-20 -mx-1 mb-5 border-b border-[var(--border)] bg-[var(--canvas)] px-1 py-3">
       <div className="flex flex-wrap items-end gap-2">
-        <div className="flex flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
+        <div className="flex flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--sheet)] p-1 shadow-[var(--elev-1)]">
           {PRESETS.map((p) => (
             <button
               key={p.id}
@@ -86,7 +86,7 @@ export function FilterBar({ showBanks = true }: { showBanks?: boolean }) {
             type="button"
             className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
               banks.length === 0
-                ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                ? 'border-[var(--sapphire)] bg-[var(--accent-soft)] text-[var(--sapphire)]'
                 : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-2)]'
             }`}
             onClick={clearBanks}
@@ -101,7 +101,7 @@ export function FilterBar({ showBanks = true }: { showBanks?: boolean }) {
                 type="button"
                 className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
                   active
-                    ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                    ? 'border-[var(--sapphire)] bg-[var(--accent-soft)] text-[var(--sapphire)]'
                     : 'border-[var(--border)] text-[var(--muted)] hover:bg-[var(--surface-2)]'
                 }`}
                 onClick={() => toggleBank(bank)}

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 import { pctChangeLabel } from '../lib/format'
+import { LedgerAmount, type LedgerRail } from './LedgerAmount'
 
 export function PageHeader({
   title,
@@ -15,7 +16,7 @@ export function PageHeader({
   return (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-[1.75rem]">{title}</h1>
+        <h1 className="display text-2xl font-semibold tracking-tight sm:text-[1.75rem]">{title}</h1>
         {description ? (
           <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">{description}</p>
         ) : null}
@@ -39,7 +40,7 @@ export function ChartCard({
   action?: ReactNode
 }) {
   return (
-    <section className={`panel flex flex-col overflow-hidden ${className}`}>
+    <section className={`elev-sheet flex flex-col overflow-hidden ${className}`}>
       <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
         <div>
           <h3 className="text-sm font-semibold text-[var(--text)]">{title}</h3>
@@ -52,11 +53,21 @@ export function ChartCard({
   )
 }
 
+function toneToRail(tone: 'neutral' | 'credit' | 'debit', rail?: LedgerRail): LedgerRail {
+  if (rail) return rail
+  if (tone === 'credit') return 'credit'
+  if (tone === 'debit') return 'debit'
+  return 'sapphire'
+}
+
 export function KpiCard({
   label,
   value,
+  amount,
   hint,
   tone = 'neutral',
+  rail,
+  animate = false,
   change,
   icon,
   to,
@@ -64,19 +75,18 @@ export function KpiCard({
 }: {
   label: string
   value: string
+  /** When set, renders Raised Rupee Plaque + optional count-up instead of plain `value`. */
+  amount?: number
   hint?: string
   tone?: 'neutral' | 'credit' | 'debit'
+  rail?: LedgerRail
+  animate?: boolean
   change?: number | null
   icon?: ReactNode
   to?: string
   linkLabel?: string
 }) {
-  const toneClass =
-    tone === 'credit'
-      ? 'text-[var(--credit)]'
-      : tone === 'debit'
-        ? 'text-[var(--debit)]'
-        : 'text-[var(--text)]'
+  const resolvedRail = toneToRail(tone, rail)
 
   const changeTone =
     change == null
@@ -88,16 +98,23 @@ export function KpiCard({
           : 'text-[var(--muted)]'
 
   return (
-    <article className="panel fade-in px-4 py-4">
+    <article className="elev-lift fade-in px-4 py-4">
       <div className="flex items-start justify-between gap-2">
         <p className="text-xs font-medium uppercase tracking-wider text-[var(--muted)]">
           {label}
         </p>
         {icon ? <span className="text-[var(--muted)]">{icon}</span> : null}
       </div>
-      <p className={`kpi-value mt-2 text-2xl font-semibold sm:text-[1.65rem] ${toneClass}`}>
-        {value}
-      </p>
+      <div className="mt-3">
+        {typeof amount === 'number' ? (
+          <LedgerAmount amount={amount} rail={resolvedRail} animate={animate} size="lg" />
+        ) : (
+          <div className={`rupee-plaque rupee-plaque--${resolvedRail === 'brass' ? 'wealth' : resolvedRail}`}>
+            <span className="rupee-plaque__bar" aria-hidden />
+            <p className="rupee-plaque__value text-2xl sm:text-[1.65rem]">{value}</p>
+          </div>
+        )}
+      </div>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         {change !== undefined ? (
           <span className={`inline-flex items-center gap-0.5 font-medium ${changeTone}`}>
@@ -113,7 +130,7 @@ export function KpiCard({
         ) : null}
         {hint ? <span className="text-[var(--muted)]">{hint}</span> : null}
         {to ? (
-          <Link to={to} className="font-medium text-[var(--accent)] hover:underline">
+          <Link to={to} className="font-medium text-[var(--sapphire)] hover:underline">
             {linkLabel}
           </Link>
         ) : null}

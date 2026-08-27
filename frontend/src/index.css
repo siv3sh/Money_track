@@ -2,72 +2,126 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+  Sapphire Vault — light first-paint; dark twin via .dark
+  Depth: 0 Canvas · 1 Sheet · 2 Lift · 3 Float (glass chrome only)
+*/
+
 :root {
-  --bg: #f4f5f7;
-  --bg-elevated: #eef0f3;
-  --surface: #ffffff;
-  --surface-2: #f8f9fb;
-  --surface-3: #f1f3f6;
-  --text: #0f1419;
-  --text-secondary: #3d4550;
-  --muted: #6b7280;
-  --border: #e2e6eb;
-  --border-strong: #cfd5dd;
-  --debit: #dc3d33;
-  --debit-soft: rgba(220, 61, 51, 0.1);
-  --credit: #0d9f6e;
-  --credit-soft: rgba(13, 159, 110, 0.1);
-  --accent: #2563eb;
-  --accent-soft: rgba(37, 99, 235, 0.1);
-  --warning: #d97706;
-  --warning-soft: rgba(217, 119, 6, 0.12);
-  --shadow: 0 1px 2px rgba(15, 20, 25, 0.04), 0 4px 16px rgba(15, 20, 25, 0.04);
-  --shadow-lg: 0 8px 30px rgba(15, 20, 25, 0.08);
+  color-scheme: light;
+
+  --canvas: #f4f7fc;
+  --sheet: #ffffff;
+  --ink: #0b1f3a;
+  --sapphire: #0e4db5;
+  --credit: #0f8a5f;
+  --debit: #c43c3c;
+  --wealth: #9a7b2f;
+
+  --bg: var(--canvas);
+  --bg-elevated: #e8eef8;
+  --surface: var(--sheet);
+  --surface-2: #f0f4fa;
+  --surface-3: #e4ebf5;
+  --text: var(--ink);
+  --text-secondary: #3d4f66;
+  --muted: #5b6b7c;
+  --border: #d8e0ec;
+  --border-strong: #b8c5d9;
+
+  --accent: var(--sapphire);
+  --accent-soft: rgba(14, 77, 181, 0.08);
+  --credit-soft: rgba(15, 138, 95, 0.1);
+  --debit-soft: rgba(196, 60, 60, 0.1);
+  --wealth-soft: rgba(154, 123, 47, 0.12);
+  --warning: #9a7b2f;
+  --warning-soft: rgba(154, 123, 47, 0.12);
+  --brass: var(--wealth);
+  --brass-soft: var(--wealth-soft);
+
+  /* Depth ladder — blue-tinted chromatic shadows (Stripe-family) */
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgba(11, 31, 58, 0.04), 0 4px 12px rgba(14, 77, 181, 0.06);
+  --elev-2: 0 2px 4px rgba(11, 31, 58, 0.05), 0 12px 28px -8px rgba(14, 77, 181, 0.14);
+  --elev-3: 0 4px 8px rgba(11, 31, 58, 0.06), 0 18px 40px -12px rgba(14, 77, 181, 0.18);
+  --elev-bevel: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+
+  --shadow: var(--elev-1);
+  --shadow-lg: var(--elev-2);
   --radius: 12px;
   --sidebar-w: 248px;
-  --chart-1: #2563eb;
-  --chart-2: #0d9f6e;
-  --chart-3: #dc3d33;
-  --chart-4: #8b5cf6;
-  --chart-5: #f59e0b;
-  --chart-6: #06b6d4;
-  --chart-7: #ec4899;
-  --chart-8: #64748b;
-  --ring: rgba(37, 99, 235, 0.18);
+
+  --chart-1: var(--sapphire);
+  --chart-2: var(--credit);
+  --chart-3: var(--debit);
+  --chart-4: var(--wealth);
+  --chart-5: #3d6bb3;
+  --chart-6: #5b8a7a;
+  --chart-7: #8a6b9a;
+  --chart-8: #7a8799;
+  --ring: rgba(14, 77, 181, 0.28);
+
+  --font-display: "Sora", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(216, 224, 236, 0.85);
 }
 
-/* Clean dark — flat charcoal, soft blue accent, no gold / glow */
 .dark {
   color-scheme: dark;
-  --bg: #0b0d10;
-  --bg-elevated: #11141a;
-  --surface: #14181f;
-  --surface-2: #1a1f28;
-  --surface-3: #212733;
-  --text: #e8eaed;
-  --text-secondary: #b0b6c0;
-  --muted: #8a919c;
-  --border: #252b36;
-  --border-strong: #353c4a;
-  --debit: #f07070;
-  --debit-soft: rgba(240, 112, 112, 0.12);
+
+  --canvas: #0a1220;
+  --sheet: #121c2e;
+  --ink: #e8eef7;
+  --sapphire: #4b7de8;
   --credit: #34c78a;
+  --debit: #e07a72;
+  --wealth: #c4a882;
+
+  --bg: var(--canvas);
+  --bg-elevated: #0e1624;
+  --surface: var(--sheet);
+  --surface-2: #182438;
+  --surface-3: #1e2c42;
+  --text: var(--ink);
+  --text-secondary: #b0bccf;
+  --muted: #8a96a8;
+  --border: #243248;
+  --border-strong: #354860;
+
+  --accent: var(--sapphire);
+  --accent-soft: rgba(75, 125, 232, 0.14);
   --credit-soft: rgba(52, 199, 138, 0.12);
-  --accent: #6b9eff;
-  --accent-soft: rgba(107, 158, 255, 0.12);
-  --warning: #e5b567;
-  --warning-soft: rgba(229, 181, 103, 0.12);
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.03), 0 4px 20px rgba(0, 0, 0, 0.28);
-  --shadow-lg: 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 36px rgba(0, 0, 0, 0.4);
-  --chart-1: #6b9eff;
-  --chart-2: #34c78a;
-  --chart-3: #f07070;
-  --chart-4: #9db0ff;
-  --chart-5: #e5b567;
-  --chart-6: #5ec4c8;
-  --chart-7: #d48aa8;
-  --chart-8: #8a919c;
-  --ring: rgba(107, 158, 255, 0.25);
+  --debit-soft: rgba(224, 122, 114, 0.12);
+  --wealth-soft: rgba(196, 168, 130, 0.14);
+  --warning: var(--wealth);
+  --warning-soft: var(--wealth-soft);
+  --brass: var(--wealth);
+  --brass-soft: var(--wealth-soft);
+
+  --elev-0: none;
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(75, 125, 232, 0.08);
+  --elev-2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 32px -8px rgba(75, 125, 232, 0.16);
+  --elev-3: 0 6px 12px rgba(0, 0, 0, 0.45), 0 20px 48px -12px rgba(75, 125, 232, 0.2);
+  --elev-bevel: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+
+  --shadow: var(--elev-1);
+  --shadow-lg: var(--elev-2);
+
+  --chart-1: var(--sapphire);
+  --chart-2: var(--credit);
+  --chart-3: var(--debit);
+  --chart-4: var(--wealth);
+  --chart-5: #7a9ae8;
+  --chart-6: #5ec4a8;
+  --chart-7: #d4a090;
+  --chart-8: #8a96a8;
+  --ring: rgba(75, 125, 232, 0.35);
+
+  --glass-bg: rgba(18, 28, 46, 0.78);
+  --glass-border: rgba(36, 50, 72, 0.9);
 }
 
 html,
@@ -79,8 +133,7 @@ body,
 body {
   margin: 0;
   color: var(--text);
-  font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
-  font-feature-settings: "ss01" on, "cv11" on;
+  font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   background: var(--bg);
 }
@@ -90,22 +143,184 @@ body {
 }
 
 h1,
-h2,
 .display {
-  font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
-  letter-spacing: -0.025em;
+  font-family: var(--font-display);
+  letter-spacing: -0.03em;
+}
+
+h2,
+h3 {
+  font-family: var(--font-body);
+  letter-spacing: -0.02em;
+}
+
+.num,
+.kpi-value,
+.rupee-plaque__value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* ── Elevation utilities ───────────────────────────────────────── */
+
+.elev-0 {
+  box-shadow: var(--elev-0);
+}
+
+.elev-sheet {
+  background: var(--sheet);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elev-1);
+}
+
+.elev-lift {
+  background: var(--sheet);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--elev-1);
+  transition:
+    box-shadow 160ms ease,
+    transform 160ms ease,
+    border-color 160ms ease;
+}
+
+.elev-lift:hover {
+  box-shadow: var(--elev-2);
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+}
+
+.elev-float {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--elev-3);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .elev-float {
+    background: var(--sheet);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ── Raised Rupee Plaque ───────────────────────────────────────── */
+
+.rupee-plaque {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.65rem 0.85rem;
+  background: var(--sheet);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--elev-1), var(--elev-bevel);
+}
+
+.rupee-plaque__bar {
+  width: 4px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  align-self: stretch;
+  min-height: 1.5rem;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--plaque-tone) 55%, white) 0%,
+    var(--plaque-tone) 45%,
+    color-mix(in srgb, var(--plaque-tone) 75%, black) 100%
+  );
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.rupee-plaque--credit {
+  --plaque-tone: var(--credit);
+}
+
+.rupee-plaque--debit {
+  --plaque-tone: var(--debit);
+}
+
+.rupee-plaque--wealth {
+  --plaque-tone: var(--wealth);
+}
+
+.rupee-plaque--sapphire {
+  --plaque-tone: var(--sapphire);
+}
+
+.rupee-plaque--neutral {
+  --plaque-tone: var(--border-strong);
+}
+
+.rupee-plaque__value {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--plaque-tone, var(--text));
+}
+
+.rupee-plaque--neutral .rupee-plaque__value {
+  color: var(--text);
+}
+
+/* Legacy class aliases used by older markup during migration */
+.ledger-rail {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.ledger-rail__bar {
+  width: 4px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.ledger-rail__bar--credit {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--credit) 55%, white), var(--credit));
+}
+
+.ledger-rail__bar--debit {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--debit) 55%, white), var(--debit));
+}
+
+.ledger-rail__bar--brass,
+.ledger-rail__bar--wealth {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--wealth) 55%, white), var(--wealth));
+}
+
+.ledger-amount__value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ledger-amount__value--credit {
+  color: var(--credit);
+}
+
+.ledger-amount__value--debit {
+  color: var(--debit);
+}
+
+.ledger-amount__value--brass,
+.ledger-amount__value--wealth {
+  color: var(--wealth);
 }
 
 .panel {
+  background: var(--sheet);
   border: 1px solid var(--border);
-  background: var(--surface);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
-}
-
-.panel:hover {
-  border-color: var(--border-strong);
+  box-shadow: var(--elev-1);
 }
 
 .btn {
@@ -113,14 +328,16 @@ h2,
   align-items: center;
   gap: 0.4rem;
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--sheet);
   color: var(--text);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 0.45rem 0.85rem;
   font-size: 0.8125rem;
   font-weight: 500;
+  font-family: var(--font-body);
   cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  box-shadow: var(--elev-0);
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .btn:hover {
@@ -128,33 +345,40 @@ h2,
   border-color: var(--border-strong);
 }
 
-.btn:active {
-  transform: scale(0.98);
-}
-
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
+.btn:focus-visible,
+.field:focus-visible,
+.sidebar-link:focus-visible,
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--sapphire);
+  outline-offset: 2px;
+}
+
 .btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--sapphire);
+  border-color: var(--sapphire);
   color: #fff;
+  box-shadow: 0 1px 2px rgba(14, 77, 181, 0.2), 0 4px 12px rgba(14, 77, 181, 0.18);
 }
 
 .btn-primary:hover {
-  filter: brightness(1.06);
-  background: var(--accent);
+  filter: brightness(1.05);
+  background: var(--sapphire);
 }
 
 .field {
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--sheet);
   color: var(--text);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 0.45rem 0.7rem;
   font-size: 0.8125rem;
+  font-family: var(--font-body);
   outline: none;
 }
 
@@ -163,13 +387,8 @@ h2,
 }
 
 .field:focus {
-  border-color: var(--accent);
+  border-color: var(--sapphire);
   box-shadow: 0 0 0 3px var(--ring);
-}
-
-.kpi-value {
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
 }
 
 .fade-in {
@@ -187,35 +406,47 @@ h2,
   }
 }
 
-/* ── Advisor presence (alive, not noisy) ─────────────────────────── */
+.passbook-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+}
 
+.passbook-row {
+  border-bottom: 1px solid var(--border);
+  background: var(--sheet);
+}
+
+.passbook-row:last-child {
+  border-bottom: 0;
+}
+
+/* Advisor — float chrome only on panel/fab, not content lists */
 @keyframes advisorBreath {
   0%,
   100% {
     transform: scale(1);
-    box-shadow:
-      0 8px 24px rgba(37, 99, 235, 0.35),
-      0 0 0 0 rgba(37, 99, 235, 0.35);
+    box-shadow: var(--elev-2);
   }
   50% {
-    transform: scale(1.07);
-    box-shadow:
-      0 12px 32px rgba(37, 99, 235, 0.55),
-      0 0 0 8px rgba(37, 99, 235, 0);
+    transform: scale(1.05);
+    box-shadow: var(--elev-3);
   }
 }
 
 @keyframes advisorRing {
   0% {
     transform: scale(1);
-    opacity: 0.55;
+    opacity: 0.5;
   }
   70% {
-    transform: scale(1.7);
+    transform: scale(1.65);
     opacity: 0;
   }
   100% {
-    transform: scale(1.7);
+    transform: scale(1.65);
     opacity: 0;
   }
 }
@@ -227,17 +458,14 @@ h2,
     transform: scale(1);
   }
   90% {
-    transform: scale(1.22);
-  }
-  95% {
-    transform: scale(0.94);
+    transform: scale(1.18);
   }
 }
 
 @keyframes advisorPanelIn {
   from {
     opacity: 0;
-    transform: translateY(16px) scale(0.96);
+    transform: translateY(12px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -248,27 +476,11 @@ h2,
 @keyframes advisorMsgIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes advisorSparkle {
-  0%,
-  100% {
-    transform: rotate(0deg) scale(1);
-    opacity: 0.85;
-  }
-  40% {
-    transform: rotate(12deg) scale(1.15);
-    opacity: 1;
-  }
-  70% {
-    transform: rotate(-6deg) scale(1.05);
-    opacity: 0.95;
   }
 }
 
@@ -286,25 +498,23 @@ h2,
   80%,
   100% {
     opacity: 0.25;
-    transform: translateY(0);
   }
   40% {
     opacity: 1;
-    transform: translateY(-2px);
   }
 }
 
 .advisor-fab {
-  /* keep Tailwind `fixed` — do not set position here */
-  transition: transform 180ms ease, box-shadow 180ms ease;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  box-shadow: var(--elev-3);
 }
 
 .advisor-fab:hover {
-  transform: scale(1.08);
+  transform: translateY(-1px);
 }
 
 .advisor-fab--alive {
-  animation: advisorBreath 2.2s ease-in-out infinite;
+  animation: advisorBreath 2.4s ease-in-out infinite;
 }
 
 .advisor-fab__ring {
@@ -312,7 +522,7 @@ h2,
   position: absolute;
   inset: -5px;
   border-radius: 9999px;
-  border: 2px solid color-mix(in srgb, var(--accent) 80%, white);
+  border: 2px solid color-mix(in srgb, var(--sapphire) 70%, white);
   animation: advisorRing 2s ease-out infinite;
 }
 
@@ -321,25 +531,31 @@ h2,
 }
 
 .advisor-panel {
-  animation: advisorPanelIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: advisorPanelIn 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
   transform-origin: bottom right;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--elev-3);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
 
-.advisor-msg {
-  animation: advisorMsgIn 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .advisor-panel {
+    background: var(--sheet);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
-.advisor-nudge {
-  animation: advisorMsgIn 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.advisor-spark {
-  animation: advisorSparkle 2.6s ease-in-out infinite;
-  display: inline-flex;
+.advisor-msg,
+.advisor-nudge,
+.advisor-comment {
+  animation: advisorMsgIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .advisor-banner {
-  animation: fadeUp 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fadeUp 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
   position: relative;
   overflow: hidden;
 }
@@ -350,11 +566,9 @@ h2,
   inset: 0;
   background: linear-gradient(
     110deg,
-    transparent 0%,
     transparent 40%,
     color-mix(in srgb, var(--credit) 12%, transparent) 50%,
-    transparent 60%,
-    transparent 100%
+    transparent 60%
   );
   background-size: 200% 100%;
   animation: advisorShimmer 4.5s linear infinite;
@@ -365,15 +579,10 @@ h2,
   box-shadow: inset 3px 0 0 var(--debit);
 }
 
-.advisor-comment {
-  animation: advisorMsgIn 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
 .advisor-typing {
   display: inline-flex;
   gap: 4px;
   align-items: center;
-  padding: 2px 0;
 }
 
 .advisor-typing span {
@@ -393,18 +602,23 @@ h2,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .fade-in,
   .advisor-fab--alive,
   .advisor-fab__ring,
   .advisor-fab__badge,
   .advisor-panel,
   .advisor-msg,
   .advisor-nudge,
-  .advisor-spark,
   .advisor-banner,
   .advisor-banner--happy::before,
   .advisor-comment,
   .advisor-typing span {
     animation: none !important;
+  }
+
+  .elev-lift:hover,
+  .advisor-fab:hover {
+    transform: none;
   }
 }
 
@@ -412,7 +626,7 @@ h2,
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 0.55rem 0.75rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -428,21 +642,36 @@ h2,
 
 .sidebar-link.active {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--sapphire);
+  font-weight: 600;
 }
 
 .seg-active {
-  background: var(--accent);
+  background: var(--sapphire);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(14, 77, 181, 0.25);
 }
 
 .recharts-default-tooltip {
-  border-radius: 10px !important;
+  border-radius: 8px !important;
+  font-family: var(--font-body) !important;
+  box-shadow: var(--elev-3) !important;
 }
 
 @media (max-width: 900px) {
   :root {
     --sidebar-w: 0px;
+  }
+}
+
+@media (max-width: 420px) {
+  .rupee-plaque {
+    padding: 0.55rem 0.7rem;
+  }
+
+  .app-topbar {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
   }
 }
 
@@ -455,5 +684,5 @@ h2,
 }
 
 .dark {
-  scrollbar-color: #2a313c transparent;
+  scrollbar-color: #243248 transparent;
 }

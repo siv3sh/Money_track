@@ -166,7 +166,7 @@ export function AdvisorChatWidget() {
       </button>
 
       {open ? (
-        <div className="advisor-panel fixed bottom-[5.5rem] right-5 z-[60] flex h-[min(560px,70vh)] w-[min(400px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl sm:right-6">
+        <div className="advisor-panel fixed bottom-[5.5rem] right-5 z-[60] flex h-[min(560px,70vh)] w-[min(400px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl sm:right-6">
           <div className="border-b border-[var(--border)] bg-[var(--bg)] px-4 py-3">
             <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--accent)]">
               <span className="advisor-spark">

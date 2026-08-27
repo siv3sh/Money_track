@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react'
+import { ArrowLeft, Check, CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react'
 import {
   commitIndmoneyFile,
   previewIndmoneyFile,
@@ -8,11 +8,45 @@ import {
   type IndmoneyPreview,
   type IndmoneyValidateResult,
 } from '../api'
+import { LedgerAmount } from '../components/LedgerAmount'
 import { PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
 import { useFilters } from '../context/FilterContext'
 
 type Step = 'upload' | 'map' | 'preview' | 'done'
+
+const STEPS: Step[] = ['upload', 'map', 'preview', 'done']
+
+function StepTicks({ step }: { step: Step }) {
+  const currentIdx = STEPS.indexOf(step)
+  return (
+    <ol className="mb-5 flex flex-wrap items-center gap-x-1 gap-y-2 text-[11px]">
+      {STEPS.map((s, i) => {
+        const done = i <= currentIdx
+        return (
+          <li key={s} className="flex items-center gap-1">
+            {i > 0 ? <span className="mx-0.5 text-[var(--border-strong)]">·</span> : null}
+            <span
+              className={`inline-flex items-center gap-1 capitalize ${
+                done ? 'font-semibold text-[var(--sapphire)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              {done ? (
+                <Check size={12} className="shrink-0 text-[var(--sapphire)]" aria-hidden />
+              ) : (
+                <span
+                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-[var(--border-strong)]"
+                  aria-hidden
+                />
+              )}
+              {s}
+            </span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
 
 export function IndmoneyImportPage() {
   const { refresh } = useFilters()
@@ -24,6 +58,7 @@ export function IndmoneyImportPage() {
   const [result, setResult] = useState<{ inserted: number; updated: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState(false)
 
   const fields = preview?.fields || []
 
@@ -37,11 +72,7 @@ export function IndmoneyImportPage() {
       setFile(f)
       setMapping({ ...data.suggested_mapping })
       setValidation(null)
-      // High-confidence RAG mapping can still be edited — UI always available as fallback
       setStep('map')
-      if (data.mapping_confidence != null && data.mapping_confidence >= 0.62) {
-        setError(null)
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview failed')
     } finally {
@@ -96,44 +127,47 @@ export function IndmoneyImportPage() {
         }
       />
 
-      <ol className="mb-5 flex flex-wrap gap-2 text-xs font-medium">
-        {(['upload', 'map', 'preview', 'done'] as Step[]).map((s, i) => (
-          <li
-            key={s}
-            className={`rounded-full border px-3 py-1 capitalize ${
-              step === s
-                ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                : 'border-[var(--border)] text-[var(--muted)]'
-            }`}
-          >
-            {i + 1}. {s}
-          </li>
-        ))}
-      </ol>
+      <StepTicks step={step} />
 
       {error ? (
-        <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
+        <div className="mb-4 border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
           {error}
         </div>
       ) : null}
 
       {step === 'upload' ? (
-        <section className="panel p-6">
-          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
-            <FileSpreadsheet size={22} />
+        <section className="elev-sheet p-6">
+          <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--sapphire)]">
+            <FileSpreadsheet size={20} />
           </div>
           <h2 className="text-base font-semibold">Choose export file</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Accepts CSV or Excel (.xlsx). From INDmoney, export holdings with invested + current
-            value columns.
+            Accepts CSV or Excel (.xlsx). Export holdings with invested + current value columns.
           </p>
-          <label className="mt-5 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--surface-2)] px-4 py-10 text-sm hover:bg-[var(--surface-3)]">
-            <Upload size={20} className="text-[var(--muted)]" />
+          <label
+            className={`mt-5 flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed px-4 py-10 text-sm transition-colors ${
+              dragOver
+                ? 'border-[var(--sapphire)] bg-[var(--accent-soft)]'
+                : 'border-[var(--border-strong)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
+            }`}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              void onFile(e.dataTransfer.files?.[0] || null)
+            }}
+          >
+            <Upload size={18} className="text-[var(--muted)]" />
             <span className="font-medium">{busy ? 'Reading file…' : 'Drop file or click to browse'}</span>
+            <span className="text-xs text-[var(--muted)]">.csv · .xlsx</span>
             <input
               type="file"
               accept=".csv,.tsv,.txt,.xlsx,.xls"
-              className="hidden"
+              className="sr-only"
               disabled={busy}
               onChange={(e) => void onFile(e.target.files?.[0] || null)}
             />
@@ -142,7 +176,7 @@ export function IndmoneyImportPage() {
       ) : null}
 
       {step === 'map' && preview ? (
-        <section className="panel overflow-hidden">
+        <section className="elev-sheet overflow-hidden">
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h2 className="text-sm font-semibold">Column mapping</h2>
             <p className="text-xs text-[var(--muted)]">
@@ -155,26 +189,10 @@ export function IndmoneyImportPage() {
                 : ' · please confirm mapping'}
             </p>
             {preview.pipeline_stages?.length ? (
-              <ol className="mt-2 flex flex-wrap gap-1 text-[10px] font-semibold uppercase">
-                {preview.pipeline_stages.map((s) => {
-                  const stages = preview.pipeline_stages || []
-                  const cur = preview.pipeline_stage || ''
-                  const active =
-                    s === cur || (cur ? stages.indexOf(s) <= stages.indexOf(cur) : false)
-                  return (
-                    <li
-                      key={s}
-                      className={
-                        active
-                          ? 'rounded bg-[var(--accent-soft)] px-1.5 py-0.5 text-[var(--accent)]'
-                          : 'rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-[var(--muted)]'
-                      }
-                    >
-                      {s.replaceAll('_', ' ')}
-                    </li>
-                  )
-                })}
-              </ol>
+              <PipelineTicksInline
+                stages={preview.pipeline_stages}
+                current={preview.pipeline_stage}
+              />
             ) : null}
           </div>
           <div className="grid gap-3 p-4 sm:grid-cols-2">
@@ -250,7 +268,7 @@ export function IndmoneyImportPage() {
       ) : null}
 
       {step === 'preview' && validation ? (
-        <section className="panel overflow-hidden">
+        <section className="elev-sheet overflow-hidden">
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h2 className="text-sm font-semibold">Confirm import</h2>
             <p className="text-xs text-[var(--muted)]">
@@ -261,61 +279,81 @@ export function IndmoneyImportPage() {
           </div>
 
           <div className="grid gap-3 border-b border-[var(--border)] p-4 sm:grid-cols-3">
-            <div className="rounded-xl bg-[var(--surface-2)] px-3 py-2">
-              <p className="text-[10px] uppercase text-[var(--muted)]">Rows</p>
-              <p className="text-lg font-semibold">{validation.summary.valid}</p>
-            </div>
-            <div className="rounded-xl bg-[var(--surface-2)] px-3 py-2">
-              <p className="text-[10px] uppercase text-[var(--muted)]">Invested</p>
-              <p className="text-lg font-semibold">
-                {formatINR(validation.summary.total_invested || 0)}
+            <div>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Rows to commit</p>
+              <p className="font-mono text-lg font-semibold tabular-nums text-[var(--sapphire)]">
+                {validation.summary.valid}
               </p>
             </div>
-            <div className="rounded-xl bg-[var(--surface-2)] px-3 py-2">
-              <p className="text-[10px] uppercase text-[var(--muted)]">Current</p>
-              <p className="text-lg font-semibold text-[var(--credit)]">
-                {formatINR(validation.summary.total_current || 0)}
-              </p>
+            <div>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Invested</p>
+              <LedgerAmount
+                amount={validation.summary.total_invested || 0}
+                rail="wealth"
+                size="md"
+                className="py-1"
+              />
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Current</p>
+              <LedgerAmount
+                amount={validation.summary.total_current || 0}
+                rail="credit"
+                size="md"
+                className="py-1"
+              />
             </div>
           </div>
 
           <div className="max-h-72 overflow-auto">
-            <table className="min-w-full text-sm">
-              <thead className="sticky top-0 bg-[var(--surface)] text-[10px] uppercase text-[var(--muted)]">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium">Instrument</th>
-                  <th className="px-3 py-2 text-left font-medium">Class</th>
-                  <th className="px-3 py-2 text-right font-medium">Invested</th>
-                  <th className="px-3 py-2 text-right font-medium">Current</th>
-                  <th className="px-3 py-2 text-right font-medium">As of</th>
-                </tr>
-              </thead>
-              <tbody>
-                {validation.valid.slice(0, 50).map((r) => (
-                  <tr key={r.instrument_key} className="border-t border-[var(--border)]">
-                    <td className="px-3 py-2 font-medium">{r.name}</td>
-                    <td className="px-3 py-2 text-[var(--muted)]">{r.asset_class}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatINR(r.invested)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-[var(--credit)]">
+            <ul className="passbook-list">
+              {validation.valid.slice(0, 50).map((r) => (
+                <li
+                  key={r.instrument_key}
+                  className="passbook-row flex flex-wrap items-start justify-between gap-3 px-3 py-2.5 sm:px-4"
+                >
+                  <div className="flex min-w-0 gap-3">
+                    <span className="ledger-rail__bar ledger-rail__bar--credit mt-1 self-stretch" aria-hidden />
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--credit)]">
+                        Commit
+                      </p>
+                      <p className="truncate font-medium">{r.name}</p>
+                      <p className="text-xs text-[var(--muted)]">{r.asset_class}</p>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs">
+                    <p className="font-mono tabular-nums text-[var(--wealth)]">
+                      {formatINR(r.invested)}
+                    </p>
+                    <p className="font-mono tabular-nums text-[var(--credit)]">
                       {formatINR(r.current_value)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-[var(--muted)]">
-                      {r.as_of_date || 'latest'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </p>
+                    <p className="text-[var(--muted)]">{r.as_of_date || 'latest'}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
 
           {validation.errors.length ? (
-            <div className="border-t border-[var(--border)] px-4 py-3 text-xs text-[var(--debit)]">
-              {validation.errors.slice(0, 5).map((e) => (
-                <p key={`${e.row}-${e.issue}`}>
-                  Row {e.row}: {e.issue}
-                  {e.instrument ? ` (${e.instrument})` : ''}
-                </p>
-              ))}
+            <div className="border-t border-[var(--border)]">
+              <ul className="passbook-list">
+                {validation.errors.slice(0, 5).map((e) => (
+                  <li
+                    key={`${e.row}-${e.issue}`}
+                    className="passbook-row flex gap-3 px-4 py-2.5 text-xs text-[var(--debit)]"
+                  >
+                    <span className="ledger-rail__bar ledger-rail__bar--debit mt-0.5 self-stretch" aria-hidden />
+                    <p>
+                      <span className="font-semibold uppercase tracking-wide">Hold · row {e.row}</span>
+                      {': '}
+                      {e.issue}
+                      {e.instrument ? ` (${e.instrument})` : ''}
+                    </p>
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
 
@@ -336,12 +374,11 @@ export function IndmoneyImportPage() {
       ) : null}
 
       {step === 'done' && result ? (
-        <section className="panel p-6 text-center">
+        <section className="elev-sheet p-6 text-center">
           <CheckCircle2 className="mx-auto text-[var(--credit)]" size={36} />
           <h2 className="mt-3 text-base font-semibold">Import complete</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Inserted {result.inserted} · updated {result.updated}. Tagged source =
-            csv_import.
+            Inserted {result.inserted} · updated {result.updated}. Tagged source = csv_import.
           </p>
           <div className="mt-5 flex justify-center gap-2">
             <Link to="/wealth" className="btn btn-primary">
@@ -364,5 +401,36 @@ export function IndmoneyImportPage() {
         </section>
       ) : null}
     </div>
+  )
+}
+
+function PipelineTicksInline({
+  stages,
+  current,
+}: {
+  stages: string[]
+  current?: string | null
+}) {
+  return (
+    <ol className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-[10px]">
+      {stages.map((s, i) => {
+        const done =
+          current === 'complete' ||
+          (current ? stages.indexOf(s) <= stages.indexOf(current) : false)
+        return (
+          <li key={s} className="flex items-center gap-1">
+            {i > 0 ? <span className="text-[var(--border-strong)]">·</span> : null}
+            <span
+              className={`inline-flex items-center gap-0.5 uppercase ${
+                done ? 'font-semibold text-[var(--sapphire)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              {done ? <Check size={10} aria-hidden /> : null}
+              {s.replaceAll('_', ' ')}
+            </span>
+          </li>
+        )
+      })}
+    </ol>
   )
 }

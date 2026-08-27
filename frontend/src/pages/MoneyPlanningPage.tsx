@@ -36,24 +36,67 @@ import {
 } from '../api'
 import { GroupedComparisonBars } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
+import { LedgerAmount } from '../components/LedgerAmount'
 import { AdvisorCommentBubble } from '../components/AdvisorCommentBubble'
 import { formatINR } from '../lib/format'
 
 const BUCKETS: PlanningBucket[] = ['Needs', 'Investments', 'Discretionary', 'Buffer']
 
+function BucketBand({
+  label,
+  wealthClass,
+  actual,
+  template,
+}: {
+  label: string
+  wealthClass?: string
+  actual: number
+  template: number
+}) {
+  const pct = template > 0 ? Math.min(140, Math.round((actual / template) * 100)) : 0
+  const over = actual > template && template > 0
+  return (
+    <div className="elev-sheet px-4 py-3">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-[var(--text)]">{label}</p>
+          {wealthClass ? (
+            <p className="text-[11px] capitalize text-[var(--muted)]">{wealthClass}</p>
+          ) : null}
+        </div>
+        <div className="text-right text-xs tabular-nums text-[var(--muted)]">
+          <span className={over ? 'font-semibold text-[var(--debit)]' : 'text-[var(--text)]'}>
+            {formatINR(actual)}
+          </span>
+          {' / '}
+          {formatINR(template)}
+        </div>
+      </div>
+      <div className="mt-2 h-2 w-full overflow-hidden rounded-sm bg-[var(--surface-3)]">
+        <div
+          className={`h-full rounded-sm transition-[width] duration-300 ${
+            over ? 'bg-[var(--debit)]' : 'bg-[var(--sapphire)]'
+          }`}
+          style={{ width: `${Math.min(100, pct)}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
 function GoalProgressBar({ pct, milestones = [25, 50, 75, 100] }: { pct: number; milestones?: number[] }) {
   const clamped = Math.max(0, Math.min(100, pct))
   return (
-    <div className="relative mt-4 h-4 w-full rounded-full bg-[var(--border)]">
+    <div className="relative mt-3 h-2.5 w-full rounded-sm bg-[var(--surface-3)]">
       <div
-        className="absolute inset-y-0 left-0 rounded-full bg-[var(--credit)] transition-all"
+        className="absolute inset-y-0 left-0 rounded-sm bg-[var(--sapphire)] transition-[width] duration-300"
         style={{ width: `${clamped}%` }}
       />
       {milestones.map((m) => (
         <span
           key={m}
           title={`${m}%`}
-          className="absolute top-1/2 h-3 w-0.5 -translate-y-1/2 bg-[var(--text)]/40"
+          className="absolute top-1/2 h-2 w-px -translate-y-1/2 bg-[var(--border-strong)]"
           style={{ left: `${m}%` }}
         />
       ))}
@@ -92,24 +135,40 @@ export function MoneyPlanningPage() {
     setLoading(true)
     setError(null)
     try {
-      const [summary, training, personaCfg] = await Promise.all([
-        fetchPlanningSummary(),
+      const summary = await fetchPlanningSummary()
+      setData(summary)
+      setPctDraft(summary.settings.bucket_pcts)
+
+      const [trainingRes, personaRes] = await Promise.allSettled([
         fetchAdvisorTraining(),
         fetchAdvisorPersona(),
       ])
-      setData(summary)
-      setPctDraft(summary.settings.bucket_pcts)
-      setTrainQs(training.questions)
-      setTrainCompleteness(training.completeness)
-      setPersona(personaCfg)
-      setSensDraft(personaCfg.strictness_sensitivity)
-      setPersonaDraft(personaCfg.persona_text)
-      const drafts: Record<string, string> = {}
-      for (const q of training.questions) {
-        drafts[q.key] = q.value ? String(q.value) : ''
+
+      if (trainingRes.status === 'fulfilled') {
+        const training = trainingRes.value
+        setTrainQs(training.questions)
+        setTrainCompleteness(training.completeness)
+        const drafts: Record<string, string> = {}
+        for (const q of training.questions) {
+          drafts[q.key] = q.value ? String(q.value) : ''
+        }
+        setTrainDrafts(drafts)
+        if (training.completeness < 50) setShowTrain(true)
       }
-      setTrainDrafts(drafts)
-      if (training.completeness < 50) setShowTrain(true)
+
+      if (personaRes.status === 'fulfilled') {
+        const personaCfg = personaRes.value
+        setPersona(personaCfg)
+        setSensDraft(personaCfg.strictness_sensitivity)
+        setPersonaDraft(personaCfg.persona_text)
+      }
+
+      const softFails = [trainingRes, personaRes]
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)))
+      if (softFails.length) {
+        setError(`Advisor extras partially unavailable: ${softFails[0]}`)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load planning')
     } finally {
@@ -291,16 +350,6 @@ export function MoneyPlanningPage() {
     }
   }
 
-  async function applySuggestedContrib(id: string) {
-    const suggested =
-      focus?.goal_id === id
-        ? focus.unlocked_monthly || focus.funding?.lump_sum_available || 0
-        : activeGoals.find((g) => g.id === id)?.allocated_monthly || 0
-    if (!suggested) return
-    setContribDrafts((d) => ({ ...d, [id]: String(Math.round(suggested)) }))
-    await onContribute(id, Math.round(suggested))
-  }
-
   async function onComplete(id: string) {
     if (!window.confirm('Mark complete? Logs as liability-class Shopping spend in your ledger.')) return
     setBusy(`complete-${id}`)
@@ -370,10 +419,10 @@ export function MoneyPlanningPage() {
 
       {loading && !data ? (
         <LoadingBlock />
-      ) : data && fw && advisor ? (
+      ) : data && fw ? (
         <>
           {showSettings && pctDraft ? (
-            <section className="panel mb-5 px-4 py-4">
+            <section className="elev-sheet mb-5 px-4 py-4">
               <h2 className="text-sm font-semibold">Budget template %</h2>
               <p className="mt-1 text-xs text-[var(--muted)]">
                 Default 45 / 27 / 17 / 7 · Goals only use Discretionary + Buffer
@@ -409,7 +458,7 @@ export function MoneyPlanningPage() {
           ) : null}
 
           {showStyle ? (
-            <section className="panel mb-5 px-4 py-4">
+            <section className="elev-sheet mb-5 px-4 py-4">
               <h2 className="text-sm font-semibold">Advisor Style</h2>
               <p className="mt-1 text-xs text-[var(--muted)]">
                 Controls how quickly firm/strict tone kicks in across reports, alerts, Q&A, and this page.
@@ -511,7 +560,7 @@ export function MoneyPlanningPage() {
           ) : null}
 
           {showTrain ? (
-            <section className="panel mb-5 px-4 py-4">
+            <section className="elev-sheet mb-5 px-4 py-4">
               <h2 className="text-sm font-semibold">Train your advisor</h2>
               <p className="mt-1 text-xs text-[var(--muted)]">
                 The more honest you are, the more I sound like someone who knows you — soft when you’ve earned it, strict when you slip.
@@ -557,152 +606,56 @@ export function MoneyPlanningPage() {
             </section>
           ) : null}
 
-          {/* Advisor hero */}
-          <section className="advisor-banner panel mb-5 overflow-hidden">
-            <div className="border-b border-[var(--border)] bg-[var(--bg)] px-4 py-4 sm:px-6">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--accent)]">
-                    <span className="advisor-spark">
-                      <Sparkles size={14} />
-                    </span>
-                    Advisor · {data.label}
-                    {advisor.advisor_severity?.level || advisor.voice?.mood ? (
-                      <span
-                        className={
-                          (advisor.advisor_severity?.level === 'strict' ||
-                            advisor.voice?.mood === 'strict' ||
-                            advisor.voice?.mood === 'firm')
-                            ? 'text-[var(--debit)]'
-                            : 'text-[var(--credit)]'
-                        }
-                      >
-                        · {advisor.advisor_severity?.level || advisor.voice?.mood}
-                      </span>
-                    ) : null}
-                  </p>
-                  <h2 className="mt-2 max-w-3xl text-xl font-semibold tracking-tight sm:text-2xl">
-                    {advisor.voice?.opener || advisor.headline}
-                  </h2>
-                  {advisor.voice?.strict_line ? (
-                    <p className="mt-3 max-w-3xl text-sm font-medium text-[var(--debit)]">{advisor.voice.strict_line}</p>
-                  ) : null}
-                  {advisor.voice?.heart ? (
-                    <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--muted)]">{advisor.voice.heart}</p>
-                  ) : null}
-                  {advisor.voice?.closer ? (
-                    <p className="mt-2 max-w-3xl text-sm font-medium text-[var(--text)]">{advisor.voice.closer}</p>
-                  ) : null}
-                  {advisor.voice?.training_nudge ? (
-                    <p className="mt-2 text-xs text-[var(--warning)]">{advisor.voice.training_nudge}</p>
-                  ) : null}
-                  {advisor.personalization_note ? (
-                    <p className="mt-2 max-w-3xl text-xs text-[var(--muted)]">{advisor.personalization_note}</p>
-                  ) : null}
-                </div>
-                <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-center">
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Discipline</p>
-                  <p className="text-2xl font-semibold text-[var(--text)]">{advisor.score}</p>
-                  <p className="text-xs text-[var(--muted)]">{advisor.score_label}</p>
-                  <p className="mt-1 text-[10px] text-[var(--muted)]">Knows you {Math.round(advisor.profile?.completeness || trainCompleteness)}%</p>
-                </div>
-              </div>
-            </div>
-
-            {focus ? (
-              <div className="px-4 py-5 sm:px-6">
-                <div className="flex flex-wrap items-end justify-between gap-2">
-                  <div>
-                    <p className="text-xs uppercase tracking-wider text-[var(--muted)]">Primary goal</p>
-                    <h3 className="text-2xl font-semibold">{focus.name}</h3>
-                  </div>
-                  <p className="text-sm text-[var(--muted)]">
-                    <span className="font-semibold text-[var(--text)]">{formatINR(focus.saved)}</span>
-                    {' '}of {formatINR(focus.target)}
-                  </p>
-                </div>
-                <GoalProgressBar pct={focus.progress_pct} />
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-xl bg-[var(--bg)] px-3 py-3">
-                    <p className="text-[10px] uppercase text-[var(--muted)]">If you unlock surplus</p>
-                    <p className="mt-1 text-lg font-semibold text-[var(--credit)]">
-                      {formatINR(focus.unlocked_monthly || 0)}
-                      <span className="text-xs font-normal text-[var(--muted)]"> /mo</span>
-                    </p>
-                    <p className="mt-1 text-xs text-[var(--muted)]">
-                      {focus.months_at_unlocked_pace != null
-                        ? `~${focus.months_at_unlocked_pace} months to ${focus.name}`
-                        : 'Set a cut plan to start the clock'}
-                    </p>
-                  </div>
-                  <div className="rounded-xl bg-[var(--bg)] px-3 py-3">
-                    <p className="text-[10px] uppercase text-[var(--muted)]">Lump sum now</p>
-                    <p className="mt-1 text-lg font-semibold">{formatINR(focus.funding?.lump_sum_available || 0)}</p>
-                    <p className="mt-1 text-xs text-[var(--muted)]">From leftover Buffer estimate</p>
-                  </div>
-                  <div className="rounded-xl bg-[var(--bg)] px-3 py-3">
-                    <p className="text-[10px] uppercase text-[var(--muted)]">Status</p>
-                    <p className="mt-1 text-sm font-medium leading-snug">{focus.status_line}</p>
-                    {(focus.streak_months || 0) > 0 ? (
-                      <p className="mt-1 text-xs text-[var(--credit)]">{focus.streak_months} mo contribution streak</p>
-                    ) : null}
-                  </div>
-                </div>
-                {focus.opportunity_message ? (
-                  <p className="mt-4 rounded-xl border border-[var(--credit)]/20 bg-[var(--bg)] px-3 py-2 text-sm text-[var(--credit)]">
-                    {focus.opportunity_message}
-                  </p>
-                ) : null}
-                {focus.goal_id ? (
-                  <div className="mt-4 flex flex-wrap items-end gap-2">
-                    <label className="text-xs text-[var(--muted)]">
-                      Contribute ₹
-                      <input
-                        className="field mt-1 w-36"
-                        type="number"
-                        min={1}
-                        placeholder={String(Math.round(focus.unlocked_monthly || 0) || '')}
-                        value={contribDrafts[focus.goal_id] || ''}
-                        onChange={(e) =>
-                          setContribDrafts((d) => ({ ...d, [focus.goal_id!]: e.target.value }))
-                        }
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={busy === `contrib-${focus.goal_id}`}
-                      onClick={() => void onContribute(focus.goal_id!)}
-                    >
-                      {busy === `contrib-${focus.goal_id}` ? <Loader2 className="animate-spin" size={16} /> : null}
-                      Log contribution
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={!focus.unlocked_monthly}
-                      onClick={() => void applySuggestedContrib(focus.goal_id!)}
-                    >
-                      Use unlocked ₹{Math.round(focus.unlocked_monthly || 0).toLocaleString('en-IN')}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="px-4 py-8 text-center sm:px-6">
-                <Target className="mx-auto text-[var(--muted)]" size={28} />
-                <p className="mt-2 text-sm text-[var(--muted)]">
-                  Add one primary goal below — the advisor will build a cut plan and payday split around it.
+          {/* Quiet advisor ribbon — not a hero card */}
+          {advisor ? (
+            <div
+              className={`mb-5 flex flex-wrap items-center justify-between gap-3 border-l-[3px] border-[var(--sapphire)] bg-[var(--sheet)] px-4 py-2.5 shadow-[var(--elev-1)] ${
+                advisor.advisor_severity?.level === 'strict' ||
+                advisor.voice?.mood === 'strict' ||
+                advisor.voice?.mood === 'firm'
+                  ? 'border-l-[var(--debit)]'
+                  : ''
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--sapphire)]">
+                  Advisor · {data.label}
+                  {advisor.advisor_severity?.level || advisor.voice?.mood
+                    ? ` · ${advisor.advisor_severity?.level || advisor.voice?.mood}`
+                    : ''}
+                </p>
+                <p className="mt-0.5 truncate text-sm text-[var(--text)]">
+                  {advisor.voice?.opener || advisor.headline}
                 </p>
               </div>
-            )}
-          </section>
+              <div className="flex shrink-0 items-center gap-3 text-right">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Discipline</p>
+                  <p className="font-mono text-lg font-semibold tabular-nums text-[var(--text)]">
+                    {advisor.score}
+                  </p>
+                </div>
+                <p className="text-[10px] text-[var(--muted)]">
+                  Knows you {Math.round(advisor.profile?.completeness || trainCompleteness)}%
+                </p>
+              </div>
+            </div>
+          ) : null}
 
           <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Income base" value={formatINR(fw.income_base)} hint="Take-home used for plan" tone="credit" />
+            <KpiCard
+              label="Income base"
+              value={formatINR(fw.income_base)}
+              amount={fw.income_base}
+              tone="credit"
+              animate
+              hint="Take-home used for plan"
+            />
             <KpiCard
               label="Surplus now"
               value={formatINR(fw.available_surplus)}
+              amount={fw.available_surplus}
+              animate
               hint={
                 (fw.disc_overshoot || 0) > 0
                   ? `Blocked — Disc ₹${Math.round(fw.disc_overshoot || 0).toLocaleString('en-IN')} over`
@@ -713,32 +666,132 @@ export function MoneyPlanningPage() {
             <KpiCard
               label="Unlock if on plan"
               value={formatINR(fw.surplus_if_on_plan || 0)}
-              hint="After cutting Discretionary overshoot"
+              amount={fw.surplus_if_on_plan || 0}
               tone="credit"
+              animate
+              hint="After cutting Discretionary overshoot"
             />
-            <KpiCard label="Buffer leftover" value={formatINR(data.liquid_buffer_estimate)} hint="Lump-sum candidate" />
+            <KpiCard
+              label="Buffer leftover"
+              value={formatINR(data.liquid_buffer_estimate)}
+              amount={data.liquid_buffer_estimate}
+              rail="wealth"
+              animate
+              hint="Lump-sum candidate"
+            />
           </div>
 
+          {/* Bucket bands */}
+          <div className="mb-5 space-y-2">
+            <div className="flex items-end justify-between gap-2">
+              <h3 className="text-sm font-semibold text-[var(--text)]">Buckets</h3>
+              <button type="button" className="btn text-xs" onClick={() => setShowFramework((s) => !s)}>
+                {showFramework ? 'Hide chart' : 'Show chart'}
+              </button>
+            </div>
+            {fw.comparison.map((row) => (
+              <BucketBand
+                key={row.bucket}
+                label={row.bucket}
+                wealthClass={row.wealth_class}
+                actual={row.actual_inr}
+                template={row.template_inr}
+              />
+            ))}
+          </div>
+
+          {focus ? (
+            <section className="elev-sheet mb-5 px-4 py-4">
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted)]">Primary goal</p>
+                  <h3 className="display text-xl font-semibold">{focus.name}</h3>
+                </div>
+                <LedgerAmount
+                  amount={focus.saved}
+                  rail="sapphire"
+                  size="md"
+                  className="py-1"
+                />
+              </div>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                of {formatINR(focus.target)} · {focus.status_line}
+              </p>
+              <GoalProgressBar pct={focus.progress_pct} />
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                <div className="border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase text-[var(--muted)]">Unlock /mo</p>
+                  <p className="mt-1 font-mono text-base font-semibold tabular-nums text-[var(--credit)]">
+                    {formatINR(focus.unlocked_monthly || 0)}
+                  </p>
+                </div>
+                <div className="border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase text-[var(--muted)]">Lump sum</p>
+                  <p className="mt-1 font-mono text-base font-semibold tabular-nums">
+                    {formatINR(focus.funding?.lump_sum_available || 0)}
+                  </p>
+                </div>
+                <div className="border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5">
+                  <p className="text-[10px] uppercase text-[var(--muted)]">Pace</p>
+                  <p className="mt-1 text-sm font-medium leading-snug">
+                    {focus.months_at_unlocked_pace != null
+                      ? `~${focus.months_at_unlocked_pace} mo`
+                      : 'Set a cut plan'}
+                  </p>
+                </div>
+              </div>
+              {focus.goal_id ? (
+                <div className="mt-4 flex flex-wrap items-end gap-2">
+                  <label className="text-xs text-[var(--muted)]">
+                    Contribute ₹
+                    <input
+                      className="field mt-1 w-36"
+                      type="number"
+                      min={1}
+                      placeholder={String(Math.round(focus.unlocked_monthly || 0) || '')}
+                      value={contribDrafts[focus.goal_id] || ''}
+                      onChange={(e) =>
+                        setContribDrafts((d) => ({ ...d, [focus.goal_id!]: e.target.value }))
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy === `contrib-${focus.goal_id}`}
+                    onClick={() => void onContribute(focus.goal_id!)}
+                  >
+                    {busy === `contrib-${focus.goal_id}` ? <Loader2 className="animate-spin" size={16} /> : null}
+                    Log contribution
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           <div className="mb-5 grid gap-4 lg:grid-cols-2">
-            {/* Cut to unlock */}
-            <section className="panel px-4 py-4">
+            <section className="elev-sheet px-4 py-4">
               <h3 className="text-sm font-semibold">Exact cut plan</h3>
               <p className="mt-1 text-xs text-[var(--muted)]">
                 Do these and goal funding unlocks — Investments untouched.
               </p>
-              <ol className="mt-4 space-y-3">
-                {advisor.next_actions.map((step, i) => (
-                  <li key={i} className="flex gap-3 text-sm">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--bg)] text-xs font-semibold text-[var(--accent)]">
-                      {i + 1}
-                    </span>
-                    <span className="leading-snug">{step}</span>
-                  </li>
-                ))}
-              </ol>
-              {(advisor.cut_to_unlock.cuts || []).length > 0 ? (
+              {advisor?.next_actions?.length ? (
+                <ol className="mt-4 space-y-3">
+                  {advisor.next_actions.map((step, i) => (
+                    <li key={i} className="flex gap-3 text-sm">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-semibold text-[var(--sapphire)]">
+                        {i + 1}
+                      </span>
+                      <span className="leading-snug">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="mt-4 text-sm text-[var(--muted)]">No cut steps yet.</p>
+              )}
+              {(advisor?.cut_to_unlock?.cuts || []).length > 0 ? (
                 <ul className="mt-4 divide-y divide-[var(--border)] border-t border-[var(--border)] text-sm">
-                    {advisor.cut_to_unlock.cuts.map((c) => (
+                  {advisor!.cut_to_unlock.cuts.map((c) => (
                     <li key={`${c.merchant || c.category}-${c.cut_by}`} className="flex justify-between gap-3 py-2">
                       <span>
                         {c.merchant || c.category}
@@ -751,20 +804,19 @@ export function MoneyPlanningPage() {
                   ))}
                 </ul>
               ) : null}
-              {advisor.cut_to_unlock.keep_note ? (
+              {advisor?.cut_to_unlock?.keep_note ? (
                 <p className="mt-3 text-xs text-[var(--credit)]">{advisor.cut_to_unlock.keep_note}</p>
               ) : null}
             </section>
 
-            {/* Salary day */}
-            <section className="panel px-4 py-4">
-              <h3 className="text-sm font-semibold">{advisor.salary_day.title}</h3>
-              <p className="mt-1 text-xs text-[var(--muted)]">{advisor.salary_day.subtitle}</p>
+            <section className="elev-sheet px-4 py-4">
+              <h3 className="text-sm font-semibold">{advisor?.salary_day?.title || 'Salary day'}</h3>
+              <p className="mt-1 text-xs text-[var(--muted)]">{advisor?.salary_day?.subtitle}</p>
               <div className="mt-4 space-y-3">
-                {advisor.salary_day.steps.map((step) => (
+                {(advisor?.salary_day?.steps || []).map((step) => (
                   <div
                     key={step.order}
-                    className="flex items-start justify-between gap-3 rounded-xl bg-[var(--bg)] px-3 py-3"
+                    className="flex items-start justify-between gap-3 border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3"
                   >
                     <div>
                       <p className="text-sm font-medium">
@@ -789,22 +841,21 @@ export function MoneyPlanningPage() {
                         </ul>
                       ) : null}
                     </div>
-                    <p className="shrink-0 text-sm font-semibold tabular-nums">{formatINR(step.amount)}</p>
+                    <p className="shrink-0 font-mono text-sm font-semibold tabular-nums">{formatINR(step.amount)}</p>
                   </div>
                 ))}
               </div>
             </section>
           </div>
 
-            {/* Your discretionary spend */}
-            {(advisor.your_spend?.discretionary_merchants || []).length > 0 ? (
-              <section className="panel mb-5 px-4 py-4">
+            {(advisor?.your_spend?.discretionary_merchants || []).length > 0 ? (
+              <section className="elev-sheet mb-5 px-4 py-4">
                 <h3 className="text-sm font-semibold">Your Discretionary this month</h3>
                 <p className="mt-1 text-xs text-[var(--muted)]">
                   Advisor cuts target the top of this list — protected tools stay.
                 </p>
                 <ul className="mt-3 divide-y divide-[var(--border)] text-sm">
-                  {advisor.your_spend!.discretionary_merchants.map((m) => (
+                  {advisor!.your_spend!.discretionary_merchants.map((m) => (
                     <li key={m.name} className="flex items-center justify-between gap-3 py-2">
                       <span>
                         {m.name}
@@ -812,24 +863,24 @@ export function MoneyPlanningPage() {
                           {m.protected ? 'keep' : m.category}
                         </span>
                       </span>
-                      <span className="tabular-nums">{formatINR(m.amount)}</span>
+                      <span className="font-mono tabular-nums">{formatINR(m.amount)}</span>
                     </li>
                   ))}
                 </ul>
               </section>
             ) : null}
 
-            {/* Wealth methods */}
-          <section className="panel mb-5 px-4 py-4">
+          {(advisor?.methods || []).length > 0 ? (
+          <section className="elev-sheet mb-5 px-4 py-4">
             <h3 className="text-sm font-semibold">What wealthy savers actually do</h3>
             <p className="mt-1 text-xs text-[var(--muted)]">
               Checked against your month — not theory for its own sake.
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {advisor.methods.map((m) => (
+              {advisor!.methods.map((m) => (
                 <article
                   key={m.id}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-3"
+                  className="border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3"
                 >
                   <div className="flex items-start gap-2">
                     {m.on_track ? (
@@ -848,20 +899,21 @@ export function MoneyPlanningPage() {
               ))}
             </div>
             <ul className="mt-4 flex flex-wrap gap-2 text-[11px] text-[var(--muted)]">
-              {advisor.rules.map((r) => (
+              {(advisor?.rules || []).map((r) => (
                 <li key={r} className="rounded-full border border-[var(--border)] px-2.5 py-1">
                   {r}
                 </li>
               ))}
             </ul>
           </section>
+          ) : null}
 
           {showFramework ? (
             <div className="mb-5 grid gap-4 lg:grid-cols-2">
               <ChartCard title="Actual vs template" subtitle="Secondary view — coach first, bars second">
                 <GroupedComparisonBars data={chartData} />
               </ChartCard>
-              <section className="panel overflow-hidden">
+              <section className="elev-sheet overflow-hidden">
                 <div className="border-b border-[var(--border)] px-4 py-3">
                   <h3 className="text-sm font-semibold">Bucket map</h3>
                 </div>
@@ -872,7 +924,7 @@ export function MoneyPlanningPage() {
                         <p className="font-medium">{row.bucket}</p>
                         <p className="text-xs capitalize text-[var(--muted)]">{row.wealth_class}</p>
                       </div>
-                      <div className="text-right tabular-nums">
+                      <div className="text-right font-mono tabular-nums">
                         <p>{formatINR(row.actual_inr)}</p>
                         <p className="text-xs text-[var(--muted)]">of {formatINR(row.template_inr)}</p>
                       </div>
@@ -883,8 +935,7 @@ export function MoneyPlanningPage() {
             </div>
           ) : null}
 
-          {/* New goal */}
-          <section className="panel mb-5 px-4 py-4">
+          <section className="elev-sheet mb-5 px-4 py-4">
             <h2 className="text-sm font-semibold">Add a goal</h2>
             <form className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" onSubmit={(e) => void onCreateGoal(e)}>
               <label className="text-xs text-[var(--muted)] sm:col-span-2">
@@ -926,7 +977,7 @@ export function MoneyPlanningPage() {
           </section>
 
           {pendingConfirm ? (
-            <section className="mb-5 rounded-xl border border-[var(--accent)]/30 px-4 py-4">
+            <section className="elev-sheet mb-5 border-[var(--sapphire)]/30 px-4 py-4">
               <h3 className="text-sm font-semibold">Confirm price — {pendingConfirm.name}</h3>
               {pendingConfirm.price_lookup?.sources?.length ? (
                 <ul className="mt-2 list-inside list-disc text-xs text-[var(--muted)]">
@@ -967,74 +1018,92 @@ export function MoneyPlanningPage() {
             </div>
           ) : null}
 
-          {/* Other goals */}
-          <div className="space-y-3">
+          {/* Goals as passbook lines */}
+          <div className="mb-2">
             <h3 className="text-sm font-semibold text-[var(--muted)]">All goals · priority order</h3>
-            {activeGoals.length === 0 ? (
-              <div className="panel px-4 py-8 text-center text-sm text-[var(--muted)]">No goals yet.</div>
-            ) : (
-              activeGoals.map((g, index) => (
-                <article key={g.id} className="panel px-4 py-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
-                        #{index + 1}
-                        {index === 0 ? ' · primary' : ''}
-                      </span>
-                      <h4 className="text-lg font-semibold">{g.name}</h4>
-                      <p className="text-sm text-[var(--muted)]">
-                        {formatINR(g.saved_amount || 0)} / {formatINR(g.target_price || 0)}
-                      </p>
+          </div>
+          {activeGoals.length === 0 ? (
+            <div className="elev-sheet px-4 py-8 text-center text-sm text-[var(--muted)]">
+              <Target className="mx-auto mb-2 text-[var(--muted)]" size={22} />
+              No goals yet — add one above.
+            </div>
+          ) : (
+            <div className="passbook-list elev-sheet overflow-hidden">
+              {activeGoals.map((g, index) => (
+                <article key={g.id} className="passbook-row px-3 py-3 sm:px-4">
+                  <div className="flex gap-3">
+                    <span
+                      className={`ledger-rail__bar mt-1 self-stretch ${
+                        index === 0 ? 'ledger-rail__bar--wealth' : 'ledger-rail__bar--credit'
+                      }`}
+                      aria-hidden
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
+                            #{index + 1}
+                            {index === 0 ? ' · primary' : ''}
+                          </span>
+                          <h4 className="text-base font-semibold">{g.name}</h4>
+                          <p className="font-mono text-sm tabular-nums text-[var(--muted)]">
+                            <span className="text-[var(--sapphire)]">{formatINR(g.saved_amount || 0)}</span>
+                            {' / '}
+                            {formatINR(g.target_price || 0)}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          <button type="button" className="btn" disabled={index === 0} onClick={() => void moveGoal(g.id, -1)} aria-label="Move up">
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={index === activeGoals.length - 1}
+                            onClick={() => void moveGoal(g.id, 1)}
+                            aria-label="Move down"
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                          <button type="button" className="btn" onClick={() => void onLookup(g.id)} aria-label="Lookup price">
+                            <RefreshCw size={14} />
+                          </button>
+                          <button type="button" className="btn btn-primary" onClick={() => void onComplete(g.id)}>
+                            Complete
+                          </button>
+                          <button type="button" className="btn" onClick={() => void onDelete(g.id)} aria-label="Delete">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      <GoalProgressBar pct={g.progress_pct || 0} />
+                      <p className="mt-2 text-xs text-[var(--muted)]">{g.status_line}</p>
+                      <div className="mt-2 flex flex-wrap items-end gap-2">
+                        <label className="text-xs text-[var(--muted)]">
+                          Contribute ₹
+                          <input
+                            className="field mt-1 w-32"
+                            type="number"
+                            min={1}
+                            value={contribDrafts[g.id] || ''}
+                            onChange={(e) => setContribDrafts((d) => ({ ...d, [g.id]: e.target.value }))}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={busy === `contrib-${g.id}`}
+                          onClick={() => void onContribute(g.id)}
+                        >
+                          Log
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                      <button type="button" className="btn" disabled={index === 0} onClick={() => void moveGoal(g.id, -1)}>
-                        <ArrowUp size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        disabled={index === activeGoals.length - 1}
-                        onClick={() => void moveGoal(g.id, 1)}
-                      >
-                        <ArrowDown size={14} />
-                      </button>
-                      <button type="button" className="btn" onClick={() => void onLookup(g.id)}>
-                        <RefreshCw size={14} />
-                      </button>
-                      <button type="button" className="btn btn-primary" onClick={() => void onComplete(g.id)}>
-                        Complete
-                      </button>
-                      <button type="button" className="btn" onClick={() => void onDelete(g.id)}>
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                  <GoalProgressBar pct={g.progress_pct || 0} />
-                  <p className="mt-2 text-sm">{g.status_line}</p>
-                  <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <label className="text-xs text-[var(--muted)]">
-                      Contribute ₹
-                      <input
-                        className="field mt-1 w-32"
-                        type="number"
-                        min={1}
-                        value={contribDrafts[g.id] || ''}
-                        onChange={(e) => setContribDrafts((d) => ({ ...d, [g.id]: e.target.value }))}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busy === `contrib-${g.id}`}
-                      onClick={() => void onContribute(g.id)}
-                    >
-                      Log
-                    </button>
                   </div>
                 </article>
-              ))
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </>
       ) : null}
     </div>

@@ -52,6 +52,7 @@ export function TransactionRow({
   categories,
   onDelete,
   onCategoryChange,
+  variant = 'default',
 }: {
   txn: Transaction
   categories: string[]
@@ -60,15 +61,25 @@ export function TransactionRow({
     id: string,
     category: string,
   ) => void | Promise<void | CategoryChangeResult | null | undefined>
+  /** Visual only — Dashboard passbook rows. */
+  variant?: 'default' | 'passbook'
 }) {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [advisorNote, setAdvisorNote] = useState<CategoryChangeResult | null>(null)
   const message = txn.raw_text || '—'
+  const passbook = variant === 'passbook'
+  const railClass = txn.type === 'debit' ? 'ledger-rail__bar--debit' : 'ledger-rail__bar--credit'
+  const amountClass =
+    txn.type === 'debit' ? 'ledger-amount__value--debit' : 'ledger-amount__value--credit'
 
   return (
-    <article className="border-b border-[var(--border)] last:border-0">
-      <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+    <article className={passbook ? 'passbook-row' : 'border-b border-[var(--border)] last:border-0'}>
+      <div
+        className={`flex flex-col gap-3 py-3 sm:flex-row sm:items-start sm:justify-between ${
+          passbook ? 'px-3' : 'px-4'
+        }`}
+      >
         <button
           type="button"
           className="min-w-0 flex-1 text-left"
@@ -76,15 +87,18 @@ export function TransactionRow({
           aria-expanded={open}
         >
           <div className="flex items-start gap-2">
+            {passbook ? (
+              <span className={`ledger-rail__bar ${railClass} mt-1 self-stretch`} aria-hidden />
+            ) : null}
             <span className="mt-0.5 text-[var(--muted)]">
               {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             </span>
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span
-                  className={`text-base font-semibold tabular-nums ${
-                    txn.type === 'debit' ? 'text-[var(--debit)]' : 'text-[var(--credit)]'
-                  }`}
+                  className={`text-base font-semibold ${
+                    passbook ? `ledger-amount__value ${amountClass}` : 'tabular-nums'
+                  } ${passbook ? '' : txn.type === 'debit' ? 'text-[var(--debit)]' : 'text-[var(--credit)]'}`}
                 >
                   {txn.type === 'debit' ? '−' : '+'}
                   {formatINR(txn.amount)}

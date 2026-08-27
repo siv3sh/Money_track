@@ -51,7 +51,7 @@ export function PortfolioEditor({ onSaved }: { onSaved: () => void }) {
   if (!loaded && !error) return null
 
   return (
-    <section className="panel mb-5 overflow-hidden">
+    <section className="elev-sheet mb-5 overflow-hidden">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
         <div>
           <h3 className="text-sm font-semibold">Portfolio market values</h3>

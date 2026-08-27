@@ -1,14 +1,57 @@
 import { useState } from 'react'
-import { FileUp, Sparkles, Bot } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Check, FileUp, FileSpreadsheet, Sparkles, Bot } from 'lucide-react'
 import { uploadStatementFile, type StatementImportResult } from '../api'
+import { LedgerAmount } from '../components/LedgerAmount'
 import { PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
+
+function PipelineTicks({
+  stages,
+  current,
+}: {
+  stages: string[]
+  current?: string | null
+}) {
+  return (
+    <ol className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-2 text-[11px]">
+      {stages.map((stage, i) => {
+        const done =
+          current === 'complete' ||
+          (current
+            ? stages.indexOf(stage) <= stages.indexOf(current)
+            : false)
+        return (
+          <li key={stage} className="flex items-center gap-1">
+            {i > 0 ? <span className="mx-0.5 text-[var(--border-strong)]">·</span> : null}
+            <span
+              className={`inline-flex items-center gap-1 ${
+                done ? 'font-semibold text-[var(--sapphire)]' : 'text-[var(--muted)]'
+              }`}
+            >
+              {done ? (
+                <Check size={12} className="shrink-0 text-[var(--sapphire)]" aria-hidden />
+              ) : (
+                <span
+                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-[var(--border-strong)]"
+                  aria-hidden
+                />
+              )}
+              {stage.replaceAll('_', ' ')}
+            </span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
 
 export function ImportPage() {
   const [busy, setBusy] = useState(false)
   const [ok, setOk] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [result, setResult] = useState<StatementImportResult | null>(null)
+  const [dragOver, setDragOver] = useState(false)
 
   const saveFile = async (file: File | null) => {
     if (!file) return
@@ -47,7 +90,7 @@ export function ImportPage() {
         )
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Import failed')
+      setErr(e instanceof Error && e.message.trim() ? e.message : 'Import failed')
     } finally {
       setBusy(false)
     }
@@ -55,54 +98,61 @@ export function ImportPage() {
 
   const analysis = result?.analysis
   const agent = result?.agent
+  const stages = result?.pipeline_stages || result?.agent?.stages || []
+  const currentStage = result?.pipeline_stage || result?.agent?.stage
 
   return (
     <div className="fade-in">
       <PageHeader
         title="Import"
-        description="LangGraph multi-agent import: extract → map columns → categorize (RAG) → validate → review. High-confidence rows commit automatically; unclear rows go to Learn About Me."
+        description="Extract → map → categorize → validate → review. High-confidence rows commit; unclear rows hold for Learn About Me."
+        actions={
+          <Link to="/investments/indmoney" className="btn">
+            <FileSpreadsheet size={14} />
+            INDmoney portfolio
+          </Link>
+        }
       />
 
-      <section className="panel max-w-xl p-5">
-        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--accent-soft)] text-[var(--accent)]">
-          <FileUp size={22} />
+      <section className="elev-sheet max-w-xl p-5">
+        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--sapphire)]">
+          <FileUp size={20} />
         </div>
         <h2 className="text-base font-semibold">Statement upload</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          PDF (OCR fallback), multi-sheet Excel, and CSV. Cross-source dedup against SMS + past
-          imports. RAG vectors live in MongoDB (`document_formats`, `merchant_knowledge`).
+          PDF, Excel, or CSV. Cross-source dedup against SMS + past imports.
         </p>
 
-        {(result?.pipeline_stages || result?.agent?.stages) && (
-          <ol className="mt-4 flex flex-wrap gap-1.5 text-[10px] font-semibold uppercase tracking-wide">
-            {(result.pipeline_stages || result.agent?.stages || []).map((stage) => {
-              const current = result.pipeline_stage || result.agent?.stage
-              const done =
-                current === 'complete' ||
-                (result.pipeline_stages || result.agent?.stages || []).indexOf(stage) <=
-                  (result.pipeline_stages || result.agent?.stages || []).indexOf(current || '')
-              return (
-                <li
-                  key={stage}
-                  className={
-                    done
-                      ? 'rounded-md bg-[var(--accent-soft)] px-2 py-1 text-[var(--accent)]'
-                      : 'rounded-md bg-[var(--surface-2)] px-2 py-1 text-[var(--muted)]'
-                  }
-                >
-                  {stage.replaceAll('_', ' ')}
-                </li>
-              )
-            })}
-          </ol>
-        )}
+        {stages.length ? (
+          <PipelineTicks stages={stages} current={currentStage} />
+        ) : null}
 
-        <label className="mt-5 flex flex-col gap-1.5 text-xs font-medium text-[var(--muted)]">
-          File
+        <label
+          className={`mt-5 flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed px-4 py-10 text-sm transition-colors ${
+            dragOver
+              ? 'border-[var(--sapphire)] bg-[var(--accent-soft)]'
+              : 'border-[var(--border-strong)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
+          }`}
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragOver(false)
+            void saveFile(e.dataTransfer.files?.[0] || null)
+          }}
+        >
+          <FileUp size={18} className="text-[var(--muted)]" />
+          <span className="font-medium text-[var(--text)]">
+            {busy ? 'Importing…' : 'Drop statement or click to browse'}
+          </span>
+          <span className="text-xs text-[var(--muted)]">.pdf · .xlsx · .csv</span>
           <input
             type="file"
             accept=".csv,.tsv,.txt,.xlsx,.xls,.pdf"
-            className="field"
+            className="sr-only"
             disabled={busy}
             onChange={(e) => void saveFile(e.target.files?.[0] || null)}
           />
@@ -115,22 +165,22 @@ export function ImportPage() {
           </p>
         ) : null}
         {ok ? (
-          <p className="mt-4 rounded-xl bg-[var(--credit-soft)] px-3 py-2 text-sm text-[var(--credit)]">
+          <p className="mt-4 border border-[var(--credit)]/20 bg-[var(--credit-soft)] px-3 py-2 text-sm text-[var(--credit)]">
             {ok}
           </p>
         ) : null}
         {err ? (
-          <p className="mt-4 rounded-xl bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]">
+          <p className="mt-4 border border-[var(--debit)]/20 bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]">
             {err}
           </p>
         ) : null}
       </section>
 
       {agent?.steps?.length ? (
-        <section className="panel mt-5 max-w-3xl overflow-hidden">
+        <section className="elev-sheet mt-5 max-w-3xl overflow-hidden">
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h3 className="flex items-center gap-2 text-sm font-semibold">
-              <Bot size={14} className="text-[var(--accent)]" />
+              <Bot size={14} className="text-[var(--sapphire)]" />
               Import agent · {agent.protocol || 'langgraph-import/v1'}
             </h3>
             <p className="text-xs text-[var(--muted)]">
@@ -142,25 +192,30 @@ export function ImportPage() {
             </p>
           </div>
           <ol className="divide-y divide-[var(--border)] text-sm">
-            {agent.steps.map((step, i) => (
-              <li key={`${step.tool}-${i}`} className="flex items-start gap-3 px-4 py-3">
-                <span
-                  className={
-                    step.status === 'ok'
-                      ? 'mt-0.5 rounded bg-[var(--credit-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[var(--credit)]'
-                      : step.status === 'warn' || step.status === 'error'
-                        ? 'mt-0.5 rounded bg-[var(--debit-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[var(--debit)]'
-                        : 'mt-0.5 rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[var(--muted)]'
-                  }
-                >
-                  {step.status}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">{step.tool}</p>
-                  <p className="text-xs text-[var(--muted)]">{step.detail}</p>
-                </div>
-              </li>
-            ))}
+            {agent.steps.map((step, i) => {
+              const okStep = step.status === 'ok'
+              const bad = step.status === 'warn' || step.status === 'error'
+              return (
+                <li key={`${step.tool}-${i}`} className="flex items-start gap-3 px-4 py-3">
+                  <span
+                    className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                      okStep
+                        ? 'bg-[var(--credit-soft)] text-[var(--credit)]'
+                        : bad
+                          ? 'bg-[var(--debit-soft)] text-[var(--debit)]'
+                          : 'bg-[var(--surface-3)] text-[var(--muted)]'
+                    }`}
+                    aria-hidden
+                  >
+                    {okStep ? <Check size={12} /> : <span className="text-[9px] font-bold">{i + 1}</span>}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">{step.tool}</p>
+                    <p className="text-xs text-[var(--muted)]">{step.detail}</p>
+                  </div>
+                </li>
+              )
+            })}
           </ol>
           {agent.warnings?.length ? (
             <ul className="border-t border-[var(--border)] px-4 py-3 text-xs text-[var(--debit)]">
@@ -173,28 +228,42 @@ export function ImportPage() {
       ) : null}
 
       {result?.review_queue?.length ? (
-        <section className="panel mt-5 max-w-3xl overflow-hidden">
+        <section className="elev-sheet mt-5 max-w-3xl overflow-hidden">
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h3 className="text-sm font-semibold">Held for review</h3>
             <p className="text-xs text-[var(--muted)]">
-              Low-confidence or flagged rows — answer them in AI Insights → Learn About Me
+              Debit plaque bar = hold · resolve in AI Insights → Learn About Me
             </p>
           </div>
-          <ul className="divide-y divide-[var(--border)] text-sm">
+          <ul className="passbook-list">
             {result.review_queue.map((r, i) => (
-              <li key={i} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3">
-                <div>
-                  <p className="font-medium">{r.merchant || 'Unknown'}</p>
-                  <p className="text-xs text-[var(--muted)]">
-                    {r.reason || 'needs review'}
-                    {r.category ? ` · suggested ${r.category}` : ''}
-                  </p>
+              <li key={i} className="passbook-row flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                <div className="flex min-w-0 gap-3">
+                  <span className="ledger-rail__bar ledger-rail__bar--debit mt-1 self-stretch" aria-hidden />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--debit)]">
+                      Hold
+                    </p>
+                    <p className="font-medium">{r.merchant || 'Unknown'}</p>
+                    <p className="text-xs text-[var(--muted)]">
+                      {r.reason || 'needs review'}
+                      {r.category ? ` · suggested ${r.category}` : ''}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right text-xs text-[var(--muted)]">
-                  <p className="font-medium tabular-nums text-[var(--text)]">
-                    {formatINR(Number(r.amount) || 0)} · {r.type}
-                  </p>
-                  {r.confidence != null ? <p>conf {(Number(r.confidence) * 100).toFixed(0)}%</p> : null}
+                <div className="text-right">
+                  <LedgerAmount
+                    amount={Number(r.amount) || 0}
+                    rail="debit"
+                    size="sm"
+                    className="ml-auto justify-end py-1"
+                  />
+                  <p className="mt-0.5 text-[10px] uppercase text-[var(--muted)]">{r.type}</p>
+                  {r.confidence != null ? (
+                    <p className="text-[10px] text-[var(--muted)]">
+                      conf {(Number(r.confidence) * 100).toFixed(0)}%
+                    </p>
+                  ) : null}
                 </div>
               </li>
             ))}
@@ -203,7 +272,7 @@ export function ImportPage() {
       ) : null}
 
       {result?.detected ? (
-        <section className="panel mt-5 max-w-xl px-4 py-3 text-sm">
+        <section className="elev-sheet mt-5 max-w-xl px-4 py-3 text-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
             Detected
           </p>
@@ -220,41 +289,33 @@ export function ImportPage() {
       ) : null}
 
       {analysis ? (
-        <section className="panel mt-5 max-w-3xl overflow-hidden">
+        <section className="elev-sheet mt-5 max-w-3xl overflow-hidden">
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h3 className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles size={14} className="text-[var(--accent)]" />
-              Import analysis
+              <Sparkles size={14} className="text-[var(--sapphire)]" />
+              Committed analysis
             </h3>
             <p className="text-xs text-[var(--muted)]">
-              Auto-categorized with RAG + investment/credit-card cues
+              Credit plaque bar = committed totals
               {analysis.ai_note ? ` · ${analysis.ai_note}` : ''}
             </p>
           </div>
           <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-              <p className="text-[10px] uppercase text-[var(--muted)]">Debits</p>
-              <p className="text-lg font-semibold tabular-nums text-[var(--debit)]">
-                {formatINR(analysis.debit_total)}
-              </p>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Debits</p>
+              <LedgerAmount amount={analysis.debit_total} rail="debit" size="md" className="py-1" />
             </div>
             <div>
-              <p className="text-[10px] uppercase text-[var(--muted)]">Credits</p>
-              <p className="text-lg font-semibold tabular-nums text-[var(--credit)]">
-                {formatINR(analysis.credit_total)}
-              </p>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Credits</p>
+              <LedgerAmount amount={analysis.credit_total} rail="credit" size="md" className="py-1" />
             </div>
             <div>
-              <p className="text-[10px] uppercase text-[var(--muted)]">Investments</p>
-              <p className="text-lg font-semibold tabular-nums">
-                {formatINR(analysis.investment_debit)}
-              </p>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Investments</p>
+              <LedgerAmount amount={analysis.investment_debit} rail="wealth" size="md" className="py-1" />
             </div>
             <div>
-              <p className="text-[10px] uppercase text-[var(--muted)]">Credit card</p>
-              <p className="text-lg font-semibold tabular-nums">
-                {formatINR(analysis.credit_card_spend)}
-              </p>
+              <p className="mb-1 text-[10px] uppercase text-[var(--muted)]">Credit card</p>
+              <LedgerAmount amount={analysis.credit_card_spend} rail="sapphire" size="md" className="py-1" />
             </div>
           </div>
           {analysis.highlights?.length ? (
@@ -273,7 +334,7 @@ export function ImportPage() {
                 {analysis.by_category.map((c) => (
                   <li
                     key={c.category}
-                    className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1"
+                    className="border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1"
                   >
                     {c.category} · {c.count}
                   </li>
@@ -285,25 +346,31 @@ export function ImportPage() {
       ) : null}
 
       {result?.likely_duplicates?.length ? (
-        <section className="panel mt-5 max-w-3xl overflow-hidden">
+        <section className="elev-sheet mt-5 max-w-3xl overflow-hidden">
           <div className="border-b border-[var(--border)] px-4 py-3">
             <h3 className="text-sm font-semibold">Likely cross-source duplicates (skipped)</h3>
             <p className="text-xs text-[var(--muted)]">
               Same amount, date, type, and similar merchant as an existing SMS/statement row
             </p>
           </div>
-          <ul className="divide-y divide-[var(--border)] text-sm">
+          <ul className="passbook-list">
             {result.likely_duplicates.map((d, i) => (
-              <li key={i} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3">
-                <div>
-                  <p className="font-medium">{d.incoming_merchant}</p>
-                  <p className="text-xs text-[var(--muted)]">
-                    Matched {d.matched_existing_merchant || 'existing'} · source{' '}
-                    {d.matched_existing_source || 'unknown'}
-                  </p>
+              <li key={i} className="passbook-row flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+                <div className="flex min-w-0 gap-3">
+                  <span className="ledger-rail__bar ledger-rail__bar--credit mt-1 self-stretch" aria-hidden />
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--credit)]">
+                      Skipped · commit-safe
+                    </p>
+                    <p className="font-medium">{d.incoming_merchant}</p>
+                    <p className="text-xs text-[var(--muted)]">
+                      Matched {d.matched_existing_merchant || 'existing'} · source{' '}
+                      {d.matched_existing_source || 'unknown'}
+                    </p>
+                  </div>
                 </div>
                 <div className="text-right text-xs text-[var(--muted)]">
-                  <p className="font-medium tabular-nums text-[var(--text)]">
+                  <p className="font-mono font-medium tabular-nums text-[var(--text)]">
                     {formatINR(Number(d.amount) || 0)} · {d.type}
                   </p>
                   <p>{d.received_at ? String(d.received_at).slice(0, 10) : '—'}</p>

@@ -37,8 +37,8 @@ function useDarkMode() {
     const saved = localStorage.getItem(THEME_KEY)
     if (saved === 'dark') return true
     if (saved === 'light') return false
-    // Prefer premium dark for first visit
-    return true
+    // Sapphire Vault: light first-paint
+    return false
   })
 
   useEffect(() => {
@@ -55,18 +55,18 @@ export function AppShell() {
 
   return (
     <FilterProvider>
-      <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
+      <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
         {mobileOpen ? (
           <button
             type="button"
-            className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+            className="fixed inset-0 z-40 bg-[color-mix(in_srgb,var(--ink)_40%,transparent)] lg:hidden"
             aria-label="Close menu"
             onClick={() => setMobileOpen(false)}
           />
         ) : null}
 
         <aside
-          className={`app-sidebar fixed inset-y-0 left-0 z-50 flex w-[var(--sidebar-w)] flex-col border-r border-[var(--border)] bg-[var(--surface)] transition-transform lg:translate-x-0 ${
+          className={`app-sidebar fixed inset-y-0 left-0 z-50 flex w-[var(--sidebar-w)] flex-col border-r border-[var(--border)] bg-[var(--sheet)] transition-transform lg:translate-x-0 ${
             mobileOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
           style={{ width: 248 }}
@@ -74,13 +74,16 @@ export function AppShell() {
           <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-4">
             <div>
               <div className="flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[var(--accent)] text-sm font-bold text-white">
-                  M
+                <span
+                  className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--sapphire)] text-sm font-semibold text-white"
+                  aria-hidden
+                >
+                  ₹
                 </span>
                 <div>
-                  <p className="text-sm font-semibold tracking-tight">Money Track</p>
+                  <p className="display text-sm font-semibold tracking-tight">Money Track</p>
                   <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--muted)]">
-                    Personal finance
+                    Sapphire Vault
                   </p>
                 </div>
               </div>
@@ -121,7 +124,7 @@ export function AppShell() {
         </aside>
 
         <div className="lg:pl-[248px]">
-          <header className="app-topbar sticky top-0 z-30 flex items-center gap-3 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--bg)_90%,transparent)] px-4 py-3 backdrop-blur-md sm:px-6">
+          <header className="app-topbar elev-float sticky top-0 z-30 flex items-center gap-3 border-b px-4 py-3 sm:px-6">
             <button
               type="button"
               className="btn lg:hidden"
@@ -132,11 +135,11 @@ export function AppShell() {
             </button>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm text-[var(--muted)]">
-                Live SMS + statements · categorized cash flow
+                SMS + statements · sapphire ledger
               </p>
             </div>
             <div className="hidden items-center gap-2 text-xs text-[var(--muted)] sm:flex">
-              <Wallet size={14} />
+              <span className="inline-block h-3 w-0.5 rounded-sm bg-[var(--sapphire)]" aria-hidden />
               Money Track
             </div>
           </header>
