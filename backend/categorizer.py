@@ -6,6 +6,7 @@ import re
 from typing import Any, Optional
 
 from merchant_label import clean_merchant_label, is_family_transfer, is_salary_source
+from cc_payment_pairing import apply_cc_payoff_tags
 
 # Stable category labels used across API + UI
 CATEGORIES = [
@@ -333,11 +334,20 @@ def categorize(
     return {"category": "Other", "mcc": mcc, "source": "other"}
 
 
-def apply_category(doc: dict[str, Any], merchant_memory: dict[str, str] | None = None) -> dict[str, Any]:
+def apply_category(
+    doc: dict[str, Any],
+    merchant_memory: dict[str, str] | None = None,
+    credit_card_accounts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Mutate/return doc with category (+ mcc, category_source) fields."""
     invest_hint = bool(doc.pop("_investment_hint", None))
     existing_source = str(doc.get("category_source") or "")
     existing_cat = str(doc.get("category") or "").strip()
+
+    def _finish() -> dict[str, Any]:
+        apply_cc_payoff_tags(doc, credit_card_accounts or [])
+        return doc
+
     # Keep high-signal RAG hits unless investment cue forces Investments
     if (
         existing_source.startswith("rag:")
@@ -345,7 +355,7 @@ def apply_category(doc: dict[str, Any], merchant_memory: dict[str, str] | None =
         and existing_cat != "Other"
         and not invest_hint
     ):
-        return doc
+        return _finish()
 
     result = categorize(
         merchant=doc.get("merchant"),
@@ -373,11 +383,9 @@ def apply_category(doc: dict[str, Any], merchant_memory: dict[str, str] | None =
     ):
         doc["category"] = existing_cat
         doc["category_source"] = existing_source
-        if "category_confidence" in doc:
-            pass
-        return doc
+        return _finish()
 
     doc["category"] = result["category"]
     doc["mcc"] = result.get("mcc")
     doc["category_source"] = result["source"]
-    return doc
+    return _finish()

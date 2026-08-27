@@ -19,6 +19,7 @@ import {
   StackedAreaChart,
 } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
+import { LedgerAmount } from '../components/LedgerAmount'
 import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
 import { exportDataUrl } from '../api'
 import { formatDate, formatINR } from '../lib/format'
@@ -34,6 +35,9 @@ export function WealthPage() {
   const snap = data?.indmoney_snapshot
   const freshness = data?.freshness
   const liabilitiesTotal = o?.liabilities_total ?? 0
+  const creditCardLiabilities = (data?.liabilities || []).filter(
+    (l) => (l.source || '') === 'credit_cards',
+  )
   const liquidHint =
     o?.liquid_source === 'indmoney'
       ? 'From INDmoney savings'
@@ -103,6 +107,9 @@ export function WealthPage() {
             <KpiCard
               label="Net worth"
               value={formatINR(o.net_worth_estimate)}
+              amount={o.net_worth_estimate}
+              rail="wealth"
+              animate
               change={mom?.net_pct}
               hint={
                 liabilitiesTotal
@@ -116,14 +123,18 @@ export function WealthPage() {
             <KpiCard
               label="Liquid cash"
               value={formatINR(o.liquid_total)}
+              amount={o.liquid_total}
               tone="credit"
+              animate
               hint={liquidHint}
               icon={<Landmark size={16} />}
             />
             <KpiCard
               label="Portfolio value"
               value={formatINR(inv?.total_current ?? o.total_invested)}
-              tone="credit"
+              amount={inv?.total_current ?? o.total_invested}
+              rail="wealth"
+              animate
               hint={
                 inv
                   ? `Cost ${formatINR(inv.total_invested)}`
@@ -134,14 +145,24 @@ export function WealthPage() {
             <KpiCard
               label="Overall P&L"
               value={formatINR(inv?.pnl ?? 0)}
-              tone={(inv?.pnl ?? 0) >= 0 ? 'credit' : 'debit'}
+              amount={inv?.pnl ?? 0}
+              rail={(inv?.pnl ?? 0) >= 0 ? 'wealth' : 'debit'}
+              animate
               hint={inv?.note || 'Needs live prices for accuracy'}
             />
             <KpiCard
               label="Liabilities"
               value={formatINR(liabilitiesTotal)}
+              amount={liabilitiesTotal}
               tone={liabilitiesTotal > 0 ? 'debit' : 'neutral'}
-              hint={liabilitiesTotal ? 'Tracked below' : 'Add loans / cards below'}
+              animate={liabilitiesTotal > 0}
+              hint={
+                liabilitiesTotal
+                  ? creditCardLiabilities.length
+                    ? `${creditCardLiabilities.length} card(s) + manual`
+                    : 'Tracked below'
+                  : 'Add loans / cards below'
+              }
               icon={<PiggyBank size={16} />}
             />
           </div>
@@ -184,7 +205,9 @@ export function WealthPage() {
               title="Assets vs liabilities"
               subtitle={
                 liabilitiesTotal
-                  ? 'Manual liabilities included'
+                  ? creditCardLiabilities.length
+                    ? 'Includes SMS credit cards + manual'
+                    : 'Manual liabilities included'
                   : 'No liabilities tracked yet'
               }
             >
@@ -271,12 +294,12 @@ export function WealthPage() {
                       name: h.name.length > 22 ? `${h.name.slice(0, 20)}…` : h.name,
                       value: h.invested,
                     }))}
-                    color="var(--accent)"
+                    color="var(--wealth)"
                   />
                 </ChartCard>
               </div>
 
-              <section className="panel mb-5 overflow-hidden">
+              <section className="elev-sheet mb-5 overflow-hidden">
                 <div className="border-b border-[var(--border)] px-4 py-3">
                   <h3 className="text-sm font-semibold">Holdings</h3>
                   <p className="text-xs text-[var(--muted)]">
@@ -307,15 +330,15 @@ export function WealthPage() {
                           <tr key={h.name} className="border-t border-[var(--border)]">
                             <td className="px-4 py-2.5 font-medium">{h.name}</td>
                             <td className="px-4 py-2.5 text-[var(--muted)]">{h.asset_class}</td>
-                            <td className="px-4 py-2.5 text-right tabular-nums">
+                            <td className="px-4 py-2.5 text-right font-medium tabular-nums text-[var(--wealth)]">
                               {formatINR(h.invested)}
                             </td>
-                            <td className="px-4 py-2.5 text-right tabular-nums">
+                            <td className="px-4 py-2.5 text-right font-medium tabular-nums text-[var(--wealth)]">
                               {formatINR(h.current_value)}
                             </td>
                             <td
-                              className={`px-4 py-2.5 text-right tabular-nums font-medium ${
-                                h.pnl >= 0 ? 'text-[var(--credit)]' : 'text-[var(--debit)]'
+                              className={`px-4 py-2.5 text-right font-medium tabular-nums ${
+                                h.pnl >= 0 ? 'text-[var(--wealth)]' : 'text-[var(--debit)]'
                               }`}
                             >
                               {formatINR(h.pnl)} ({h.pnl_pct.toFixed(1)}%)
@@ -338,6 +361,51 @@ export function WealthPage() {
                 </ChartCard>
               </div>
             </>
+          ) : null}
+
+          {creditCardLiabilities.length > 0 ? (
+            <section className="elev-sheet mb-5 overflow-hidden">
+              <div className="border-b border-[var(--border)] px-4 py-3">
+                <h3 className="text-sm font-semibold">Credit cards</h3>
+                <p className="text-xs text-[var(--muted)]">
+                  Statement outstanding + due date from SMS · counted in liabilities
+                </p>
+              </div>
+              <div className="grid gap-3 p-4 sm:grid-cols-2">
+                {creditCardLiabilities.map((card) => {
+                  const due = card.due_date
+                    ? formatDate(
+                        card.due_date.includes('T')
+                          ? card.due_date
+                          : `${card.due_date}T00:00:00`,
+                      )
+                    : null
+                  return (
+                    <div
+                      key={card.id}
+                      className="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--canvas)]/50 px-3 py-3"
+                    >
+                      <div>
+                        <p className="text-sm font-medium">{card.name}</p>
+                        <p className="mt-0.5 text-xs text-[var(--muted)]">
+                          {due ? `Due ${due}` : 'Due date unknown'}
+                          {card.available_limit != null
+                            ? ` · Avl ${formatINR(card.available_limit)}`
+                            : ''}
+                        </p>
+                      </div>
+                      <LedgerAmount
+                        amount={card.outstanding}
+                        rail="debit"
+                        size="md"
+                        animate
+                        className="py-1"
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
           ) : null}
 
           <div className="mb-5 grid gap-4 lg:grid-cols-2">
@@ -430,7 +498,7 @@ export function WealthPage() {
             {' · '}
             <button
               type="button"
-              className="text-[var(--accent)] hover:underline"
+              className="text-[var(--sapphire)] hover:underline"
               onClick={() =>
                 navigate(
                   transactionsHref({

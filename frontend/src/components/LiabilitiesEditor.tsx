@@ -1,24 +1,40 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { fetchLiabilities, saveLiabilities, type LiabilityItem } from '../api'
-import { formatINR } from '../lib/format'
+import { formatDate, formatINR } from '../lib/format'
+import { LedgerAmount } from './LedgerAmount'
 
 const TYPES = [
-  { value: 'credit_card', label: 'Credit card' },
   { value: 'loan', label: 'Loan' },
   { value: 'emi', label: 'EMI' },
   { value: 'bnpl', label: 'BNPL' },
+  { value: 'credit_card', label: 'Credit card (manual)' },
   { value: 'other', label: 'Other' },
 ]
 
 const emptyRow = (): LiabilityItem => ({
   name: '',
-  type: 'credit_card',
+  type: 'loan',
   outstanding: 0,
+  source: 'manual',
   last_updated: new Date().toISOString().slice(0, 10),
 })
 
+function isAutoCard(row: LiabilityItem): boolean {
+  return (row.source || '') === 'credit_cards'
+}
+
+function dueLabel(due: string | null | undefined): string {
+  if (!due) return 'Due date unknown'
+  try {
+    return `Due ${formatDate(due.includes('T') ? due : `${due}T00:00:00`)}`
+  } catch {
+    return `Due ${due}`
+  }
+}
+
 export function LiabilitiesEditor({ onSaved }: { onSaved?: () => void }) {
+  const [autoRows, setAutoRows] = useState<LiabilityItem[]>([])
   const [rows, setRows] = useState<LiabilityItem[]>([emptyRow()])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -27,19 +43,24 @@ export function LiabilitiesEditor({ onSaved }: { onSaved?: () => void }) {
   useEffect(() => {
     void fetchLiabilities()
       .then((r) => {
-        if (r.items.length) {
-          setRows(
-            r.items.map((i) => ({
-              ...i,
-              last_updated: (i.updated_at || '').slice(0, 10),
-            })),
-          )
-        }
+        const auto = r.items.filter(isAutoCard)
+        const manual = r.items.filter((i) => !isAutoCard(i))
+        setAutoRows(auto)
+        setRows(
+          manual.length
+            ? manual.map((i) => ({
+                ...i,
+                last_updated: (i.updated_at || '').slice(0, 10),
+              }))
+            : [emptyRow()],
+        )
       })
       .catch(() => undefined)
   }, [])
 
-  const total = rows.reduce((s, r) => s + (Number(r.outstanding) || 0), 0)
+  const manualTotal = rows.reduce((s, r) => s + (Number(r.outstanding) || 0), 0)
+  const autoTotal = autoRows.reduce((s, r) => s + (Number(r.outstanding) || 0), 0)
+  const total = manualTotal + autoTotal
 
   const save = async () => {
     setBusy(true)
@@ -55,15 +76,18 @@ export function LiabilitiesEditor({ onSaved }: { onSaved?: () => void }) {
           last_updated: r.last_updated || null,
         }))
       const res = await saveLiabilities(cleaned)
+      const auto = res.items.filter(isAutoCard)
+      const manual = res.items.filter((i) => !isAutoCard(i))
+      setAutoRows(auto)
       setRows(
-        res.items.length
-          ? res.items.map((i) => ({
+        manual.length
+          ? manual.map((i) => ({
               ...i,
               last_updated: (i.updated_at || '').slice(0, 10),
             }))
           : [emptyRow()],
       )
-      setMsg(`Saved ${res.items.length} liabilities · total ${formatINR(res.total)}`)
+      setMsg(`Saved · total ${formatINR(res.total)} (cards auto-synced from SMS)`)
       onSaved?.()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Save failed')
@@ -73,14 +97,34 @@ export function LiabilitiesEditor({ onSaved }: { onSaved?: () => void }) {
   }
 
   return (
-    <section className="panel mb-5 overflow-hidden">
+    <section className="elev-sheet mb-5 overflow-hidden">
       <div className="border-b border-[var(--border)] px-4 py-3">
         <h3 className="text-sm font-semibold">Liabilities</h3>
         <p className="text-xs text-[var(--muted)]">
-          Credit cards, loans, EMI / BNPL — subtracted from net worth
+          SMS credit cards sync automatically · add loans / EMI / BNPL manually
         </p>
       </div>
       <div className="space-y-3 p-4">
+        {autoRows.length > 0 ? (
+          <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--canvas)]/40 p-3">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
+              Credit cards (from SMS)
+            </p>
+            {autoRows.map((row) => (
+              <div
+                key={row.id || `${row.bank}-${row.last4}`}
+                className="flex flex-wrap items-center justify-between gap-2"
+              >
+                <div>
+                  <p className="text-sm font-medium">{row.name}</p>
+                  <p className="text-xs text-[var(--muted)]">{dueLabel(row.due_date)}</p>
+                </div>
+                <LedgerAmount amount={row.outstanding} rail="debit" size="sm" className="py-1" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         {rows.map((row, idx) => (
           <div key={idx} className="grid gap-2 sm:grid-cols-5">
             <input
@@ -149,8 +193,8 @@ export function LiabilitiesEditor({ onSaved }: { onSaved?: () => void }) {
             Add liability
           </button>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-[var(--muted)]">Total {formatINR(total)}</span>
-            <button type="button" className="btn-primary" disabled={busy} onClick={() => void save()}>
+            <LedgerAmount amount={total} rail="debit" size="sm" className="py-1" />
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
               {busy ? 'Saving…' : 'Save liabilities'}
             </button>
           </div>

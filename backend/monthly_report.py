@@ -95,12 +95,16 @@ def _top_lifestyle_merchants(
     """Largest lifestyle debit merchants for the month (excludes transfers/investments/income)."""
     from collections import defaultdict
 
+    from parser import credit_card_noise_mongo_clause
+
     totals: dict[str, dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0.0})
     match = {
         "type": "debit",
         "card_type": {"$ne": "wallet"},
         "received_at": {"$gte": start, "$lte": end},
         "category": {"$nin": list(NON_LIFESTYLE_CATEGORIES)},
+        "cc_payoff": {"$ne": True},
+        **credit_card_noise_mongo_clause(),
     }
     for doc in transactions.find(match, {"merchant": 1, "raw_text": 1, "amount": 1, "category": 1}):
         label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text"))

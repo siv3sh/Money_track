@@ -24,8 +24,16 @@ from parser import (
     ALLOWED_BANKS,
     coerce_amount,
     is_bank_ref_narration,
+    is_credit_card_non_purchase_sms,
     is_phantom_bank_ref_amount,
     parse_sms,
+)
+from credit_cards import (
+    backfill_credit_cards_from_transactions,
+    get_credit_card_by_last4,
+    list_credit_cards,
+    sync_credit_cards_to_liabilities,
+    upsert_credit_card_from_sms,
 )
 from import_rag import ImportRAG, remember_import_examples
 from agents.import_graph import (
@@ -36,6 +44,7 @@ from agents.import_graph import (
 )
 from rag.vector_store import get_vector_store
 from categorizer import CATEGORIES, apply_category
+from cc_payment_pairing import apply_cc_payoff_tags, scan_and_tag_payoffs
 from analytics import build_analytics
 from merchant_label import clean_merchant_label
 from indmoney_import import (
@@ -107,6 +116,7 @@ category_memory = db["category_memory"]
 portfolio = db["portfolio"]
 networth_snapshots = db["networth_snapshots"]
 liabilities_col = db["liabilities"]
+credit_cards_col = db["credit_cards"]
 budgets_col = db["budgets"]
 import_events = db["import_events"]
 import_rag_examples = db["import_rag_examples"]
@@ -145,6 +155,13 @@ try:
     transactions.create_index("bank")
     transactions.create_index("type")
     transactions.create_index("category")
+    credit_cards_col.create_index([("bank", 1), ("last4", 1)], unique=True)
+    credit_cards_col.create_index("last4")
+    liabilities_col.create_index(
+        [("source", 1), ("bank", 1), ("last4", 1)],
+        unique=True,
+        partialFilterExpression={"source": "credit_cards"},
+    )
     category_memory.create_index("merchant_key", unique=True)
     sip_overrides.create_index([("instrument", 1), ("month", 1)], unique=True)
     transfer_suggestions.create_index("txn_id", unique=True)
@@ -475,7 +492,11 @@ def _import_statement_docs(
             continue
         exact.add(fp)
         soft.add(sk)
-        apply_category(doc, memory)
+        apply_category(
+            doc,
+            memory,
+            credit_card_accounts=list_credit_cards(credit_cards_col),
+        )
         # Second-pass RAG for remaining Other rows
         if (doc.get("category") or "Other") == "Other":
             suggestion = rag.suggest_category(
@@ -485,6 +506,9 @@ def _import_statement_docs(
             if suggestion:
                 doc["category"] = suggestion["category"]
                 doc["category_source"] = f"rag:{suggestion['source']}"
+                apply_cc_payoff_tags(
+                    doc, list_credit_cards(credit_cards_col)
+                )
                 doc["category_confidence"] = suggestion["confidence"]
         doc.pop("_investment_hint", None)
         to_insert.append(doc)
@@ -570,7 +594,9 @@ def _analyze_import_batch(
             debit += amt
             if cat == "Investments":
                 invest += amt
-            if d.get("card_type") == "credit_card":
+            if d.get("card_type") == "credit_card" and not is_credit_card_non_purchase_sms(
+                str(d.get("raw_text") or "")
+            ):
                 cc_spend += amt
             if cat == "Other":
                 other_count += 1
@@ -860,18 +886,35 @@ async def receive_sms(request: Request):
         ) from exc
 
     if txn is None:
+        card_snapshot = None
+        try:
+            card_snapshot = upsert_credit_card_from_sms(
+                credit_cards_col,
+                sender=payload.sender,
+                body=payload.body,
+                received_at=datetime.now(timezone.utc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: credit card upsert skipped: {exc}")
+        if card_snapshot:
+            try:
+                sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Warning: credit card→liability sync skipped: {exc}")
         _log_webhook_event(
             {
                 "stored": False,
                 "reason": "not_a_transaction",
                 "sender": payload.sender,
                 "body": payload.body[:240],
+                "credit_card_updated": bool(card_snapshot),
             }
         )
         return {
             "stored": False,
-            "reason": "not a transaction SMS (spam, OTP, or unparseable)",
+            "reason": "not a transaction SMS (spam, OTP, unparseable, or CC non-spend alert)",
             "received": {"sender": payload.sender, "body": payload.body[:240]},
+            "credit_card": card_snapshot,
         }
 
     received_at = (
@@ -885,12 +928,32 @@ async def receive_sms(request: Request):
         "source": "sms",
         "received_at": received_at,
     }
-    apply_category(doc, _load_merchant_memory())
+    apply_category(
+        doc,
+        _load_merchant_memory(),
+        credit_card_accounts=list_credit_cards(credit_cards_col),
+    )
 
     result = transactions.insert_one(doc)
 
     if not result.inserted_id:
         raise HTTPException(status_code=500, detail="Failed to store transaction")
+
+    card_snapshot = None
+    try:
+        card_snapshot = upsert_credit_card_from_sms(
+            credit_cards_col,
+            sender=payload.sender,
+            body=payload.body,
+            received_at=received_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: credit card upsert skipped: {exc}")
+    if card_snapshot:
+        try:
+            sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: credit card→liability sync skipped: {exc}")
 
     _log_webhook_event(
         {
@@ -901,6 +964,7 @@ async def receive_sms(request: Request):
             "type": txn.get("type"),
             "category": doc.get("category"),
             "body": payload.body[:240],
+            "credit_card_updated": bool(card_snapshot),
         }
     )
 
@@ -922,6 +986,7 @@ async def receive_sms(request: Request):
         "stored": True,
         "id": str(result.inserted_id),
         "transaction": {**txn, "category": doc.get("category"), "mcc": doc.get("mcc")},
+        "credit_card": card_snapshot,
         "advisor_nudge": advisor_nudge,
     }
 
@@ -1170,6 +1235,10 @@ def analytics(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
+    try:
+        sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: credit card→liability sync skipped: {exc}")
     payload = build_analytics(
         transactions,
         date_from=start,
@@ -1401,6 +1470,53 @@ async def indmoney_commit(
     }
 
 
+# ── Credit cards (SMS-derived, read-focused) ─────────────────────────────────
+
+@app.get("/credit-cards")
+def api_list_credit_cards():
+    return {"items": list_credit_cards(credit_cards_col)}
+
+
+@app.get("/credit-cards/{last4}")
+def api_get_credit_card(
+    last4: str,
+    bank: str | None = Query(default=None),
+):
+    row = get_credit_card_by_last4(credit_cards_col, last4, bank=bank)
+    if not row:
+        raise HTTPException(status_code=404, detail="Credit card not found")
+    return row
+
+
+@app.post("/credit-cards/backfill-from-transactions")
+def api_backfill_credit_cards():
+    """Rebuild credit_cards snapshots from existing SMS transactions (idempotent)."""
+    result = backfill_credit_cards_from_transactions(credit_cards_col, transactions)
+    sync = sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+    return {**result, "liabilities_sync": sync}
+
+
+@app.post("/credit-cards/scan-payoffs")
+def api_scan_cc_payoffs(
+    execute: bool = Query(
+        default=False,
+        description="If true, write cc_payoff tags. Default dry-run.",
+    ),
+    limit: int = Query(default=5000, ge=1, le=20000),
+):
+    """
+    Pair bank-side CC bill payments to known cards.
+    Paired → Transfers + cc_payoff=True (excluded from lifestyle).
+    Ambiguous → flagged only; category unchanged.
+    """
+    return scan_and_tag_payoffs(
+        transactions,
+        credit_cards_col,
+        execute=execute,
+        limit=limit,
+    )
+
+
 # ── Liabilities ──────────────────────────────────────────────────────────────
 
 LIABILITY_TYPES = ("credit_card", "loan", "emi", "bnpl", "other")
@@ -1432,12 +1548,20 @@ def _serialize_liability(doc: dict[str, Any]) -> dict[str, Any]:
         "name": doc.get("name"),
         "type": doc.get("type") or "other",
         "outstanding": float(doc.get("outstanding") or 0),
+        "due_date": doc.get("due_date"),
+        "available_limit": float(doc["available_limit"])
+        if doc.get("available_limit") is not None
+        else None,
+        "source": doc.get("source") or "manual",
+        "bank": doc.get("bank"),
+        "last4": doc.get("last4"),
         "updated_at": updated.isoformat() if isinstance(updated, datetime) else updated,
     }
 
 
 @app.get("/liabilities")
 def get_liabilities():
+    sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
     rows = [_serialize_liability(d) for d in liabilities_col.find().sort("outstanding", DESCENDING)]
     return {
         "items": rows,
@@ -1447,8 +1571,9 @@ def get_liabilities():
 
 @app.put("/liabilities")
 def put_liabilities(payload: LiabilitiesPayload):
+    """Replace manual liabilities only; auto credit-card rows stay synced from credit_cards."""
     now = datetime.now(timezone.utc)
-    liabilities_col.delete_many({})
+    liabilities_col.delete_many({"source": {"$ne": "credit_cards"}})
     docs = []
     for item in payload.items:
         updated = now
@@ -1462,10 +1587,12 @@ def put_liabilities(payload: LiabilitiesPayload):
                 "type": item.type,
                 "outstanding": float(item.outstanding),
                 "updated_at": updated,
+                "source": "manual",
             }
         )
     if docs:
         liabilities_col.insert_many(docs)
+    sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
     return get_liabilities()
 
 

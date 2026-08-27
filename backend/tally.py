@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
@@ -11,6 +10,8 @@ from pymongo.collection import Collection
 
 from ai_insights import _compact, build_finance_context
 from llm import LLMError, extract_json, get_provider
+from parser import credit_card_noise_mongo_clause
+from cc_payment_pairing import CC_PAY_RE
 
 TALLY_SYSTEM = (
     "Task: sense-check whether income, spend, investments, transfers, "
@@ -19,12 +20,8 @@ TALLY_SYSTEM = (
     "Never ask for OTP, passwords, or full account numbers."
 )
 
-_CC_PAY_RE = re.compile(
-    r"(credit\s*card|cc\s*payment|card\s*payment|payment\s*towards\s*(?:icici)?|"
-    r"icici\s*(?:bank\s*)?credit\s*card|bill\s*pay(?:ment)?\s*(?:to\s*)?icici|"
-    r"autopay.*(?:credit\s*card|icici\s*cc)|icici\s*cc\b)",
-    re.I,
-)
+# Back-compat alias
+_CC_PAY_RE = CC_PAY_RE
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -39,7 +36,7 @@ def _match(
     date_from: datetime | None,
     date_to: datetime | None,
 ) -> dict[str, Any]:
-    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}}
+    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}, **credit_card_noise_mongo_clause()}
     if date_from or date_to:
         rng: dict[str, Any] = {}
         if date_from:

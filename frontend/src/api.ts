@@ -681,6 +681,11 @@ export interface LiabilityItem {
   name: string
   type: string
   outstanding: number
+  due_date?: string | null
+  available_limit?: number | null
+  source?: 'manual' | 'credit_cards' | string
+  bank?: string | null
+  last4?: string | null
   updated_at?: string | null
   last_updated?: string | null
 }

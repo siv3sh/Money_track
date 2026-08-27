@@ -4,6 +4,7 @@ import { fetchAnalytics, fetchTransactions, updateTransactionCategory, deleteTra
 import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
 import { DailyCashflowBars } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
+import { LedgerAmount } from '../components/LedgerAmount'
 import { TransactionRow } from '../components/TransactionTable'
 import { formatDate, formatINR, hasClockTime, hourInIST, nextSalaryPayday, toInputDate } from '../lib/format'
 import { DEFAULT_CATEGORIES, type AnalyticsPayload, type Transaction } from '../types'
@@ -480,17 +481,46 @@ export function DashboardPage() {
         ? formatMonthLabel(selectedKey)
         : formatDate(selectedKey + 'T12:00:00+05:30')
 
+  const upcomingCardDue = useMemo(() => {
+    const today = startOfDay(new Date())
+    const cards = (analytics?.liabilities || []).filter(
+      (l) => (l.source || '') === 'credit_cards' && l.due_date && l.outstanding > 0,
+    )
+    let best: {
+      name: string
+      outstanding: number
+      due_date: string
+      days: number
+    } | null = null
+    for (const c of cards) {
+      const dueStr = c.due_date!
+      const due = startOfDay(new Date(dueStr.includes('T') ? dueStr : `${dueStr}T00:00:00`))
+      if (Number.isNaN(due.getTime())) continue
+      const days = Math.round((due.getTime() - today.getTime()) / 86400000)
+      if (days < -3 || days > 21) continue
+      if (!best || days < best.days) {
+        best = {
+          name: c.name,
+          outstanding: c.outstanding,
+          due_date: dueStr,
+          days,
+        }
+      }
+    }
+    return best
+  }, [analytics?.liabilities])
+
   return (
     <div className="fade-in">
       <PageHeader
         title="Dashboard"
-        description="Daily activity at a glance — switch Day, Week, Month, or Year and browse with the arrows."
+        description="Cash pulse for the selected period — Day, Week, Month, or Year."
       />
 
       {analytics?.advisor ? <AdvisorVoiceBanner advisor={analytics.advisor} /> : null}
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
+        <div className="flex flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--sheet)] p-1 shadow-[var(--elev-1)]">
           {PERIODS.map((p) => (
             <button
               key={p.id}
@@ -564,29 +594,43 @@ export function DashboardPage() {
                   ? 'Tomorrow'
                   : `In ${pay.daysUntil} days`
             return (
-              <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--credit)]/25 bg-[var(--credit-soft)] px-4 py-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">
-                    Next salary
-                  </p>
-                  <p className="mt-0.5 text-base font-semibold text-[var(--text)]">
-                    {pay.label}
-                    <span className="ml-2 text-sm font-medium text-[var(--credit)]">{when}</span>
-                  </p>
-                  <p className="mt-0.5 text-xs text-[var(--muted)]">
-                    {employer}
-                    {pay.rolledFromWeekend
-                      ? ' · 1st was a weekend → next business day'
-                      : ' · Usually 1st (or next business day if Sat/Sun)'}
-                  </p>
+              <div className="elev-sheet mb-5 flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <div className="flex min-w-0 gap-3">
+                  <span
+                    className="block w-1 shrink-0 self-stretch rounded-sm bg-[var(--credit)]"
+                    aria-hidden
+                  />
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">
+                      Next salary
+                    </p>
+                    <p className="mt-0.5 text-base font-semibold text-[var(--text)]">
+                      {pay.label}
+                      <span className="ml-2 text-sm font-medium text-[var(--credit)]">{when}</span>
+                    </p>
+                    <p className="mt-0.5 text-xs text-[var(--muted)]">
+                      {employer}
+                      {pay.rolledFromWeekend
+                        ? ' · 1st was a weekend → next business day'
+                        : ' · Usually 1st (or next business day if Sat/Sun)'}
+                    </p>
+                  </div>
                 </div>
                 <div className="text-right">
                   <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Expected</p>
-                  <p className="text-lg font-semibold tabular-nums text-[var(--credit)]">
-                    {expected ? formatINR(Number(expected)) : '—'}
-                  </p>
+                  {expected ? (
+                    <LedgerAmount
+                      amount={Number(expected)}
+                      rail="wealth"
+                      animate
+                      size="md"
+                      className="ml-auto justify-end"
+                    />
+                  ) : (
+                    <p className="rupee-plaque__value text-lg text-[var(--muted)]">—</p>
+                  )}
                   {analytics?.overview?.ctc_lpa ? (
-                    <p className="text-[11px] text-[var(--muted)]">
+                    <p className="mt-0.5 text-[11px] text-[var(--muted)]">
                       CTC ₹{analytics.overview.ctc_lpa} LPA
                     </p>
                   ) : null}
@@ -595,34 +639,77 @@ export function DashboardPage() {
             )
           })()}
 
+          {upcomingCardDue ? (
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--sheet)] px-4 py-3 shadow-[var(--elev-1)]">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
+                  Credit card due
+                </p>
+                <p className="text-sm font-medium">
+                  {upcomingCardDue.name}
+                  <span className="ml-2 text-xs font-normal text-[var(--muted)]">
+                    {upcomingCardDue.days < 0
+                      ? `${Math.abs(upcomingCardDue.days)}d overdue`
+                      : upcomingCardDue.days === 0
+                        ? 'due today'
+                        : `due in ${upcomingCardDue.days}d`}
+                    {' · '}
+                    {formatDate(
+                      upcomingCardDue.due_date.includes('T')
+                        ? upcomingCardDue.due_date
+                        : `${upcomingCardDue.due_date}T00:00:00`,
+                    )}
+                  </span>
+                </p>
+              </div>
+              <LedgerAmount
+                amount={upcomingCardDue.outstanding}
+                rail="debit"
+                size="md"
+                animate
+                className="py-1"
+              />
+            </div>
+          ) : null}
+
           <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <KpiCard
               label="Spent"
               value={formatINR(debit)}
+              amount={debit}
               tone="debit"
+              animate
               hint={`${kpi.debitCount} debit(s)${filterLabel ? ` · ${filterLabel}` : ''}`}
             />
             <KpiCard
               label="Received"
               value={formatINR(credit)}
+              amount={credit}
               tone="credit"
+              animate
               hint={`${kpi.creditCount} credit(s)${filterLabel ? ` · ${filterLabel}` : ''}`}
             />
             <KpiCard
               label="Net"
               value={formatINR(net)}
+              amount={net}
               tone={net >= 0 ? 'credit' : 'debit'}
+              rail={net >= 0 ? 'wealth' : 'debit'}
+              animate
               hint={net >= 0 ? 'Surplus' : 'Deficit'}
             />
             <KpiCard
               label="Transactions"
               value={String(kpi.count)}
+              rail="neutral"
               hint={kpi.scopeHint}
             />
             <KpiCard
               label="Top spend day"
               value={kpi.topSpend ? formatINR(kpi.topSpend.amount) : '—'}
+              amount={kpi.topSpend?.amount}
               tone="debit"
+              animate={Boolean(kpi.topSpend)}
               hint={
                 kpi.topSpend
                   ? formatDate(kpi.topSpend.date + 'T00:00:00')
@@ -714,7 +801,7 @@ export function DashboardPage() {
                           {items.length} txn{items.length === 1 ? '' : 's'}
                         </p>
                       </button>
-                      <div className="space-y-2">
+                      <div className="passbook-list elev-sheet overflow-hidden">
                         {items.slice(0, 8).map((txn) => (
                           <TransactionRow
                             key={txn._id}
@@ -722,12 +809,13 @@ export function DashboardPage() {
                             categories={DEFAULT_CATEGORIES}
                             onCategoryChange={onCategoryChange}
                             onDelete={onDelete}
+                            variant="passbook"
                           />
                         ))}
                         {items.length > 8 ? (
                           <button
                             type="button"
-                            className="btn w-full text-xs"
+                            className="btn w-full rounded-none border-0 border-t border-[var(--border)] text-xs"
                             onClick={() => setSelectedKey(month)}
                           >
                             View all in {formatMonthLabel(month)}
@@ -753,7 +841,7 @@ export function DashboardPage() {
                         </p>
                       </div>
                     ) : null}
-                    <div className="space-y-2">
+                    <div className="passbook-list elev-sheet overflow-hidden">
                       {items.map((txn) => (
                         <TransactionRow
                           key={txn._id}
@@ -761,6 +849,7 @@ export function DashboardPage() {
                           categories={DEFAULT_CATEGORIES}
                           onCategoryChange={onCategoryChange}
                           onDelete={onDelete}
+                          variant="passbook"
                         />
                       ))}
                     </div>

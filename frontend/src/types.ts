@@ -146,6 +146,12 @@ export interface AnalyticsPayload {
     total: number
     count: number
     merchants: Array<{ merchant: string; amount: number; count: number; share: number }>
+    payoffs?: {
+      paired_total: number
+      paired_count: number
+      ambiguous_count: number
+      note?: string
+    }
   }
   recurring: {
     recurring_amount: number
@@ -203,6 +209,11 @@ export interface AnalyticsPayload {
     name: string
     type: string
     outstanding: number
+    due_date?: string | null
+    available_limit?: number | null
+    source?: string
+    bank?: string | null
+    last4?: string | null
     updated_at: string | null
   }>
   budgets?: Record<string, number>

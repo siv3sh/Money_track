@@ -9,6 +9,8 @@ from typing import Any, Optional
 from pymongo.collection import Collection
 
 from merchant_label import clean_merchant_label, is_salary_source
+from parser import credit_card_noise_mongo_clause
+from cc_payment_pairing import cc_payoff_lifestyle_exclusion
 
 # Canonical instrument names for investment vehicles
 INSTRUMENT_RULES: list[tuple[str, str, str]] = [
@@ -56,7 +58,9 @@ def _match_range(
 ) -> dict[str, Any]:
     # Wallet/FASTag debits are excluded from all money totals — the bank was
     # already debited at recharge time, counting the wallet spend double-counts.
-    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}}
+    # CC statement / payment-received SMS mis-ingested as spend are also excluded
+    # until an approved backfill removes them.
+    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}, **credit_card_noise_mongo_clause()}
     if date_from or date_to:
         received: dict[str, Any] = {}
         if date_from:
@@ -644,14 +648,37 @@ def build_analytics(
         for name, vals in sorted(cc_merchants.items(), key=lambda kv: -kv[1]["amount"])[:15]
     ]
 
+    # Lifestyle excludes Transfers/Investments/Income AND paired bank→card payoffs
+    lifestyle_match = {**match, **cc_payoff_lifestyle_exclusion()}
+    lifestyle_base = [{"$match": lifestyle_match}]
+    lifestyle_by_cat = list(
+        transactions.aggregate(lifestyle_base + [_dc_group("category"), {"$sort": {"debit": -1}}])
+    )
+    lifestyle_cat_rows = _rows_from_group(lifestyle_by_cat, total_debit)
     lifestyle_rows = [
         r
-        for r in by_category
+        for r in lifestyle_cat_rows
         if r.get("name") not in NON_LIFESTYLE_CATEGORIES and float(r.get("debit") or 0) > 0
     ]
     lifestyle_spend = round(sum(float(r["debit"]) for r in lifestyle_rows), 2)
     # Bank/UPI lifestyle = total lifestyle minus credit-card purchases (so card spend stays separate)
     bank_upi_spend = round(max(lifestyle_spend - credit_card_spend, 0.0), 2)
+
+    # Paired payoff totals (informational — still in total_debit, not in lifestyle)
+    payoff_agg = list(
+        transactions.aggregate(
+            [
+                {"$match": {**match, "type": "debit", "cc_payoff": True}},
+                {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+            ]
+        )
+    )
+    cc_payoff_total = float((payoff_agg[0] if payoff_agg else {}).get("total") or 0)
+    cc_payoff_count = int((payoff_agg[0] if payoff_agg else {}).get("count") or 0)
+    ambiguous_payoffs = transactions.count_documents(
+        {**match, "type": "debit", "cc_payoff_status": "ambiguous"}
+    )
+
     lifestyle_category_monthly = []
     for row in category_monthly_rows:
         filtered = {"month": row["month"]}
@@ -714,6 +741,13 @@ def build_analytics(
                         "name": str(doc.get("name") or "Liability"),
                         "type": str(doc.get("type") or "other"),
                         "outstanding": amt,
+                        "due_date": doc.get("due_date"),
+                        "available_limit": float(doc["available_limit"])
+                        if doc.get("available_limit") is not None
+                        else None,
+                        "source": doc.get("source") or "manual",
+                        "bank": doc.get("bank"),
+                        "last4": doc.get("last4"),
                         "updated_at": updated.isoformat()
                         if isinstance(updated, datetime)
                         else updated,
@@ -905,6 +939,15 @@ def build_analytics(
             "total": round(credit_card_spend, 2),
             "count": cc_count,
             "merchants": credit_card_merchants,
+            "payoffs": {
+                "paired_total": round(cc_payoff_total, 2),
+                "paired_count": cc_payoff_count,
+                "ambiguous_count": int(ambiguous_payoffs),
+                "note": (
+                    "Paired bank→card bill pays are Transfers (excluded from lifestyle). "
+                    "Ambiguous candidates are flagged only."
+                ),
+            },
         },
         "by_source": group_breakdown("source"),
         "by_category": by_category,
