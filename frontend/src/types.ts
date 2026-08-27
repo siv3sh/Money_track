@@ -234,6 +234,7 @@ export interface AnalyticsPayload {
     level?: string
     headline?: string
     reasons?: string[]
+    show_profile_stakes?: boolean
     profile?: {
       preferred_name?: string | null
       coach_tone?: string | null

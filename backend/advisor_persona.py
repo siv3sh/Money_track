@@ -450,6 +450,40 @@ def build_persona_system_prompt(
     return "\n".join(parts).strip()
 
 
+def _is_discretionary_spend_reason(reason: str) -> bool:
+    """True when a severity reason is spend/lifestyle/overshoot — worth tying to goal soft-spot.
+
+    Structural events (subscription price changes, SIPs, allocation drift, fees, bills)
+    should not force-append trained motivation copy.
+    """
+    r = (reason or "").strip().lower()
+    if not r:
+        return False
+    # Structural / non-discretionary — exclude even if other markers appear
+    if "subscription" in r:
+        return False
+    if "allocation drift" in r:
+        return False
+    if r.startswith("sip ") or "sip '" in r:
+        return False
+    if "bank fee" in r or "scheduled bill" in r:
+        return False
+    markers = (
+        "discretionary",
+        "lifestyle",
+        "debits up",
+        "overshoot",
+        "overspend",
+        "impulse",
+        "shopping",
+        "spend pattern",
+        "ceiling",
+        "contribution quiet",
+        "missed this month's contribution",
+    )
+    return any(m in r for m in markers)
+
+
 def system_briefing(
     *,
     learned_facts: Collection | None = None,
@@ -470,6 +504,9 @@ def system_briefing(
     now = _now()
     goal = motivation or "your goal"
     mood = "steady"
+    # Informational banners may show profile stakes as ambient context.
+    # Firm banners only when the triggering reason is discretionary/spend-related.
+    show_profile_stakes = True
 
     # Month-start excitement & salary joy beat stern tones for the banner
     if now.day <= 3 and not (salary and float(salary or 0) > 0):
@@ -496,15 +533,20 @@ def system_briefing(
         line = f"{name} — I'm not softening this. "
         if reasons:
             line += f"{reasons[0]}. "
-        if soft:
+        stakes_ok = (
+            _is_discretionary_spend_reason(reasons[0]) if reasons else True
+        )
+        show_profile_stakes = stakes_ok
+        if stakes_ok and soft:
             line += f"You named your soft spot ({soft}) — we're in it. "
-        if motivation:
+        if stakes_ok and motivation:
             line += f"That money was meant for {motivation}."
     elif level == "concerned":
         mood = "concerned"
         line = f"{name}, I'm being direct. "
         if reasons:
             line += f"{reasons[0]}. "
+            stakes_ok = _is_discretionary_spend_reason(reasons[0])
         elif lifestyle is not None:
             try:
                 line += f"Lifestyle is at ₹{float(lifestyle):,.0f}"
@@ -513,7 +555,11 @@ def system_briefing(
                 line += ". "
             except (TypeError, ValueError):
                 pass
-        if motivation:
+            stakes_ok = True  # lifestyle fallback is discretionary by nature
+        else:
+            stakes_ok = False
+        show_profile_stakes = stakes_ok
+        if stakes_ok and motivation:
             line += f"Keep {motivation} in the frame."
     else:
         line = f"{name}, we're steady. "
@@ -535,6 +581,7 @@ def system_briefing(
         "mood": mood,
         "headline": line.strip(),
         "reasons": reasons[:5],
+        "show_profile_stakes": show_profile_stakes,
         "profile": {
             "preferred_name": profile.get("preferred_name"),
             "coach_tone": profile.get("coach_tone"),

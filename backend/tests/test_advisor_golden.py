@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
-from advisor_persona import build_chat_system_prompt, _profile_grounding_block
+from advisor_persona import (
+    build_chat_system_prompt,
+    _profile_grounding_block,
+    system_briefing,
+)
 from advisor_presence import (
     build_compact_chat_user_state,
     detect_money_mood,
@@ -186,6 +190,47 @@ class AdvisorGoldenLeakTests(unittest.TestCase):
         block = "\n".join(_profile_grounding_block(profile))
         self.assertIn("PS5", block)
         _assert_no_forbidden(block, allowed={"ps5"})
+
+    def test_concerned_subscription_briefing_omits_goal_stakes(self) -> None:
+        facts = MagicMock()
+        facts.find.return_value = [
+            {"fact_type": "advisor_profile", "key": "preferred_name", "value": "Sivesh"},
+            {"fact_type": "advisor_profile", "key": "motivation", "value": "PS5"},
+            {"fact_type": "advisor_profile", "key": "soft_spot", "value": "Oxygen"},
+        ]
+        briefing = system_briefing(
+            learned_facts=facts,
+            severity={
+                "level": "concerned",
+                "reasons": ["Subscription 'Rentomojo' status=price_up"],
+            },
+            analytics={"overview": {"lifestyle_spend": 20000, "salary_total": 0}},
+        )
+        headline = briefing.get("headline") or ""
+        self.assertIn("Rentomojo", headline)
+        self.assertNotIn("PS5", headline)
+        self.assertNotIn("Oxygen", headline)
+        self.assertFalse(briefing.get("show_profile_stakes"))
+
+    def test_concerned_overspend_briefing_keeps_goal_stakes(self) -> None:
+        facts = MagicMock()
+        facts.find.return_value = [
+            {"fact_type": "advisor_profile", "key": "preferred_name", "value": "Sivesh"},
+            {"fact_type": "advisor_profile", "key": "motivation", "value": "PS5"},
+            {"fact_type": "advisor_profile", "key": "soft_spot", "value": "Oxygen"},
+        ]
+        briefing = system_briefing(
+            learned_facts=facts,
+            severity={
+                "level": "concerned",
+                "reasons": ["Discretionary overshoot ₹4,200"],
+            },
+            analytics={"overview": {"lifestyle_spend": 20000, "salary_total": 0}},
+        )
+        headline = briefing.get("headline") or ""
+        self.assertIn("Discretionary overshoot", headline)
+        self.assertIn("PS5", headline)
+        self.assertTrue(briefing.get("show_profile_stakes"))
 
 
 if __name__ == "__main__":

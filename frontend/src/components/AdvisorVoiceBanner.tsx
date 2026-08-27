@@ -7,6 +7,8 @@ export type AdvisorBriefing = {
   mood?: string
   headline?: string
   reasons?: string[]
+  /** When false, hide Soft spot/Goal footer under firm alerts (stakes not relevant to trigger). */
+  show_profile_stakes?: boolean
   profile?: {
     preferred_name?: string | null
     coach_tone?: string | null
@@ -29,6 +31,11 @@ export function AdvisorVoiceBanner({
   const mood = (advisor.mood || '').toLowerCase()
   const firm = level === 'strict' || level === 'concerned'
   const happy = mood === 'salary_happy' || mood === 'month_start' || (!firm && level === 'informational')
+  // Firm banners: hide Soft spot/Goal when backend says stakes aren't relevant to the trigger.
+  // Informational/happy: keep as ambient trained-profile context (default true if omitted).
+  const showStakes = advisor.show_profile_stakes !== false
+  const showProfileFooter =
+    showStakes && Boolean(advisor.profile?.motivation || advisor.profile?.soft_spot)
   return (
     <section
       className={`advisor-banner mb-5 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] ${
@@ -51,11 +58,11 @@ export function AdvisorVoiceBanner({
             <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text)] sm:text-[15px]">
               {advisor.headline}
             </p>
-            {advisor.profile?.motivation || advisor.profile?.soft_spot ? (
+            {showProfileFooter ? (
               <p className="mt-1.5 text-[11px] text-[var(--muted)]">
-                {advisor.profile.soft_spot ? `Soft spot: ${advisor.profile.soft_spot}` : null}
-                {advisor.profile.soft_spot && advisor.profile.motivation ? ' · ' : null}
-                {advisor.profile.motivation ? `Goal: ${advisor.profile.motivation}` : null}
+                {advisor.profile?.soft_spot ? `Soft spot: ${advisor.profile.soft_spot}` : null}
+                {advisor.profile?.soft_spot && advisor.profile?.motivation ? ' · ' : null}
+                {advisor.profile?.motivation ? `Goal: ${advisor.profile.motivation}` : null}
               </p>
             ) : null}
           </div>
