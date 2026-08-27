@@ -21,6 +21,12 @@ export function CashFlowPage() {
 
   const goMonth = (month: string) => navigate(transactionsHref({ month }))
 
+  const salarySource =
+    (typeof o?.employer === 'string' && o.employer.trim()) ||
+    data?.income_sources?.find((r) => r.is_salary)?.name ||
+    data?.income_sources?.[0]?.name ||
+    undefined
+
   return (
     <div className="fade-in">
       <PageHeader
@@ -51,7 +57,7 @@ export function CashFlowPage() {
                   : 'No salary credits detected'
               }
               to={transactionsHref({
-                q: 'Idea Elan',
+                ...(salarySource ? { q: salarySource } : {}),
                 type: 'credit',
                 date_from: dateFrom || undefined,
                 date_to: dateTo || undefined,

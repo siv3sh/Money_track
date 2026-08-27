@@ -2,23 +2,63 @@ import type { AnalyticsPayload, CardType, Transaction, TxnType } from './types'
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:8000'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: 'application/json',
-      ...(init?.headers || {}),
-    },
-  })
-  if (!res.ok) {
-    let detail = res.statusText
+function apiErrorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === 'string' && item.trim()) return item.trim()
+        if (item && typeof item === 'object' && 'msg' in item) {
+          const msg = String((item as { msg: unknown }).msg || '').trim()
+          const loc = (item as { loc?: unknown }).loc
+          const where = Array.isArray(loc) ? loc.filter((p) => p !== 'body').join('.') : ''
+          return where && msg ? `${where}: ${msg}` : msg
+        }
+        try {
+          return JSON.stringify(item)
+        } catch {
+          return ''
+        }
+      })
+      .filter(Boolean)
+    if (parts.length) return parts.join('; ')
+  }
+  if (detail && typeof detail === 'object') {
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      const s = JSON.stringify(detail)
+      if (s && s !== '{}' && s !== '[]') return s
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Request failed (${res.status})`)
+  }
+  return fallback
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        Accept: 'application/json',
+        ...(init?.headers || {}),
+      },
+    })
+  } catch {
+    throw new Error(
+      `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
+    )
+  }
+  if (!res.ok) {
+    const fallback = `Request failed (${res.status})`
+    let detail = res.statusText || fallback
+    try {
+      const body = (await res.json()) as { detail?: unknown }
+      detail = apiErrorMessage(body.detail, detail)
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail || fallback)
   }
   return res.json() as Promise<T>
 }
@@ -207,14 +247,15 @@ export async function uploadStatementFile(
     body: form,
   })
   if (!res.ok) {
-    let detail = res.statusText
+    const fallback = `Upload failed (${res.status})`
+    let detail = res.statusText || fallback
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = body.detail
+      const body = (await res.json()) as { detail?: unknown }
+      detail = apiErrorMessage(body.detail, detail)
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Upload failed (${res.status})`)
+    throw new Error(detail || fallback)
   }
   return res.json() as Promise<StatementImportResult>
 }
@@ -222,14 +263,15 @@ export async function uploadStatementFile(
 async function postForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: form })
   if (!res.ok) {
-    let detail = res.statusText
+    const fallback = `Request failed (${res.status})`
+    let detail = res.statusText || fallback
     try {
-      const body = (await res.json()) as { detail?: string }
-      if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+      const body = (await res.json()) as { detail?: unknown }
+      detail = apiErrorMessage(body.detail, detail)
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Request failed (${res.status})`)
+    throw new Error(detail || fallback)
   }
   return res.json() as Promise<T>
 }
@@ -657,20 +699,6 @@ export function saveLiabilities(
   })
 }
 
-export function fetchBudgets(): Promise<{ budgets: Array<{ category: string; amount: number }> }> {
-  return request('/budgets')
-}
-
-export function saveBudgets(
-  budgets: Array<{ category: string; amount: number }>,
-): Promise<{ budgets: Array<{ category: string; amount: number }> }> {
-  return request('/budgets', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ budgets }),
-  })
-}
-
 export function exportDataUrl(format: 'json' | 'csv' = 'json'): string {
   return `${API_BASE}/export?format=${format}`
 }
@@ -764,10 +792,6 @@ export function fetchMonthlyReports(): Promise<{
 
 export function fetchMonthlyReport(month: string): Promise<MonthlyReport> {
   return request(`/reports/monthly/${month}`)
-}
-
-export function fetchMonthlyReportSettings(): Promise<MonthlyReportSettings> {
-  return request('/reports/monthly-settings')
 }
 
 export function saveMonthlyReportSettings(payload: {
@@ -1148,14 +1172,6 @@ export function saveAdvisorPersona(payload: {
   })
 }
 
-export function fetchAdvisorPersonaPreview(): Promise<{
-  settings: AdvisorPersonaSettings
-  samples: { informational: string; concerned: string; strict: string }
-  note?: string
-}> {
-  return request('/advisor/persona/preview')
-}
-
 export interface AdvisorComment {
   comment: string
   advisor_severity?: string
@@ -1253,23 +1269,6 @@ export function answerAdvisorNudge(payload: {
   session?: AdvisorPresence['session']
 }> {
   return request('/advisor/nudge/answer', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function fetchAdvisorDecisionComment(payload: {
-  action: string
-  amount?: number
-  merchant?: string
-  category?: string
-  instrument?: string
-  goal_name?: string
-  wealth_class?: string
-  progress_pct?: number
-}): Promise<AdvisorComment & { goal_impact?: GoalImpact }> {
-  return request('/advisor/decision-comment', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

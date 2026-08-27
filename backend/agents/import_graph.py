@@ -19,6 +19,7 @@ from indmoney_import import HEADER_ALIASES as IND_ALIASES
 from indmoney_import import TARGET_FIELDS, suggest_mapping
 from llm import LLMError, extract_json, get_provider
 from merchant_label import clean_merchant_label
+from parser import coerce_amount, is_bank_ref_narration, is_phantom_bank_ref_amount
 from rag.embeddings import embed_text
 from rag.vector_store import VectorStore, get_vector_store
 from statement_parser import (
@@ -159,7 +160,11 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
     pairs: list = []
 
     if kind == "pdf":
-        pairs = parse_statement_pdf(raw, bank=state.get("bank"))
+        try:
+            pairs = parse_statement_pdf(raw, bank=state.get("bank"))
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"PDF parse skipped bad rows: {exc}")
+            pairs = []
         # If empty, try OCR fallback for scanned PDFs
         if not pairs:
             ocr_text = _ocr_pdf_pages(raw)
@@ -233,7 +238,13 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
                 parsed_n = 0
                 docs_local: list[dict[str, Any]] = []
                 if flow == "statement" and len(table) >= 2:
-                    pairs_local = parse_statement_csv(_rows_to_csv_text(table), bank=state.get("bank"))
+                    try:
+                        pairs_local = parse_statement_csv(
+                            _rows_to_csv_text(table), bank=state.get("bank")
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        warnings.append(f"Sheet {sheet_name} parse skipped: {exc}")
+                        pairs_local = []
                     profile = detect_statement_profile(
                         f"{filename}\n{' '.join(hdr)}", filename
                     )
@@ -296,11 +307,18 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
         if flow == "statement":
             profile = detect_statement_profile(content, filename)
             bank = state.get("bank") or profile.get("bank")
-            pairs = parse_statement_csv(
-                content, bank=bank, default_card_type=profile.get("default_card_type") or "bank_account"
-            )
-            if not pairs:
-                pairs = parse_statement_text(content, bank=bank)
+            pairs = []
+            try:
+                pairs = parse_statement_csv(
+                    content,
+                    bank=bank,
+                    default_card_type=profile.get("default_card_type") or "bank_account",
+                )
+                if not pairs:
+                    pairs = parse_statement_text(content, bank=bank)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Parse skipped bad rows: {exc}")
+                pairs = []
             raw_rows = _pairs_to_docs(
                 pairs,
                 default_card_type=profile.get("default_card_type") or "bank_account",
@@ -379,13 +397,7 @@ def schema_mapping_agent(state: ImportGraphState) -> ImportGraphState:
         else:
             # Statement: map aliases into canonical roles
             mapping = _suggest_statement_mapping(headers)
-            confidence = 0.7 if mapping.get("description") and mapping.get("date") else 0.4
-            if confidence < DOC_AUTO_THRESHOLD and headers:
-                try:
-                    mapping = _llm_infer_mapping(headers, flow="statement") or mapping
-                    confidence = max(confidence, 0.55)
-                except Exception:  # noqa: BLE001
-                    pass
+            confidence = 0.7 if mapping.get("description") and mapping.get("date") else 0.45
             needs_ui = confidence < DOC_AUTO_THRESHOLD
         status = "ok" if not needs_ui else "warn"
         detail = (
@@ -509,24 +521,8 @@ def categorization_agent(state: ImportGraphState) -> ImportGraphState:
             out_rows.append(item)
             continue
 
-        # LLM with retrieved few-shots (skip quickly if no provider)
-        try:
-            from llm import LLMError, provider_status
-
-            if not provider_status().get("active"):
-                item["category_confidence"] = 0.2
-                out_rows.append(item)
-                continue
-            cat_llm, conf = _llm_categorize(narration, neighbors)
-            if cat_llm:
-                item["category"] = cat_llm
-                item["category_source"] = "llm:rag_fewshot"
-                item["category_confidence"] = conf
-                llm_hits += 1
-            else:
-                item["category_confidence"] = 0.2
-        except Exception:  # noqa: BLE001
-            item["category_confidence"] = 0.15
+        # Leave unclear rows for review — per-row LLM during import is too slow
+        item["category_confidence"] = 0.25
         out_rows.append(item)
 
     return {
@@ -547,33 +543,6 @@ def categorization_agent(state: ImportGraphState) -> ImportGraphState:
     }
 
 
-def _llm_categorize(
-    narration: str, neighbors: list[dict[str, Any]]
-) -> tuple[str | None, float]:
-    examples = "\n".join(
-        f"- {n.get('description')} => {n.get('category')}" for n in neighbors[:5]
-    )
-    system = (
-        "Classify the bank transaction into exactly one category from this list: "
-        + ", ".join(CATEGORIES)
-        + '. Return JSON: {"category":"...","confidence":0-1}'
-    )
-    user = f"Examples:\n{examples or '(none)'}\n\nTransaction:\n{narration}"
-    provider = get_provider()
-    text = provider.complete(system, user, temperature=0.0)
-    data = extract_json(text)
-    if not isinstance(data, dict):
-        return None, 0.2
-    cat = str(data.get("category") or "").strip()
-    if cat not in CATEGORIES:
-        return None, 0.2
-    try:
-        conf = float(data.get("confidence") or 0.55)
-    except (TypeError, ValueError):
-        conf = 0.55
-    return cat, max(0.0, min(conf, 1.0))
-
-
 def validation_dedup_agent(state: ImportGraphState) -> ImportGraphState:
     """Cross-source dedup fingerprints + anomaly flags. Existing keys injected by runner."""
     flow = state.get("flow") or "statement"
@@ -586,11 +555,22 @@ def validation_dedup_agent(state: ImportGraphState) -> ImportGraphState:
     skipped_exact = 0
     skipped_soft = 0
 
-    amounts = [float(r.get("amount") or 0) for r in rows if r.get("amount") is not None]
+    amounts = [a for a in (coerce_amount(r.get("amount")) for r in rows) if a]
     median = sorted(amounts)[len(amounts) // 2] if amounts else 0.0
 
     for row in rows:
         item = dict(row)
+        amt = coerce_amount(item.get("amount"))
+        if amt is None or amt <= 0:
+            continue
+        item["amount"] = amt
+        raw = f"{item.get('raw_text') or ''} {item.get('merchant') or ''}"
+        # Bank-ref gate (design parity with parser.py) + phantom UTR/NEOSIE filter
+        if is_bank_ref_narration(raw):
+            if is_phantom_bank_ref_amount(amt, raw, item.get("type")):
+                continue
+        elif is_phantom_bank_ref_amount(amt, raw, item.get("type")):
+            continue
         if flow == "statement":
             fp = _fingerprint(item)
             sk = _soft_fingerprint(item)
@@ -608,7 +588,7 @@ def validation_dedup_agent(state: ImportGraphState) -> ImportGraphState:
             soft.add(sk)
 
             # Anomalies
-            amt = float(item.get("amount") or 0)
+            amt = coerce_amount(item.get("amount")) or 0.0
             flags: list[str] = []
             if median and amt > max(median * 8, 50000):
                 flags.append("unusually_large_amount")
@@ -660,7 +640,7 @@ def _fingerprint(doc: dict[str, Any]) -> str:
     day = ts.strftime("%Y-%m-%d") if isinstance(ts, datetime) else str(ts)[:10]
     raw = (doc.get("raw_text") or "")[:80].lower()
     try:
-        amount = f"{float(doc.get('amount') or 0):.2f}"
+        amount = f"{coerce_amount(doc.get('amount'), 0.0) or 0.0:.2f}"
     except (TypeError, ValueError):
         amount = str(doc.get("amount"))
     return f"{doc.get('type')}|{amount}|{day}|{raw}"
@@ -672,7 +652,7 @@ def _soft_fingerprint(doc: dict[str, Any]) -> str:
     label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text")).lower()
     label = re.sub(r"[^a-z0-9]", "", label)[:18]
     try:
-        amount = f"{float(doc.get('amount') or 0):.2f}"
+        amount = f"{coerce_amount(doc.get('amount'), 0.0) or 0.0:.2f}"
     except (TypeError, ValueError):
         amount = str(doc.get("amount"))
     return f"{doc.get('type')}|{amount}|{day}|{label}"
@@ -785,7 +765,31 @@ def run_import_pipeline(
         "_soft_fps": list(soft_fps or []),
     }
     # TypedDict doesn't love private keys — pass via object mutation in nodes using state get
-    final = graph.invoke(initial)
+    try:
+        final = graph.invoke(initial)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "protocol": "langgraph-import/v1",
+            "flow": flow,
+            "stage": "extracting",
+            "stages": STAGE_ORDER,
+            "file_kind": _detect_kind(filename),
+            "sheets": [],
+            "headers": [],
+            "header_signature": "",
+            "column_mapping": {},
+            "mapping_confidence": 0,
+            "needs_mapping_ui": False,
+            "profile": {},
+            "commit_rows": [],
+            "review_queue": [],
+            "review_questions": [],
+            "anomalies": [],
+            "raw_row_count": 0,
+            "steps": [],
+            "warnings": [f"Import stopped: {exc or exc.__class__.__name__}"],
+            "vector_backend": store.backend,
+        }
 
     # If caller provided confirmed mapping, force it
     if column_mapping:

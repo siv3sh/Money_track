@@ -20,8 +20,13 @@ from pymongo import DESCENDING, MongoClient
 # Load .env before local modules that read os.getenv at import time (e.g. llm).
 load_dotenv()
 
-from parser import ALLOWED_BANKS, parse_sms
-from import_agent import run_import_agent
+from parser import (
+    ALLOWED_BANKS,
+    coerce_amount,
+    is_bank_ref_narration,
+    is_phantom_bank_ref_amount,
+    parse_sms,
+)
 from import_rag import ImportRAG, remember_import_examples
 from agents.import_graph import (
     STAGE_ORDER,
@@ -52,12 +57,10 @@ from advisor_persona import (
     preview_samples,
     save_advisor_persona_settings,
 )
-from advisor_memory import list_memories as list_advisor_memories
 from advisor_presence import (
     answer_lifecycle_nudge,
     chat as advisor_chat,
     decision_comment,
-    get_or_create_session,
     goal_impact_for_spend,
     presence_bootstrap,
 )
@@ -216,6 +219,11 @@ def _cross_source_fingerprints(limit: int = 8000) -> tuple[set[str], set[str]]:
     return exact, soft
 
 
+def _exc_detail(exc: BaseException) -> str:
+    msg = str(exc).strip()
+    return msg or exc.__class__.__name__
+
+
 def _run_statement_langgraph(
     raw: bytes,
     filename: str,
@@ -353,12 +361,6 @@ class SmsPayload(BaseModel):
         return cleaned
 
 
-class StatementImportPayload(BaseModel):
-    content: str = Field(..., min_length=1, max_length=2_000_000)
-    bank: str | None = Field(default=None, max_length=64)
-    format: str = Field(default="auto", pattern="^(auto|csv|text)$")
-
-
 def _fingerprint(doc: dict[str, Any]) -> str:
     """Cheap dedupe key for re-imports."""
     ts = doc.get("received_at")
@@ -379,7 +381,7 @@ def _soft_fingerprint(doc: dict[str, Any]) -> str:
     label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text")).lower()
     label = re.sub(r"[^a-z0-9]", "", label)[:18]
     try:
-        amount = f"{float(doc.get('amount') or 0):.2f}"
+        amount = f"{coerce_amount(doc.get('amount'), 0.0) or 0.0:.2f}"
     except (TypeError, ValueError):
         amount = str(doc.get("amount"))
     return f"{doc.get('type')}|{amount}|{day}|{label}"
@@ -432,6 +434,20 @@ def _import_statement_docs(
     skipped_likely = 0
     likely_duplicates: list[dict[str, Any]] = []
     for doc in docs:
+        raw = f"{doc.get('raw_text') or ''} {doc.get('merchant') or ''}"
+        amt = coerce_amount(doc.get("amount"))
+        if amt is None or amt <= 0:
+            skipped += 1
+            continue
+        # Bank-ref gate (design parity with parser.py) + phantom UTR/NEOSIE filter
+        if is_bank_ref_narration(raw):
+            if is_phantom_bank_ref_amount(amt, raw, doc.get("type")):
+                skipped += 1
+                continue
+        elif is_phantom_bank_ref_amount(amt, raw, doc.get("type")):
+            skipped += 1
+            continue
+        doc["amount"] = amt
         fp = _fingerprint(doc)
         sk = _soft_fingerprint(doc)
         if fp in exact:
@@ -547,7 +563,7 @@ def _analyze_import_batch(
         cat = str(d.get("category") or "Other")
         by_category[cat] += 1
         by_card[str(d.get("card_type") or "unknown")] += 1
-        amt = float(d.get("amount") or 0)
+        amt = coerce_amount(d.get("amount"), 0.0) or 0.0
         if d.get("type") == "credit":
             credit += amt
         else:
@@ -566,11 +582,13 @@ def _analyze_import_batch(
             result = categorize_batch(
                 transactions,
                 limit=min(50, max(other_count, 10)),
-                use_llm=True,
+                use_llm=False,
                 merchant_memory=_load_merchant_memory(),
             )
             llm_updated = int(result.get("updated") or 0)
-            llm_note = f"AI reviewed unclear rows · updated {llm_updated}"
+            llm_note = (
+                f"Reviewed against category rules and merchant memory · updated {llm_updated}"
+            )
             if result.get("llm_error"):
                 llm_note += f" · {result['llm_error']}"
             if inserted_oids:
@@ -579,7 +597,7 @@ def _analyze_import_batch(
                     by_category[str(d.get("category") or "Other")] += 1
                 other_count = by_category.get("Other", 0)
         except Exception as exc:  # noqa: BLE001
-            llm_note = f"AI review skipped: {exc}"
+            llm_note = f"Category review skipped: {exc}"
 
     top_cats = [{"category": k, "count": v} for k, v in by_category.most_common(8)]
     highlights: list[str] = []
@@ -619,21 +637,6 @@ def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
         out["merchant_raw"] = raw_merchant
         out["merchant"] = clean_merchant_label(raw_merchant, fallback=out.get("raw_text"))
     return out
-
-
-def _month_keys(now: datetime | None = None) -> tuple[datetime, datetime, datetime]:
-    """Return (this_month_start, last_month_start, next_month_start) as UTC datetimes."""
-    now = now or datetime.now(timezone.utc)
-    this_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    if now.month == 1:
-        last_start = datetime(now.year - 1, 12, 1, tzinfo=timezone.utc)
-    else:
-        last_start = datetime(now.year, now.month - 1, 1, tzinfo=timezone.utc)
-    if now.month == 12:
-        next_start = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        next_start = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
-    return this_start, last_start, next_start
 
 
 @app.get("/health")
@@ -853,7 +856,7 @@ async def receive_sms(request: Request):
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse SMS: {exc}",
+            detail=f"Failed to parse SMS: {_exc_detail(exc)}",
         ) from exc
 
     if txn is None:
@@ -871,15 +874,16 @@ async def receive_sms(request: Request):
             "received": {"sender": payload.sender, "body": payload.body[:240]},
         }
 
+    received_at = (
+        datetime.fromtimestamp(payload.timestamp / 1000, tz=timezone.utc)
+        if payload.timestamp
+        else datetime.now(timezone.utc)
+    )
     doc = {
         **txn,
         "sender": payload.sender,
         "source": "sms",
-        "received_at": (
-            datetime.fromtimestamp(payload.timestamp / 1000, tz=timezone.utc)
-            if payload.timestamp
-            else datetime.now(timezone.utc)
-        ),
+        "received_at": received_at,
     }
     apply_category(doc, _load_merchant_memory())
 
@@ -937,26 +941,6 @@ def sms_webhook_debug(limit: int = Query(default=20, ge=1, le=100)):
     return {"count": len(out), "events": out}
 
 
-@app.post("/statements/import")
-def import_statement(payload: StatementImportPayload):
-    """Paste CSV or line-based statement text — LangGraph multi-agent + RAG."""
-    bank = (payload.bank or "").strip() or None
-    if bank and bank not in ALLOWED_BANKS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Only these banks are supported: {', '.join(sorted(ALLOWED_BANKS))}",
-        )
-    try:
-        raw = (payload.content or "").encode("utf-8")
-        return _run_statement_langgraph(
-            raw,
-            filename="paste.csv" if payload.format == "csv" else "paste.txt",
-            bank=bank,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Failed to parse statement: {exc}") from exc
-
-
 @app.post("/statements/upload")
 async def upload_statement(
     file: UploadFile = File(...),
@@ -988,18 +972,8 @@ async def upload_statement(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=422,
-            detail=f"Failed to parse statement: {exc}",
+            detail=f"Failed to parse statement: {_exc_detail(exc)}",
         ) from exc
-
-
-@app.get("/import/pipeline/status")
-def import_pipeline_status():
-    store = get_vector_store(db)
-    return {
-        "protocol": "langgraph-import/v1",
-        "stages": STAGE_ORDER,
-        "vector_backend": store.backend,
-    }
 
 
 @app.get("/transactions")
@@ -1156,36 +1130,6 @@ def update_transaction_category(txn_id: str, payload: CategoryUpdate):
     }
 
 
-@app.post("/categories/backfill")
-def backfill_categories(force: bool = Query(default=False)):
-    """Categorize existing transactions missing a category (or all if force=true)."""
-    memory = _load_merchant_memory()
-    query: dict[str, Any] = {} if force else {"$or": [{"category": {"$exists": False}}, {"category": None}, {"category": ""}]}
-    updated = 0
-    scanned = 0
-    by_cat: dict[str, int] = {}
-    for doc in transactions.find(query):
-        scanned += 1
-        # Preserve manual overrides unless force
-        if not force and doc.get("category_source") == "manual" and doc.get("category"):
-            continue
-        apply_category(doc, memory)
-        transactions.update_one(
-            {"_id": doc["_id"]},
-            {
-                "$set": {
-                    "category": doc.get("category"),
-                    "mcc": doc.get("mcc"),
-                    "category_source": doc.get("category_source"),
-                }
-            },
-        )
-        updated += 1
-        cat = str(doc.get("category") or "Other")
-        by_cat[cat] = by_cat.get(cat, 0) + 1
-    return {"scanned": scanned, "updated": updated, "by_category": by_cat}
-
-
 @app.delete("/transactions/{txn_id}")
 def delete_transaction(txn_id: str):
     try:
@@ -1197,102 +1141,6 @@ def delete_transaction(txn_id: str):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return {"ok": True, "id": txn_id}
-
-
-@app.get("/summary")
-def summary():
-    pipeline = [
-        {"$group": {"_id": "$type", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}}
-    ]
-    results = {r["_id"]: r for r in transactions.aggregate(pipeline)}
-    total_debit = float(results.get("debit", {}).get("total", 0) or 0)
-    total_credit = float(results.get("credit", {}).get("total", 0) or 0)
-    count = int(
-        (results.get("debit", {}).get("count", 0) or 0)
-        + (results.get("credit", {}).get("count", 0) or 0)
-    )
-
-    this_start, last_start, next_start = _month_keys()
-
-    def month_totals(start: datetime, end: datetime) -> tuple[float, float]:
-        month_pipeline = [
-            {"$match": {"received_at": {"$gte": start, "$lt": end}}},
-            {"$group": {"_id": "$type", "total": {"$sum": "$amount"}}},
-        ]
-        rows = {r["_id"]: float(r["total"] or 0) for r in transactions.aggregate(month_pipeline)}
-        return rows.get("debit", 0.0), rows.get("credit", 0.0)
-
-    this_debit, this_credit = month_totals(this_start, next_start)
-    last_debit, last_credit = month_totals(last_start, this_start)
-
-    return {
-        "total_debit": total_debit,
-        "total_credit": total_credit,
-        "net": total_credit - total_debit,
-        "count": count,
-        "this_month_debit": this_debit,
-        "this_month_credit": this_credit,
-        "this_month_net": this_credit - this_debit,
-        "last_month_debit": last_debit,
-        "last_month_credit": last_credit,
-        "last_month_net": last_credit - last_debit,
-    }
-
-
-@app.get("/summary/monthly")
-def summary_monthly(months: int = Query(default=12, ge=1, le=36)):
-    pipeline = [
-        {
-            "$group": {
-                "_id": {
-                    "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
-                },
-                "debit": {
-                    "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
-                },
-                "credit": {
-                    "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
-                },
-                "count": {"$sum": 1},
-            }
-        },
-        {"$sort": {"_id": 1}},
-    ]
-    rows = list(transactions.aggregate(pipeline))
-    buckets = [
-        {
-            "month": row["_id"] or "unknown",
-            "debit": float(row.get("debit") or 0),
-            "credit": float(row.get("credit") or 0),
-            "net": float(row.get("credit") or 0) - float(row.get("debit") or 0),
-            "count": int(row.get("count") or 0),
-        }
-        for row in rows
-        if row.get("_id")
-    ]
-    return buckets[-months:]
-
-
-@app.get("/summary/merchants")
-def summary_merchants(limit: int = Query(default=10, ge=1, le=50)):
-    totals: dict[str, dict[str, float]] = {}
-    for doc in transactions.find(
-        {"type": "debit", "merchant": {"$nin": [None, ""]}},
-        {"merchant": 1, "raw_text": 1, "amount": 1},
-    ):
-        label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text"))
-        bucket = totals.setdefault(label, {"amount": 0.0, "count": 0.0})
-        bucket["amount"] += float(doc.get("amount") or 0)
-        bucket["count"] += 1
-    ranked = sorted(totals.items(), key=lambda kv: -kv[1]["amount"])[:limit]
-    return [
-        {
-            "merchant": name,
-            "amount": vals["amount"],
-            "count": int(vals["count"]),
-        }
-        for name, vals in ranked
-    ]
 
 
 def _parse_optional_date(value: str | None, end_of_day: bool = False) -> datetime | None:
@@ -1310,251 +1158,6 @@ def _parse_optional_date(value: str | None, end_of_day: bool = False) -> datetim
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-@app.get("/reports/detailed")
-def reports_detailed(
-    date_from: str | None = None,
-    date_to: str | None = None,
-    merchant_limit: int = Query(default=15, ge=1, le=50),
-):
-    """Rich report payload for the Reports page."""
-    start = _parse_optional_date(date_from)
-    end = _parse_optional_date(date_to, end_of_day=True)
-
-    match: dict[str, Any] = {}
-    if start or end:
-        received: dict[str, Any] = {}
-        if start:
-            received["$gte"] = start
-        if end:
-            received["$lte"] = end
-        match["received_at"] = received
-
-    base = [{"$match": match}] if match else []
-
-    totals_rows = list(
-        transactions.aggregate(
-            base
-            + [
-                {
-                    "$group": {
-                        "_id": "$type",
-                        "total": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                        "avg": {"$avg": "$amount"},
-                        "max": {"$max": "$amount"},
-                        "min": {"$min": "$amount"},
-                    }
-                }
-            ]
-        )
-    )
-    by_type = {r["_id"]: r for r in totals_rows}
-    debit = by_type.get("debit", {})
-    credit = by_type.get("credit", {})
-    total_debit = float(debit.get("total") or 0)
-    total_credit = float(credit.get("total") or 0)
-    debit_count = int(debit.get("count") or 0)
-    credit_count = int(credit.get("count") or 0)
-    count = debit_count + credit_count
-
-    def group_breakdown(field: str) -> list[dict[str, Any]]:
-        rows = list(
-            transactions.aggregate(
-                base
-                + [
-                    {
-                        "$group": {
-                            "_id": f"${field}",
-                            "debit": {
-                                "$sum": {
-                                    "$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]
-                                }
-                            },
-                            "credit": {
-                                "$sum": {
-                                    "$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]
-                                }
-                            },
-                            "count": {"$sum": 1},
-                        }
-                    },
-                    {"$sort": {"debit": -1}},
-                ]
-            )
-        )
-        return [
-            {
-                "name": str(r["_id"] or "Unknown"),
-                "debit": float(r.get("debit") or 0),
-                "credit": float(r.get("credit") or 0),
-                "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
-                "count": int(r.get("count") or 0),
-                "debit_share": (
-                    round(float(r.get("debit") or 0) / total_debit * 100, 1)
-                    if total_debit
-                    else 0.0
-                ),
-            }
-            for r in rows
-        ]
-
-    merchant_q = {**match, "type": "debit", "merchant": {"$nin": [None, ""]}}
-    merchant_totals: dict[str, dict[str, float]] = {}
-    for doc in transactions.find(merchant_q, {"merchant": 1, "raw_text": 1, "amount": 1}):
-        label = clean_merchant_label(doc.get("merchant"), fallback=doc.get("raw_text"))
-        bucket = merchant_totals.setdefault(label, {"amount": 0.0, "count": 0.0})
-        bucket["amount"] += float(doc.get("amount") or 0)
-        bucket["count"] += 1
-    merchant_rows = [
-        {
-            "merchant": name,
-            "amount": vals["amount"],
-            "count": int(vals["count"]),
-            "avg": round(vals["amount"] / max(vals["count"], 1), 2),
-            "share": (
-                round(vals["amount"] / total_debit * 100, 1) if total_debit else 0.0
-            ),
-        }
-        for name, vals in sorted(merchant_totals.items(), key=lambda kv: -kv[1]["amount"])[
-            :merchant_limit
-        ]
-    ]
-
-    daily = list(
-        transactions.aggregate(
-            base
-            + [
-                {
-                    "$group": {
-                        "_id": {
-                            "$dateToString": {"format": "%Y-%m-%d", "date": "$received_at"}
-                        },
-                        "debit": {
-                            "$sum": {
-                                "$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]
-                            }
-                        },
-                        "credit": {
-                            "$sum": {
-                                "$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]
-                            }
-                        },
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]
-        )
-    )
-    daily_rows = [
-        {
-            "date": r["_id"],
-            "debit": float(r.get("debit") or 0),
-            "credit": float(r.get("credit") or 0),
-            "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
-            "count": int(r.get("count") or 0),
-        }
-        for r in daily
-        if r.get("_id")
-    ]
-
-    weekday = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "debit"}},
-                {
-                    "$group": {
-                        "_id": {"$dayOfWeek": "$received_at"},
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]
-        )
-    )
-    weekday_names = {1: "Sun", 2: "Mon", 3: "Tue", 4: "Wed", 5: "Thu", 6: "Fri", 7: "Sat"}
-    weekday_rows = [
-        {
-            "day": weekday_names.get(int(r["_id"]), str(r["_id"])),
-            "amount": float(r.get("amount") or 0),
-            "count": int(r.get("count") or 0),
-        }
-        for r in weekday
-    ]
-
-    monthly = list(
-        transactions.aggregate(
-            base
-            + [
-                {
-                    "$group": {
-                        "_id": {
-                            "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
-                        },
-                        "debit": {
-                            "$sum": {
-                                "$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]
-                            }
-                        },
-                        "credit": {
-                            "$sum": {
-                                "$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]
-                            }
-                        },
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]
-        )
-    )
-    monthly_rows = [
-        {
-            "month": r["_id"],
-            "debit": float(r.get("debit") or 0),
-            "credit": float(r.get("credit") or 0),
-            "net": float(r.get("credit") or 0) - float(r.get("debit") or 0),
-            "count": int(r.get("count") or 0),
-        }
-        for r in monthly
-        if r.get("_id")
-    ]
-
-    largest = list(transactions.find(match).sort("amount", DESCENDING).limit(10))
-    active_days = len(daily_rows)
-    avg_daily_debit = round(total_debit / active_days, 2) if active_days else 0.0
-
-    return {
-        "range": {"date_from": date_from, "date_to": date_to},
-        "overview": {
-            "total_debit": total_debit,
-            "total_credit": total_credit,
-            "net": total_credit - total_debit,
-            "count": count,
-            "debit_count": debit_count,
-            "credit_count": credit_count,
-            "avg_debit": round(float(debit.get("avg") or 0), 2),
-            "avg_credit": round(float(credit.get("avg") or 0), 2),
-            "max_debit": float(debit.get("max") or 0),
-            "max_credit": float(credit.get("max") or 0),
-            "active_days": active_days,
-            "avg_daily_debit": avg_daily_debit,
-        },
-        "by_bank": group_breakdown("bank"),
-        "by_card_type": group_breakdown("card_type"),
-        "by_source": group_breakdown("source"),
-        "by_category": group_breakdown("category"),
-        "merchants": merchant_rows,
-        "daily": daily_rows,
-        "weekday": weekday_rows,
-        "monthly": monthly_rows,
-        "largest": [_serialize(doc) for doc in largest],
-        "categories": CATEGORIES,
-    }
 
 
 @app.get("/analytics")
@@ -1660,11 +1263,6 @@ def put_portfolio(payload: PortfolioPayload):
 
 
 # ── INDmoney CSV / Excel import ──────────────────────────────────────────────
-
-@app.get("/indmoney/fields")
-def indmoney_fields():
-    return {"fields": TARGET_FIELDS}
-
 
 @app.post("/indmoney/preview")
 async def indmoney_preview(file: UploadFile = File(...)):
@@ -1869,52 +1467,6 @@ def put_liabilities(payload: LiabilitiesPayload):
     if docs:
         liabilities_col.insert_many(docs)
     return get_liabilities()
-
-
-# ── Budgets ──────────────────────────────────────────────────────────────────
-
-class BudgetItem(BaseModel):
-    category: str = Field(..., min_length=1, max_length=64)
-    amount: float = Field(..., ge=0)
-
-    @field_validator("category")
-    @classmethod
-    def valid_category(cls, value: str) -> str:
-        cleaned = value.strip()
-        if cleaned not in CATEGORIES:
-            raise ValueError(f"category must be one of: {', '.join(CATEGORIES)}")
-        return cleaned
-
-
-class BudgetsPayload(BaseModel):
-    budgets: list[BudgetItem] = Field(default_factory=list)
-
-
-@app.get("/budgets")
-def get_budgets():
-    rows = []
-    for doc in budgets_col.find():
-        rows.append(
-            {
-                "category": doc.get("category"),
-                "amount": float(doc.get("amount") or 0),
-            }
-        )
-    rows.sort(key=lambda r: r["category"] or "")
-    return {"budgets": rows}
-
-
-@app.put("/budgets")
-def put_budgets(payload: BudgetsPayload):
-    budgets_col.delete_many({})
-    docs = [
-        {"category": b.category, "amount": float(b.amount), "updated_at": datetime.now(timezone.utc)}
-        for b in payload.budgets
-        if b.amount > 0
-    ]
-    if docs:
-        budgets_col.insert_many(docs)
-    return get_budgets()
 
 
 # ── Export ───────────────────────────────────────────────────────────────────
@@ -2418,30 +1970,10 @@ def mark_sip_invested(payload: SipMarkPayload):
     return {"ok": True, "instrument": name, "month": month, "advisor_comment": comment}
 
 
-@app.delete("/smart/sip/mark-invested")
-def unmark_sip_invested(instrument: str = Query(...), month: str | None = None):
-    ym = month or datetime.now(timezone.utc).strftime("%Y-%m")
-    sip_overrides.delete_one({"instrument": instrument.strip(), "month": ym})
-    return {"ok": True}
-
-
 class DriftSettingsPayload(BaseModel):
     targets: dict[str, float] | None = None
     threshold_pp: float = Field(default=10.0, ge=1, le=50)
     use_current_as_baseline: bool = False
-
-
-@app.get("/smart/drift-settings")
-def get_drift_settings():
-    doc = app_settings.find_one({"_id": "allocation"}) or {}
-    return {
-        "targets": doc.get("targets") or {},
-        "baseline": doc.get("baseline") or {},
-        "threshold_pp": float(doc.get("threshold_pp") or 10),
-        "baseline_saved_at": doc.get("baseline_saved_at").isoformat()
-        if isinstance(doc.get("baseline_saved_at"), datetime)
-        else None,
-    }
 
 
 @app.put("/smart/drift-settings")
@@ -2467,7 +1999,15 @@ def put_drift_settings(payload: DriftSettingsPayload):
         {"$set": update, "$setOnInsert": {"_id": "allocation"}},
         upsert=True,
     )
-    return get_drift_settings()
+    doc = app_settings.find_one({"_id": "allocation"}) or {}
+    return {
+        "targets": doc.get("targets") or {},
+        "baseline": doc.get("baseline") or {},
+        "threshold_pp": float(doc.get("threshold_pp") or 10),
+        "baseline_saved_at": doc.get("baseline_saved_at").isoformat()
+        if isinstance(doc.get("baseline_saved_at"), datetime)
+        else None,
+    }
 
 
 @app.get("/ai/transfer-suggestions")
@@ -3023,11 +2563,6 @@ def advisor_presence_get():
         raise HTTPException(status_code=500, detail=f"Advisor presence failed: {exc}") from exc
 
 
-@app.get("/advisor/chat/session")
-def advisor_chat_session_get():
-    return get_or_create_session(advisor_chat_sessions, period="week")
-
-
 @app.post("/advisor/chat")
 def advisor_chat_post(payload: AdvisorChatPayload):
     try:
@@ -3106,11 +2641,6 @@ def advisor_decision_comment(payload: AdvisorDecisionPayload):
             settings=app_settings,
         )
     return {**comment, "goal_impact": impact}
-
-
-@app.get("/advisor/memories")
-def advisor_memories_list(limit: int = Query(default=40, ge=1, le=100)):
-    return {"memories": list_advisor_memories(advisor_memories, limit=limit)}
 
 
 class AdvisorTrainAnswer(BaseModel):

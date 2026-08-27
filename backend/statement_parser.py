@@ -13,7 +13,18 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from parser import ALLOWED_BANKS, Transaction, _detect_bank, _detect_card_type, parse_sms
+from parser import (
+    ALLOWED_BANKS,
+    Transaction,
+    _detect_bank,
+    _detect_card_type,
+    coerce_amount,
+    is_bank_ref_narration,
+    is_phantom_bank_ref_amount,
+    narration_has_money_token,
+    parse_messages_llm,
+    parse_sms,
+)
 
 DATE_FORMATS = (
     "%Y-%m-%d",
@@ -215,9 +226,8 @@ def _parse_money(raw: str) -> Optional[float]:
     text = re.sub(r"[^\d.\-]", "", text)
     if not text or text in {".", "-"}:
         return None
-    try:
-        value = float(text)
-    except ValueError:
+    value = coerce_amount(text)
+    if value is None:
         return None
     if neg:
         value = -abs(value)
@@ -263,6 +273,50 @@ def _type_from_description(desc: str) -> Optional[str]:
     return None
 
 
+def _apply_stmt_txn(
+    txn: Transaction,
+    *,
+    desc: str,
+    bank_name: Optional[str],
+    balance: Optional[float],
+    default_card_type: str,
+) -> Transaction:
+    if bank_name:
+        txn["bank"] = bank_name
+    txn["raw_text"] = desc
+    if balance is not None:
+        txn["balance"] = balance
+    if default_card_type == "credit_card":
+        txn["card_type"] = "credit_card"
+    enrich_imported_txn(txn, default_card_type=default_card_type)
+    return txn
+
+
+def _csv_amount_row(
+    mapped: dict[str, str],
+    row: dict[str, str],
+    desc: str,
+) -> tuple[Optional[str], Optional[float], Optional[float]]:
+    debit = _parse_money(row.get(mapped["debit"], "")) if "debit" in mapped else None
+    credit = _parse_money(row.get(mapped["credit"], "")) if "credit" in mapped else None
+    amount_col = _parse_money(row.get(mapped["amount"], "")) if "amount" in mapped else None
+    txn_type = _row_type(mapped, row, amount_col, debit, credit)
+    if txn_type is None:
+        txn_type = _type_from_description(desc)
+    if txn_type is None and amount_col is not None:
+        txn_type = "debit" if amount_col >= 0 else "credit"
+        if amount_col < 0:
+            amount_col = abs(amount_col)
+    if txn_type == "debit":
+        amount = debit if debit and debit > 0 else (abs(amount_col) if amount_col else None)
+    elif txn_type == "credit":
+        amount = credit if credit and credit > 0 else (abs(amount_col) if amount_col else None)
+    else:
+        amount = None
+    balance = _parse_money(row.get(mapped["balance"], "")) if "balance" in mapped else None
+    return txn_type, amount, balance
+
+
 def parse_statement_csv(
     content: str,
     *,
@@ -271,12 +325,12 @@ def parse_statement_csv(
 ) -> list[tuple[Transaction, datetime]]:
     """
     Returns list of (Transaction, received_at).
+    Regex + CSV columns first; LLM only for leftover narrations without an amount.
     """
     text = content.lstrip("\ufeff").strip()
     if not text:
         return []
 
-    # Detect delimiter
     sample = text[:2000]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t|;")
@@ -288,15 +342,11 @@ def parse_statement_csv(
         return []
 
     mapped = _map_headers(list(reader.fieldnames))
-    if "date" not in mapped or "description" not in mapped:
-        # Need at least date + description; amount via amount or debit/credit
-        if "date" not in mapped:
-            return []
-    if "amount" not in mapped and "debit" not in mapped and "credit" not in mapped:
+    if "date" not in mapped:
         return []
 
     bank_name = bank or None
-    results: list[tuple[Transaction, datetime]] = []
+    staged: list[dict[str, Any]] = []
 
     for row in reader:
         if not row:
@@ -305,63 +355,67 @@ def parse_statement_csv(
         received_at = _parse_date(date_raw)
         if received_at is None:
             continue
-
-        desc = ""
-        if "description" in mapped:
-            desc = (row.get(mapped["description"]) or "").strip()
+        desc = (row.get(mapped["description"]) or "").strip() if "description" in mapped else ""
         if not desc:
             continue
+        txn_type, amount, balance = _csv_amount_row(mapped, row, desc)
+        staged.append(
+            {
+                "desc": desc,
+                "received_at": received_at,
+                "txn_type": txn_type,
+                "amount": amount,
+                "balance": balance,
+            }
+        )
 
-        debit = _parse_money(row.get(mapped["debit"], "")) if "debit" in mapped else None
-        credit = _parse_money(row.get(mapped["credit"], "")) if "credit" in mapped else None
-        amount_col = _parse_money(row.get(mapped["amount"], "")) if "amount" in mapped else None
+    results: list[tuple[Transaction, datetime]] = []
+    leftovers: list[dict[str, Any]] = []
 
-        txn_type = _row_type(mapped, row, amount_col, debit, credit)
-        if txn_type is None:
-            txn_type = _type_from_description(desc)
-        if txn_type is None and amount_col is not None:
-            # Default: positive amount column treated as debit for spend trackers
-            # unless description says credit
-            txn_type = "debit" if amount_col >= 0 else "credit"
-            if amount_col < 0:
-                amount_col = abs(amount_col)
+    for item in staged:
+        desc = str(item["desc"])
+        received_at = item["received_at"]
+        amount = item["amount"]
+        txn_type = item["txn_type"]
+        balance = item["balance"]
 
-        if txn_type == "debit":
-            amount = debit if debit and debit > 0 else (abs(amount_col) if amount_col else None)
-        elif txn_type == "credit":
-            amount = credit if credit and credit > 0 else (abs(amount_col) if amount_col else None)
-        else:
+        txn = None
+        if not is_bank_ref_narration(desc):
+            try:
+                txn = parse_sms(bank_name or "STATEMENT", desc, use_llm=False)
+            except Exception:  # noqa: BLE001
+                txn = None
+
+        if txn is not None:
+            amt = coerce_amount(txn.get("amount"))
+            if amt is None or amt <= 0:
+                txn = None
+            else:
+                txn["amount"] = amt
+
+        if txn is not None:
+            results.append(
+                (
+                    _apply_stmt_txn(
+                        txn,
+                        desc=desc,
+                        bank_name=bank_name,
+                        balance=balance,
+                        default_card_type=default_card_type,
+                    ),
+                    received_at,
+                )
+            )
             continue
 
-        if amount is None or amount <= 0:
-            continue
-
-        balance = None
-        if "balance" in mapped:
-            balance = _parse_money(row.get(mapped["balance"], ""))
-
-        # Prefer SMS-style parse on narration when it looks like an SMS
-        sms_txn = parse_sms(bank_name or "STATEMENT", desc) if bank_name else None
-        if sms_txn is None and bank_name:
-            # Retry with bank code-like sender for ICICI/Federal SMS embedded in statements
-            sender_hint = "ICICIB" if "icici" in bank_name.lower() else "FEDBNK"
-            sms_txn = parse_sms(sender_hint, desc)
-        if sms_txn is not None:
-            txn = sms_txn
-            if bank_name:
-                txn["bank"] = bank_name
-            txn["raw_text"] = desc
-            if balance is not None:
-                txn["balance"] = balance
-            if default_card_type == "credit_card":
-                txn["card_type"] = "credit_card"
-        else:
-            merchant = desc[:60]
-            # Strip leading ref codes
-            merchant = re.sub(r"^(UPI|NEFT|IMPS|RTGS)[/\-\s]+", "", merchant, flags=re.I)
+        csv_amt = coerce_amount(amount)
+        if csv_amt is not None and csv_amt > 0 and txn_type in {"debit", "credit"}:
+            if is_phantom_bank_ref_amount(csv_amt, desc, txn_type):
+                continue
+            merchant = re.sub(r"^(UPI|NEFT|NFT|IMPS|RTGS)[/\-\s]+", "", desc[:60], flags=re.I)
             txn = Transaction(
-                type=txn_type,
-                amount=float(amount),
+                type=str(txn_type),
+                amount=csv_amt,
                 account_last4=None,
                 card_type=default_card_type,
                 merchant=merchant.strip() or None,
@@ -369,9 +423,52 @@ def parse_statement_csv(
                 bank=bank_name,
                 raw_text=desc,
             )
+            results.append(
+                (
+                    _apply_stmt_txn(
+                        txn,
+                        desc=desc,
+                        bank_name=bank_name,
+                        balance=balance,
+                        default_card_type=default_card_type,
+                    ),
+                    received_at,
+                )
+            )
+            continue
 
-        enrich_imported_txn(txn, default_card_type=default_card_type)
-        results.append((txn, received_at))
+        if is_bank_ref_narration(desc) or not narration_has_money_token(desc):
+            continue
+
+        leftovers.append(item)
+
+    if leftovers:
+        try:
+            parsed = parse_messages_llm(
+                [(bank_name or "STATEMENT", str(q["desc"])) for q in leftovers[:24]]
+            )
+        except Exception:  # noqa: BLE001
+            parsed = [None] * min(len(leftovers), 24)
+        for item, llm_txn in zip(leftovers[:24], parsed):
+            if llm_txn is None:
+                continue
+            amt = coerce_amount(llm_txn.get("amount"))
+            desc = str(item["desc"])
+            if amt is None or amt <= 0 or is_phantom_bank_ref_amount(amt, desc, llm_txn.get("type")):
+                continue
+            llm_txn["amount"] = amt
+            results.append(
+                (
+                    _apply_stmt_txn(
+                        llm_txn,
+                        desc=str(item["desc"]),
+                        bank_name=bank_name,
+                        balance=item["balance"],
+                        default_card_type=default_card_type,
+                    ),
+                    item["received_at"],
+                )
+            )
 
     return results
 
@@ -388,7 +485,6 @@ def parse_statement_text(
       2026-07-15 Rs.200 debited ... at SWIGGY
       15/07/2026,SWIGGY,200,DR
     """
-    results: list[tuple[Transaction, datetime]] = []
     # Try CSV first if it looks like one
     if "," in content and ("date" in content.lower()[:200] or "narration" in content.lower()[:200]):
         csv_rows = parse_statement_csv(content, bank=bank)
@@ -399,11 +495,11 @@ def parse_statement_text(
         r"^(\d{1,4}[-/]\d{1,2}[-/]\d{1,4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})\s*[,:\-]?\s*(.+)$"
     )
 
+    staged: list[tuple[str, datetime]] = []
     for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-
         received_at = datetime.now(timezone.utc)
         body = line
         m = date_line_re.match(line)
@@ -412,39 +508,76 @@ def parse_statement_text(
             if parsed:
                 received_at = parsed
                 body = m.group(2).strip()
+        staged.append((body, received_at))
 
-        txn = parse_sms(sender if not bank else bank, body)
+    results: list[tuple[Transaction, datetime]] = []
+    leftovers: list[tuple[str, datetime]] = []
+
+    for body, received_at in staged:
+        txn = None
+        if not is_bank_ref_narration(body):
+            try:
+                txn = parse_sms(sender if not bank else bank, body, use_llm=False)
+            except Exception:  # noqa: BLE001
+                txn = None
         if txn is None:
-            # Minimal fallback: amount + DR/CR
             amount_m = re.search(
-                r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
+                r"(?:Rs\.?|INR|₹)\s*([\d,]+(?:\.\d{1,2})?)",
                 body,
                 re.I,
             )
-            if not amount_m:
-                continue
-            amount = float(amount_m.group(1).replace(",", ""))
+            amount = _parse_money(amount_m.group(1)) if amount_m else None
             lower = body.lower()
-            if any(k in lower for k in (" cr", "credit", "deposit")):
-                txn_type = "credit"
-            elif any(k in lower for k in (" dr", "debit", "withdraw", "paid", "spent")):
-                txn_type = "debit"
-            else:
-                continue
-            txn = Transaction(
-                type=txn_type,
-                amount=amount,
-                account_last4=None,
-                card_type="bank_account",
-                merchant=body[:60],
-                balance=None,
-                bank=bank,
-                raw_text=body,
-            )
-        elif bank:
+            txn_type = None
+            if amount and amount > 0:
+                if any(k in lower for k in (" cr", "credit", "deposit")):
+                    txn_type = "credit"
+                elif any(k in lower for k in (" dr", "debit", "withdraw", "paid", "spent")):
+                    txn_type = "debit"
+            if txn_type and amount:
+                txn = Transaction(
+                    type=txn_type,
+                    amount=amount,
+                    account_last4=None,
+                    card_type="bank_account",
+                    merchant=body[:60],
+                    balance=None,
+                    bank=bank,
+                    raw_text=body,
+                )
+        if txn is None:
+            if narration_has_money_token(body) and not is_bank_ref_narration(body):
+                leftovers.append((body, received_at))
+            continue
+        amt = coerce_amount(txn.get("amount"))
+        if amt is None or amt <= 0 or is_phantom_bank_ref_amount(amt, body, txn.get("type")):
+            if narration_has_money_token(body) and not is_bank_ref_narration(body):
+                leftovers.append((body, received_at))
+            continue
+        txn["amount"] = amt
+        if bank:
             txn["bank"] = bank
-
+        txn["raw_text"] = body
         results.append((txn, received_at))
+
+    if leftovers:
+        try:
+            parsed = parse_messages_llm(
+                [(bank or sender, body) for body, _ in leftovers[:24]]
+            )
+        except Exception:  # noqa: BLE001
+            parsed = [None] * min(len(leftovers), 24)
+        for (body, received_at), llm_txn in zip(leftovers[:24], parsed):
+            if llm_txn is None:
+                continue
+            amt = coerce_amount(llm_txn.get("amount"))
+            if amt is None or amt <= 0 or is_phantom_bank_ref_amount(amt, body, llm_txn.get("type")):
+                continue
+            llm_txn["amount"] = amt
+            if bank:
+                llm_txn["bank"] = bank
+            llm_txn["raw_text"] = body
+            results.append((llm_txn, received_at))
 
     return results
 
@@ -682,6 +815,16 @@ def _pairs_to_docs(
 ) -> list[dict[str, Any]]:
     docs: list[dict[str, Any]] = []
     for txn, received_at in pairs:
+        amt = coerce_amount(txn.get("amount"))
+        if amt is None or amt <= 0:
+            continue
+        raw = str(txn.get("raw_text") or "")
+        if is_phantom_bank_ref_amount(amt, raw, txn.get("type")):
+            continue
+        txn["amount"] = amt
+        bal = coerce_amount(txn.get("balance"))
+        if bal is not None:
+            txn["balance"] = bal
         doc = {
             **txn,
             "sender": "STATEMENT",
