@@ -13,7 +13,7 @@ from report_pdf import render_report_pdf
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 RESEND_FROM = os.getenv("RESEND_FROM_EMAIL", "Money Track <onboarding@resend.dev>").strip()
-APP_BASE_URL = os.getenv("APP_BASE_URL", "https://money-track-rho-six.vercel.app").strip().rstrip("/")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "https://fin.sivesh-pb.com").strip().rstrip("/")
 
 
 def _fmt_inr(value: Any) -> str:
