@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CheckCircle2, Circle, UserRound } from 'lucide-react'
 import {
   createLearnedFact,

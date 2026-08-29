@@ -57,6 +57,7 @@ export function AiInsightsPage() {
   const [error, setError] = useState<string | null>(null)
   const [transferQueue, setTransferQueue] = useState<TransferSuggestion[]>([])
   const [tally, setTally] = useState<TallyPack | null>(null)
+  const [tallyAi, setTallyAi] = useState<TallyAi | null>(null)
   const [sipComment, setSipComment] = useState<string | null>(null)
 
   const smart = data?.smart

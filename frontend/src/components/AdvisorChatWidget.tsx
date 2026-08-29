@@ -118,7 +118,8 @@ export function AdvisorChatWidget() {
       id?: string
       fact_type?: string
       key?: string
-      choices?: Array<{ id: string }>
+      choices?: Array<{ id: string; label: string }>
+      meta?: Record<string, unknown>
     } | undefined
     if (!q?.id) return
     setBusy(true)
@@ -128,8 +129,8 @@ export function AdvisorChatWidget() {
         fact_type: String(q.fact_type || ''),
         key: String(q.key || ''),
         choice_id: choiceId,
-        choices: (q.choices as Array<{ id: string; label: string }> | undefined) || undefined,
-        meta: (q.meta as Record<string, unknown> | undefined) || undefined,
+        choices: q.choices,
+        meta: q.meta,
       })
       setNudges((list) => list.filter((n) => n.id !== nudge.id))
       await send(`I answered your question about ${q.key || 'my preferences'}.`)

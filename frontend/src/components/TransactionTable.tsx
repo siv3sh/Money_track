@@ -55,7 +55,7 @@ export function TransactionRow({
   variant = 'default',
 }: {
   txn: Transaction
-  categories: string[]
+  categories: readonly string[]
   onDelete: (id: string) => void
   onCategoryChange?: (
     id: string,

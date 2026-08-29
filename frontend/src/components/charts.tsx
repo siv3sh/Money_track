@@ -590,7 +590,7 @@ export function DeltaBars({
           tickLine={false}
         />
         <ReferenceLine x={0} stroke={theme.text} strokeOpacity={0.4} />
-        <Tooltip content={tipDelta} />
+        <Tooltip content={tipDelta as never} />
         <Bar dataKey="delta" name="Change" radius={[4, 4, 4, 4]} barSize={14}>
           {data.map((d, i) => (
             <Cell key={i} fill={d.delta >= 0 ? theme.debit : theme.credit} />
