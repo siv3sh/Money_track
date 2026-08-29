@@ -117,7 +117,11 @@ def build_sip_tracker(
 
         amounts = [e["amount"] for e in events]
         days = [e["day"] for e in events]
-        typical_amount = statistics.median(amounts)
+        # Typical monthly total = median of per-month sums (not per-txn median)
+        month_totals: dict[str, float] = {}
+        for e in events:
+            month_totals[e["month"]] = month_totals.get(e["month"], 0.0) + float(e["amount"])
+        typical_amount = statistics.median(month_totals.values()) if month_totals else statistics.median(amounts)
         typical_day = int(statistics.median(days))
         asset_class = events[-1]["asset_class"]
         last_month = months[-1]

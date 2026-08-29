@@ -4,7 +4,7 @@ import io
 import json
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import certifi
@@ -116,7 +116,12 @@ from learned_facts import (
     upsert_fact,
 )
 
-app = FastAPI(title="SMS Money Tracker")
+app = FastAPI(
+    title="SMS Money Tracker",
+    docs_url="/docs" if (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower() in {"development", "dev", "local", "test"} else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower() in {"development", "dev", "local", "test"} else None,
+)
 
 MONGO_URI = os.environ["MONGO_URI"]
 client = MongoClient(
@@ -156,17 +161,21 @@ WEBHOOK_PUBLIC_BASE = (
     or os.getenv("API_PUBLIC_URL", "").strip().rstrip("/")
     or "http://localhost:8000"
 )
+_DEFAULT_CORS = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "https://fin.sivesh-pb.com,https://money-track-rho-six.vercel.app"
+)
 CORS_ORIGINS = [
     o.strip()
-    for o in os.getenv(
-        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-    ).split(",")
+    for o in os.getenv("CORS_ORIGINS", _DEFAULT_CORS).split(",")
     if o.strip()
 ]
+if not CORS_ORIGINS:
+    raise RuntimeError("CORS_ORIGINS must list at least one origin (do not use *)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS or ["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -176,23 +185,34 @@ app.state.users = users_col
 app.state.linked_accounts = linked_accounts_col
 
 
+def _is_public_path(path: str) -> bool:
+    """Explicit public allowlist — never expose /sms-webhook/debug or docs-by-prefix alone."""
+    if path == "/health" or path == "/auth/login":
+        return True
+    if path.startswith("/jobs/"):
+        return True
+    # Legacy key webhook + token webhooks only (not /sms-webhook/debug)
+    if path == "/sms-webhook" or path == "/email-webhook":
+        return True
+    parts = [p for p in path.split("/") if p]
+    # /sms-webhook/{token} or /email-webhook/{token}
+    if len(parts) == 2 and parts[0] in {"sms-webhook", "email-webhook"}:
+        return parts[1] != "debug"
+    # Optional OpenAPI only outside production
+    env = (os.getenv("ENV") or os.getenv("APP_ENV") or "production").strip().lower()
+    if env in {"development", "dev", "local", "test"}:
+        if path.startswith("/docs") or path.startswith("/openapi") or path.startswith("/redoc"):
+            return True
+    return False
+
+
 @app.middleware("http")
 async def require_login_middleware(request: Request, call_next):
-    """Gate app APIs behind login; SMS webhook + login + health stay public."""
+    """Gate app APIs behind login; SMS/email ingest + login + health stay public."""
     path = request.url.path
     if request.method == "OPTIONS":
         return await call_next(request)
-    public = (
-        path == "/health"
-        or path.startswith("/docs")
-        or path.startswith("/openapi")
-        or path.startswith("/redoc")
-        or path == "/auth/login"
-        or path.startswith("/sms-webhook")
-        or path.startswith("/email-webhook")
-        or path.startswith("/jobs/")
-    )
-    if public:
+    if _is_public_path(path):
         return await call_next(request)
     auth = request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer "):
@@ -502,6 +522,43 @@ def _soft_fingerprint(doc: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         amount = str(doc.get("amount"))
     return f"{doc.get('type')}|{amount}|{day}|{label}"
+
+
+def _find_duplicate_transaction(doc: dict[str, Any]) -> dict[str, Any] | None:
+    """Soft dedupe across SMS/email/statement so the same alert is not stored twice."""
+    if doc.get("amount") is None or not doc.get("type"):
+        return None
+    ts = doc.get("received_at")
+    if not isinstance(ts, datetime):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    day_start = ts.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    q: dict[str, Any] = {
+        "type": doc["type"],
+        "amount": doc["amount"],
+        "received_at": {"$gte": day_start, "$lt": day_end},
+    }
+    if doc.get("user_id") is not None:
+        q["user_id"] = doc["user_id"]
+    if doc.get("account_last4"):
+        q["account_last4"] = doc["account_last4"]
+    soft = _soft_fingerprint(doc)
+    for existing in transactions.find(q).sort("received_at", DESCENDING).limit(25):
+        if _soft_fingerprint(existing) == soft:
+            return existing
+        # Exact raw_text prefix match (same channel retry)
+        if (existing.get("raw_text") or "")[:80] == (doc.get("raw_text") or "")[:80]:
+            return existing
+    return None
+
+
+def _require_user_id(request: Request) -> ObjectId:
+    uid = getattr(request.state, "user_id", None)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Please log in")
+    return uid
 
 
 def _import_statement_docs(
@@ -1231,6 +1288,26 @@ async def _ingest_sms_request(
         people_patterns=_load_people_patterns(),
     )
 
+    dup = _find_duplicate_transaction(doc)
+    if dup:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "duplicate",
+                "existing_id": str(dup["_id"]),
+                "sender": payload.sender,
+                "amount": txn.get("amount"),
+                "type": txn.get("type"),
+                "body": payload.body[:240],
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "duplicate — already tracked",
+            "existing_id": str(dup["_id"]),
+            "transaction": {**txn, "category": doc.get("category")},
+        }
+
     result = transactions.insert_one(doc)
 
     if not result.inserted_id:
@@ -1341,13 +1418,20 @@ async def receive_sms_with_token(token: str, request: Request):
 
 
 @app.get("/sms-webhook/debug")
-def sms_webhook_debug(limit: int = Query(default=20, ge=1, le=100)):
-    """Recent webhook attempts — use this to see why phone automations failed."""
-    rows = list(webhook_events.find().sort("received_at", DESCENDING).limit(limit))
+def sms_webhook_debug(request: Request, limit: int = Query(default=20, ge=1, le=100)):
+    """Recent webhook attempts for the logged-in user (bodies truncated, no token secrets)."""
+    uid = _require_user_id(request)
+    rows = list(
+        webhook_events.find({"user_id": uid}).sort("received_at", DESCENDING).limit(limit)
+    )
+    # Fallback: events logged before user_id stamping
+    if not rows:
+        rows = list(webhook_events.find().sort("received_at", DESCENDING).limit(limit))
     out = []
     for row in rows:
-        item = {k: v for k, v in row.items() if k != "_id"}
+        item = {k: v for k, v in row.items() if k not in {"_id", "body", "token_preview", "key_preview"}}
         item["id"] = str(row["_id"])
+        item["body_preview"] = (str(row.get("body") or ""))[:80]
         received = item.get("received_at")
         if isinstance(received, datetime):
             item["received_at"] = received.isoformat()
@@ -1494,35 +1578,24 @@ async def _ingest_email_request(
         people_patterns=_load_people_patterns(),
     )
 
-    # Skip exact duplicates already captured via SMS/statement/email
-    try:
-        fp = _fingerprint(doc)
-        existing = transactions.find_one(
+    # Soft dedupe across SMS/statement/email (subject no longer poisons raw_text)
+    dup = _find_duplicate_transaction(doc)
+    if dup:
+        _log_webhook_event(
             {
-                "amount": doc.get("amount"),
-                "type": doc.get("type"),
-                "account_last4": doc.get("account_last4"),
-            },
-            sort=[("received_at", DESCENDING)],
-        )
-        if existing and _fingerprint(existing) == fp:
-            _log_webhook_event(
-                {
-                    "stored": False,
-                    "reason": "duplicate_email",
-                    "channel": "email",
-                    "existing_id": str(existing["_id"]),
-                    "from": sender,
-                    "subject": subject[:120],
-                }
-            )
-            return {
                 "stored": False,
-                "reason": "duplicate — already tracked (likely via SMS)",
-                "existing_id": str(existing["_id"]),
+                "reason": "duplicate_email",
+                "channel": "email",
+                "existing_id": str(dup["_id"]),
+                "from": sender,
+                "subject": subject[:120],
             }
-    except Exception as exc:  # noqa: BLE001
-        print(f"Warning: email dedupe skipped: {exc}")
+        )
+        return {
+            "stored": False,
+            "reason": "duplicate — already tracked (likely via SMS)",
+            "existing_id": str(dup["_id"]),
+        }
 
     result = transactions.insert_one(doc)
     if not result.inserted_id:
@@ -1652,6 +1725,7 @@ async def upload_statement(
 
 @app.get("/transactions")
 def list_transactions(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=500),
     skip: int = Query(default=0, ge=0),
     card_type: str | None = None,
@@ -1664,7 +1738,7 @@ def list_transactions(
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
     q: str | None = Query(default=None, max_length=120),
 ):
-    query: dict[str, Any] = {}
+    query: dict[str, Any] = {"user_id": _require_user_id(request)}
     if card_type:
         query["card_type"] = card_type
     if bank:
@@ -1724,18 +1798,19 @@ def list_categories():
 
 
 @app.patch("/transactions/{txn_id}/category")
-def update_transaction_category(txn_id: str, payload: CategoryUpdate):
+def update_transaction_category(request: Request, txn_id: str, payload: CategoryUpdate):
+    uid = _require_user_id(request)
     try:
         oid = ObjectId(txn_id)
     except InvalidId as exc:
         raise HTTPException(status_code=400, detail="Invalid transaction id") from exc
 
-    doc = transactions.find_one({"_id": oid})
+    doc = transactions.find_one({"_id": oid, "user_id": uid})
     if not doc:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     transactions.update_one(
-        {"_id": oid},
+        {"_id": oid, "user_id": uid},
         {
             "$set": {
                 "category": payload.category,
@@ -1805,13 +1880,14 @@ def update_transaction_category(txn_id: str, payload: CategoryUpdate):
 
 
 @app.delete("/transactions/{txn_id}")
-def delete_transaction(txn_id: str):
+def delete_transaction(request: Request, txn_id: str):
+    uid = _require_user_id(request)
     try:
         oid = ObjectId(txn_id)
     except InvalidId as exc:
         raise HTTPException(status_code=400, detail="Invalid transaction id") from exc
 
-    result = transactions.delete_one({"_id": oid})
+    result = transactions.delete_one({"_id": oid, "user_id": uid})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return {"ok": True, "id": txn_id}
@@ -1907,8 +1983,12 @@ def _serialize_holding(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/portfolio")
-def get_portfolio():
-    rows = [_serialize_holding(doc) for doc in portfolio.find().sort("current_value", DESCENDING)]
+def get_portfolio(request: Request):
+    uid = _require_user_id(request)
+    rows = [
+        _serialize_holding(doc)
+        for doc in portfolio.find({"user_id": uid}).sort("current_value", DESCENDING)
+    ]
     return {
         "holdings": rows,
         "total_invested": round(sum(r["invested"] for r in rows), 2),
@@ -1917,10 +1997,11 @@ def get_portfolio():
 
 
 @app.put("/portfolio")
-def put_portfolio(payload: PortfolioPayload):
-    """Replace all manually tracked holdings (market values from your broker apps)."""
+def put_portfolio(request: Request, payload: PortfolioPayload):
+    """Replace this user's manually tracked holdings (market values from broker apps)."""
+    uid = _require_user_id(request)
     now = datetime.now(timezone.utc)
-    portfolio.delete_many({})
+    portfolio.delete_many({"user_id": uid})
     if payload.holdings:
         docs = []
         for h in payload.holdings:
@@ -1935,12 +2016,13 @@ def put_portfolio(payload: PortfolioPayload):
                     "instrument_key": key,
                     "source": "manual",
                     "provider": "manual",
+                    "user_id": uid,
                     "updated_at": now,
                     "import_date": now,
                 }
             )
         portfolio.insert_many(docs)
-    return get_portfolio()
+    return get_portfolio(request)
 
 
 # ── INDmoney CSV / Excel import ──────────────────────────────────────────────

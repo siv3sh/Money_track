@@ -15,10 +15,21 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pymongo.collection import Collection
 
-ph = PasswordHasher()
+ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, salt_len=16)
 _bearer = HTTPBearer(auto_error=False)
 
-JWT_SECRET = os.getenv("JWT_SECRET", "").strip() or os.getenv("API_KEY", "").strip() or "dev-insecure-change-me"
+_raw_jwt = os.getenv("JWT_SECRET", "").strip()
+_env_name = (os.getenv("ENV") or os.getenv("APP_ENV") or "production").strip().lower()
+if not _raw_jwt or _raw_jwt == "dev-insecure-change-me":
+    if _env_name in {"development", "dev", "local", "test"}:
+        JWT_SECRET = _raw_jwt or "dev-insecure-change-me"
+    else:
+        raise RuntimeError(
+            "JWT_SECRET must be set to a long random value "
+            "(do not reuse API_KEY; refuse the hardcoded default in production)."
+        )
+else:
+    JWT_SECRET = _raw_jwt
 JWT_ALG = "HS256"
 JWT_DAYS = int(os.getenv("JWT_EXPIRE_DAYS", "14"))
 
@@ -255,7 +266,7 @@ async def get_current_user(
 
 
 def user_match(user_id: ObjectId | None) -> dict[str, Any]:
-    """Mongo filter for owner-scoped queries."""
+    """Mongo filter for owner-scoped queries. Never returns unscoped {} when called with None — callers must require login first."""
     if user_id is None:
-        return {}
+        raise ValueError("user_match requires an authenticated user_id")
     return {"user_id": user_id}

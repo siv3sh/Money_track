@@ -15,6 +15,7 @@ from parser import (
     extract_credit_card_last4,
     extract_credit_card_statement_total,
     _detect_bank,
+    _parse_amount,
 )
 
 
@@ -93,7 +94,20 @@ def upsert_credit_card_from_sms(
             patch["statement_total"] = total
         if due:
             patch["due_date"] = due
-    # payment: touch as_of / last_sms_kind only
+    elif kind == "payment":
+        # Reduce outstanding when a payment SMS lands; clear due when fully paid.
+        paid = _parse_amount(body)
+        prior = existing.get("statement_total")
+        if paid is not None and prior is not None:
+            remaining = max(0.0, float(prior) - float(paid))
+            patch["statement_total"] = round(remaining, 2)
+            patch["last_payment_amount"] = float(paid)
+            if remaining <= 0.01:
+                patch["statement_total"] = 0.0
+                patch["due_date"] = None
+        elif paid is not None:
+            patch["last_payment_amount"] = float(paid)
+        # If amount unknown, only bump as_of (already in patch) — do not invent a zero balance.
 
     credit_cards.update_one(key, {"$set": patch}, upsert=True)
     doc = credit_cards.find_one(key)

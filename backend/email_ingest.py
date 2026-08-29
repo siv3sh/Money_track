@@ -73,13 +73,14 @@ def normalize_email_payload(data: dict[str, Any] | None) -> dict[str, str]:
 
 
 def email_body_for_parse(*, subject: str, text: str, html: str) -> str:
+    # Subject stays out of parse/fingerprint text so SMS↔email soft dedupe works.
     plain = text.strip() or html_to_text(html)
-    parts = [p for p in (subject.strip(), plain) if p]
-    combined = "\n".join(parts)
-    # Cap size — bank alerts are short; keep head where amounts usually live
-    if len(combined) > 6000:
-        combined = combined[:6000]
-    return combined
+    if not plain and subject.strip():
+        # Last resort only when body is empty (some forwarders put amount in subject)
+        plain = subject.strip()
+    if len(plain) > 6000:
+        plain = plain[:6000]
+    return plain
 
 
 def parse_bank_email(

@@ -191,9 +191,8 @@ SPAM_PATTERNS = [
     r"is\s+your\s+mobile\s+banking",
 ]
 
-# Known demo / tutorial SMS from README & local tests
+# Known demo / tutorial SMS from README & local tests (exact sample only)
 DEMO_PATTERNS = [
-    r"xx1234.*amazon.*12,?345",
     r"a/c\s+xx1234\s+at\s+amazon\s+on\s+23-07-26",
 ]
 
@@ -285,6 +284,14 @@ def amount_taken_from_reference_id(amount: float, text: str) -> bool:
     """True when `amount` is the tail of a long UTR/NEFT/IMPS id, not rupees."""
     token = _amount_digit_token(amount)
     if not token or not text or len(token) < 3:
+        return False
+    # Real SMS/email amounts are currency-prefixed — keep those even if UTR ends with same digits.
+    compact = (text or "").replace(",", "")
+    if re.search(
+        rf"(?:Rs\.?|INR|₹)\s*{re.escape(token)}(?:\.\d{{1,2}})?\b",
+        compact,
+        re.IGNORECASE,
+    ):
         return False
     for match in re.finditer(r"\d{10,}", text):
         run = match.group(0)
@@ -499,6 +506,12 @@ def _detect_type(text_lower: str) -> Optional[str]:
     # "<merchant> has received Rs X from your A/c" is money going OUT
     if DEBIT_RECEIVED_RE.search(text_lower):
         return "debit"
+    # "INR 250.00 sent" / "Rs.250 sent" — digits sit between currency and "sent"
+    if re.search(
+        r"(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d{1,2})?\s+sent\b",
+        text_lower,
+    ):
+        return "debit"
 
     debit_hits = [text_lower.find(k) for k in DEBIT_KEYWORDS if k in text_lower]
     credit_hits = [text_lower.find(k) for k in CREDIT_KEYWORDS if k in text_lower]
@@ -517,21 +530,43 @@ def _detect_type(text_lower: str) -> Optional[str]:
 def _parse_amount(body: str) -> Optional[float]:
     bal_match = BALANCE_RE.search(body)
     limit_match = LIMIT_RE.search(body)
-    bal_start = len(body)
+    exclude_spans: list[tuple[int, int]] = []
     if bal_match:
-        bal_start = min(bal_start, bal_match.start())
+        exclude_spans.append((bal_match.start(), bal_match.end()))
     if limit_match:
-        bal_start = min(bal_start, limit_match.start())
+        exclude_spans.append((limit_match.start(), limit_match.end()))
 
+    def _in_excluded(start: int, end: int) -> bool:
+        for a, b in exclude_spans:
+            if start >= a and end <= b:
+                return True
+            # Amount group overlaps the balance/limit number capture
+            if bal_match and bal_match.lastindex and start <= bal_match.start(1) < end:
+                return True
+            if limit_match and limit_match.lastindex and start <= limit_match.start(1) < end:
+                return True
+        return False
+
+    # Prefer amounts that appear before any balance/limit clause.
+    bal_start = min((a for a, _ in exclude_spans), default=len(body))
     for match in AMOUNT_RE.finditer(body):
         if match.start() >= bal_start:
+            continue
+        if _in_excluded(match.start(), match.end()):
             continue
         value = _to_float(match.group(1))
         if value is not None and value > 0:
             return value
 
-    match = AMOUNT_RE.search(body)
-    if match:
+    # Balance came first: take the first currency amount that is NOT the bal/limit itself.
+    for match in AMOUNT_RE.finditer(body):
+        if _in_excluded(match.start(), match.end()):
+            continue
+        # Skip the exact balance/limit numeric token when it is the only match inside that clause
+        if bal_match and match.group(1) == bal_match.group(1) and match.start() >= bal_match.start() and match.end() <= bal_match.end():
+            continue
+        if limit_match and match.group(1) == limit_match.group(1) and match.start() >= limit_match.start() and match.end() <= limit_match.end():
+            continue
         value = _to_float(match.group(1))
         if value is not None and value > 0:
             return value

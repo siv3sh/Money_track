@@ -162,7 +162,11 @@ def build_analytics(
                 {
                     "$group": {
                         "_id": {
-                            "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
+                            "$dateToString": {
+                                "format": "%Y-%m",
+                                "date": "$received_at",
+                                "timezone": "Asia/Kolkata",
+                            }
                         },
                         "debit": {
                             "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
@@ -204,7 +208,11 @@ def build_analytics(
                 {
                     "$group": {
                         "_id": {
-                            "$dateToString": {"format": "%Y-%m-%d", "date": "$received_at"}
+                            "$dateToString": {
+                                "format": "%Y-%m-%d",
+                                "date": "$received_at",
+                                "timezone": "Asia/Kolkata",
+                            }
                         },
                         "debit": {
                             "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
@@ -308,6 +316,7 @@ def build_analytics(
                                 "$dateToString": {
                                     "format": "%Y-%m",
                                     "date": "$received_at",
+                                    "timezone": "Asia/Kolkata",
                                 }
                             },
                             "category": {"$ifNull": ["$category", "Other"]},
@@ -342,6 +351,7 @@ def build_analytics(
                                 "$dateToString": {
                                     "format": "%Y-%m",
                                     "date": "$received_at",
+                                    "timezone": "Asia/Kolkata",
                                 }
                             },
                             "bank": {"$ifNull": ["$bank", "Unknown"]},
@@ -491,7 +501,11 @@ def build_analytics(
                 {
                     "$group": {
                         "_id": {
-                            "$dateToString": {"format": "%Y-%m", "date": "$received_at"}
+                            "$dateToString": {
+                                "format": "%Y-%m",
+                                "date": "$received_at",
+                                "timezone": "Asia/Kolkata",
+                            }
                         },
                         "invested": {
                             "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
@@ -802,8 +816,17 @@ def build_analytics(
     assets_total = round(liquid_total + total_current, 2)
     if liabilities_total > 0:
         if indmoney_snapshot and indmoney_snapshot.get("total_networth"):
-            # INDmoney net worth already nets its own liabilities; only subtract app-tracked ones
-            net_worth_estimate = round(float(indmoney_snapshot["total_networth"]) - liabilities_total, 2)
+            # INDmoney NW already nets its own liabilities; only subtract manual app liabilities
+            # (exclude SMS-synced credit_cards rows that are often already in INDmoney).
+            manual_only = round(
+                sum(
+                    float(r.get("outstanding") or 0)
+                    for r in liability_rows
+                    if (r.get("source") or "manual") == "manual"
+                ),
+                2,
+            )
+            net_worth_estimate = round(float(indmoney_snapshot["total_networth"]) - manual_only, 2)
         else:
             net_worth_estimate = round(assets_total - liabilities_total, 2)
 
