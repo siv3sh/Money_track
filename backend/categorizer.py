@@ -283,6 +283,8 @@ def categorize(
     raw_text: str | None = None,
     txn_type: str | None = None,
     merchant_memory: dict[str, str] | None = None,
+    salary_needles: list[str] | None = None,
+    people_patterns: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Return {category, mcc, source} where source is
@@ -293,7 +295,7 @@ def categorize(
     blob = f"{merchant_s} {raw}".strip()
 
     # Family transfers beat MCC/Income defaults (credits from relatives are not salary)
-    if is_family_transfer(merchant_s, raw):
+    if is_family_transfer(merchant_s, raw, extra_people=people_patterns):
         mcc_early = extract_mcc(raw) or extract_mcc(merchant_s)
         return {"category": "Transfers", "mcc": mcc_early, "source": "family"}
 
@@ -321,7 +323,9 @@ def categorize(
                 "source": "memory",
             }
 
-    if txn_type == "credit" and is_salary_source(merchant_s, raw):
+    if txn_type == "credit" and is_salary_source(
+        merchant_s, raw, extra_needles=salary_needles
+    ):
         return {"category": "Income", "mcc": mcc, "source": "salary"}
 
     kw = _keyword_category(blob, txn_type)
@@ -338,6 +342,8 @@ def apply_category(
     doc: dict[str, Any],
     merchant_memory: dict[str, str] | None = None,
     credit_card_accounts: list[dict[str, Any]] | None = None,
+    salary_needles: list[str] | None = None,
+    people_patterns: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Mutate/return doc with category (+ mcc, category_source) fields."""
     invest_hint = bool(doc.pop("_investment_hint", None))
@@ -362,6 +368,8 @@ def apply_category(
         raw_text=doc.get("raw_text"),
         txn_type=doc.get("type"),
         merchant_memory=merchant_memory,
+        salary_needles=salary_needles,
+        people_patterns=people_patterns,
     )
     # Statement investment cues beat weak Other/type_default — not merchant memory
     if (

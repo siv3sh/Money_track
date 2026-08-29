@@ -1,57 +1,16 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import {
-  FileText,
-  LayoutDashboard,
-  List,
-  Menu,
-  Moon,
-  PieChart,
-  Sparkles,
-  Sun,
-  Target,
-  Upload,
-  Wallet,
-  X,
-  ArrowLeftRight,
-} from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Menu, X } from 'lucide-react'
+import { useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
+import { useNavVisibility } from '../hooks/useNavVisibility'
+import { APP_NAV } from '../lib/navConfig'
+import { AccountMenu } from './AccountMenu'
 import { AdvisorChatWidget } from './AdvisorChatWidget'
 
-const THEME_KEY = 'money-track-theme'
-
-const NAV = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/wealth', label: 'Wealth', icon: Wallet },
-  { to: '/planning', label: 'Advisor', icon: Target },
-  { to: '/cash-flow', label: 'Cash Flow', icon: ArrowLeftRight },
-  { to: '/spending', label: 'Spending', icon: PieChart },
-  { to: '/transactions', label: 'Transactions', icon: List },
-  { to: '/ai', label: 'AI Insights', icon: Sparkles },
-  { to: '/monthly-reports', label: 'Reports', icon: FileText },
-  { to: '/import', label: 'Import', icon: Upload },
-] as const
-
-function useDarkMode() {
-  const [dark, setDark] = useState(() => {
-    const saved = localStorage.getItem(THEME_KEY)
-    if (saved === 'dark') return true
-    if (saved === 'light') return false
-    // Sapphire Vault: light first-paint
-    return false
-  })
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark)
-    localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light')
-  }, [dark])
-
-  return { dark, toggle: () => setDark((d) => !d) }
-}
-
 export function AppShell() {
-  const { dark, toggle } = useDarkMode()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const { isVisible } = useNavVisibility()
+  const shownNav = APP_NAV.filter((item) => isVisible(item.id))
 
   return (
     <FilterProvider>
@@ -99,14 +58,12 @@ export function AppShell() {
           </div>
 
           <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
-            {NAV.map((item) => (
+            {shownNav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={'end' in item ? item.end : false}
-                className={({ isActive }) =>
-                  `sidebar-link ${isActive ? 'active' : ''}`
-                }
+                end={item.end === true}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
                 onClick={() => setMobileOpen(false)}
               >
                 <item.icon size={16} />
@@ -114,13 +71,6 @@ export function AppShell() {
               </NavLink>
             ))}
           </nav>
-
-          <div className="border-t border-[var(--border)] p-3">
-            <button type="button" className="btn w-full justify-center" onClick={toggle}>
-              {dark ? <Sun size={14} /> : <Moon size={14} />}
-              {dark ? 'Light mode' : 'Dark mode'}
-            </button>
-          </div>
         </aside>
 
         <div className="lg:pl-[248px]">
@@ -134,14 +84,9 @@ export function AppShell() {
               <Menu size={16} />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-[var(--muted)]">
-                SMS + statements · sapphire ledger
-              </p>
+              <p className="truncate text-sm text-[var(--muted)]">SMS + email + statements</p>
             </div>
-            <div className="hidden items-center gap-2 text-xs text-[var(--muted)] sm:flex">
-              <span className="inline-block h-3 w-0.5 rounded-sm bg-[var(--sapphire)]" aria-hidden />
-              Money Track
-            </div>
+            <AccountMenu />
           </header>
 
           <main className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">

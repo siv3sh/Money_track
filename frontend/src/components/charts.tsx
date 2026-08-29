@@ -6,11 +6,13 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Legend,
   Line,
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -47,7 +49,7 @@ function Tip({
   label,
 }: {
   active?: boolean
-  payload?: Array<{ name: string; value: number; color?: string }>
+  payload?: Array<{ name: string; value: number; color?: string; dataKey?: string }>
   label?: string
 }) {
   if (!active || !payload?.length) return null
@@ -58,7 +60,7 @@ function Tip({
     >
       {label ? <p className="mb-1.5 font-semibold text-[var(--text)]">{label}</p> : null}
       {payload.map((p) => (
-        <div key={p.name} className="flex items-center justify-between gap-4 py-0.5">
+        <div key={`${p.name}-${p.dataKey || ''}`} className="flex items-center justify-between gap-4 py-0.5">
           <span className="flex items-center gap-1.5 text-[var(--muted)]">
             <span
               className="inline-block h-2 w-2 rounded-full"
@@ -73,6 +75,48 @@ function Tip({
       ))}
     </div>
   )
+}
+
+function tipDelta({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean
+  payload?: Array<{ payload?: { prior?: number; current?: number; delta?: number }; value?: number }>
+  label?: string
+}) {
+  if (!active || !payload?.length) return null
+  const row = payload[0]?.payload
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs shadow-[var(--shadow-lg)]">
+      {label ? <p className="mb-1.5 font-semibold text-[var(--text)]">{label}</p> : null}
+      <div className="space-y-0.5 tabular-nums text-[var(--muted)]">
+        <p>Prior {formatINR(Number(row?.prior) || 0)}</p>
+        <p>Now {formatINR(Number(row?.current) || 0)}</p>
+        <p className="font-medium text-[var(--text)]">
+          Δ {Number(row?.delta) >= 0 ? '+' : ''}
+          {formatINR(Number(row?.delta) || 0)}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function mixHex(hex: string, t: number, toward = '#0b1220'): string {
+  const parse = (h: string) => {
+    const x = h.replace('#', '')
+    const n = x.length === 3 ? x.split('').map((c) => c + c).join('') : x
+    return [0, 2, 4].map((i) => parseInt(n.slice(i, i + 2), 16))
+  }
+  try {
+    const [r, g, b] = parse(hex.startsWith('#') ? hex : '#888888')
+    const [tr, tg, tb] = parse(toward)
+    const m = (a: number, b: number) => Math.round(a + (b - a) * t)
+    return `rgb(${m(r, tr)}, ${m(g, tg)}, ${m(b, tb)})`
+  } catch {
+    return hex
+  }
 }
 
 export function CashflowBars({
@@ -277,40 +321,52 @@ export function DonutChart({
   nameKey = 'name',
   valueKey = 'value',
   onSliceClick,
+  centerLabel,
 }: {
   data: Array<Record<string, string | number>>
   nameKey?: string
   valueKey?: string
   onSliceClick?: (name: string) => void
+  /** Optional center caption (e.g. total). */
+  centerLabel?: string
 }) {
   const theme = useChartTheme()
   const cleaned = data.filter((d) => Number(d[valueKey]) > 0)
   if (!cleaned.length) return <EmptyState message="No breakdown yet" />
+  const total = cleaned.reduce((s, d) => s + (Number(d[valueKey]) || 0), 0)
   return (
-    <ResponsiveContainer width="100%" height={280}>
-      <PieChart>
-        <Pie
-          data={cleaned}
-          dataKey={valueKey}
-          nameKey={nameKey}
-          innerRadius="58%"
-          outerRadius="82%"
-          paddingAngle={2}
-          strokeWidth={0}
-          cursor={onSliceClick ? 'pointer' : undefined}
-          onClick={(_, index) => {
-            const name = String(cleaned[index]?.[nameKey] ?? '')
-            if (name && onSliceClick) onSliceClick(name)
-          }}
-        >
-          {cleaned.map((_, i) => (
-            <Cell key={i} fill={theme.colors[i % theme.colors.length]} />
-          ))}
-        </Pie>
-        <Tooltip content={<Tip />} />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
-      </PieChart>
-    </ResponsiveContainer>
+    <div className="relative">
+      <ResponsiveContainer width="100%" height={280}>
+        <PieChart>
+          <Pie
+            data={cleaned}
+            dataKey={valueKey}
+            nameKey={nameKey}
+            innerRadius="58%"
+            outerRadius="82%"
+            paddingAngle={2}
+            strokeWidth={0}
+            cursor={onSliceClick ? 'pointer' : undefined}
+            onClick={(_, index) => {
+              const name = String(cleaned[index]?.[nameKey] ?? '')
+              if (name && onSliceClick) onSliceClick(name)
+            }}
+          >
+            {cleaned.map((_, i) => (
+              <Cell key={i} fill={theme.colors[i % theme.colors.length]} />
+            ))}
+          </Pie>
+          <Tooltip content={<Tip />} />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="pointer-events-none absolute inset-x-0 top-[38%] text-center">
+        <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Total</p>
+        <p className="text-sm font-semibold tabular-nums text-[var(--text)]">
+          {centerLabel || formatCompactINR(total)}
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -320,21 +376,36 @@ export function HorizontalBars({
   valueKey = 'value',
   color,
   onBarClick,
+  showLabels = false,
+  toneByRank = false,
 }: {
   data: Array<Record<string, string | number>>
   nameKey?: string
   valueKey?: string
   color?: string
   onBarClick?: (name: string) => void
+  showLabels?: boolean
+  /** Stronger fill for larger bars (report ranking charts). */
+  toneByRank?: boolean
 }) {
   const theme = useChartTheme()
   if (!data.length) return <EmptyState message="No ranking data yet" />
+  const peak = Math.max(...data.map((d) => Number(d[valueKey]) || 0), 1)
+  const base = (() => {
+    if (!color) return theme.debit
+    if (color.startsWith('var(')) {
+      if (color.includes('credit')) return theme.credit
+      if (color.includes('accent')) return theme.accent
+      return theme.debit
+    }
+    return color
+  })()
   return (
-    <ResponsiveContainer width="100%" height={Math.max(240, data.length * 32)}>
+    <ResponsiveContainer width="100%" height={Math.max(220, data.length * 38)}>
       <BarChart
         data={data}
         layout="vertical"
-        margin={{ left: 8, right: 12 }}
+        margin={{ left: 4, right: showLabels ? 52 : 16, top: 4, bottom: 4 }}
         style={{ cursor: onBarClick ? 'pointer' : undefined }}
         onClick={(state) => {
           const payload = state as {
@@ -355,29 +426,153 @@ export function HorizontalBars({
         <YAxis
           type="category"
           dataKey={nameKey}
-          width={110}
+          width={118}
           tick={{ fill: theme.text, fontSize: 11 }}
           axisLine={false}
           tickLine={false}
         />
         <Tooltip content={<Tip />} />
-        <Bar dataKey={valueKey} name="Amount" fill={color || theme.debit} radius={[0, 4, 4, 0]} />
+        <Bar dataKey={valueKey} name="Amount" radius={[0, 6, 6, 0]} barSize={16}>
+          {data.map((d, i) => {
+            const v = Number(d[valueKey]) || 0
+            const fill = toneByRank ? mixHex(base, 0.55 * (1 - v / peak), '#ffffff') : base
+            return <Cell key={i} fill={fill} />
+          })}
+          {showLabels ? (
+            <LabelList
+              dataKey={valueKey}
+              position="right"
+              formatter={(v) => formatCompactINR(Number(v) || 0)}
+              style={{ fill: theme.text, fontSize: 10, fontWeight: 600 }}
+            />
+          ) : null}
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )
 }
 
-/** Side-by-side template vs actual bars (budget framework). */
+/** Side-by-side prior vs this-month (report + budget). */
 export function GroupedComparisonBars({
   data,
+  leftLabel = 'Prior',
+  rightLabel = 'This month',
+  orientation = 'horizontal',
 }: {
   data: Array<{ name: string; template: number; actual: number }>
+  leftLabel?: string
+  rightLabel?: string
+  orientation?: 'horizontal' | 'vertical'
 }) {
   const theme = useChartTheme()
-  if (!data.length) return <EmptyState message="No budget comparison yet" />
+  if (!data.length) return <EmptyState message="No comparison yet" />
+  const vertical = orientation === 'vertical'
   return (
-    <ResponsiveContainer width="100%" height={Math.max(260, data.length * 48)}>
-      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 12 }}>
+    <ResponsiveContainer
+      width="100%"
+      height={vertical ? 280 : Math.max(260, data.length * 52)}
+    >
+      <BarChart
+        data={data}
+        layout={vertical ? 'horizontal' : 'vertical'}
+        margin={{ left: 8, right: 12, top: 8, bottom: vertical ? 8 : 4 }}
+        barGap={4}
+        barCategoryGap="22%"
+      >
+        <CartesianGrid
+          stroke={theme.border}
+          strokeDasharray="3 3"
+          horizontal={!vertical}
+          vertical={vertical}
+        />
+        {vertical ? (
+          <>
+            <XAxis
+              dataKey="name"
+              tick={{ fill: theme.text, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              tick={{ fill: theme.text, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(v) => formatCompactINR(Number(v))}
+            />
+          </>
+        ) : (
+          <>
+            <XAxis
+              type="number"
+              tick={{ fill: theme.text, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={(v) => formatCompactINR(Number(v))}
+            />
+            <YAxis
+              type="category"
+              dataKey="name"
+              width={110}
+              tick={{ fill: theme.text, fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+          </>
+        )}
+        <Tooltip content={<Tip />} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Bar
+          dataKey="template"
+          name={leftLabel}
+          fill={theme.accent}
+          radius={vertical ? [6, 6, 0, 0] : [0, 4, 4, 0]}
+          barSize={vertical ? 22 : 12}
+        >
+          {vertical ? (
+            <LabelList
+              dataKey="template"
+              position="top"
+              formatter={(v) => formatCompactINR(Number(v) || 0)}
+              style={{ fill: theme.text, fontSize: 9 }}
+            />
+          ) : null}
+        </Bar>
+        <Bar
+          dataKey="actual"
+          name={rightLabel}
+          fill={theme.debit}
+          radius={vertical ? [6, 6, 0, 0] : [0, 4, 4, 0]}
+          barSize={vertical ? 22 : 12}
+        >
+          {vertical ? (
+            <LabelList
+              dataKey="actual"
+              position="top"
+              formatter={(v) => formatCompactINR(Number(v) || 0)}
+              style={{ fill: theme.text, fontSize: 9 }}
+            />
+          ) : null}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** Diverging ±Δ bars for category / leakage moves. */
+export function DeltaBars({
+  data,
+}: {
+  data: Array<{ name: string; delta: number; prior?: number; current?: number }>
+}) {
+  const theme = useChartTheme()
+  if (!data.length) return <EmptyState message="No moves to chart" />
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(240, data.length * 40)}>
+      <BarChart
+        data={data}
+        layout="vertical"
+        margin={{ left: 4, right: 56, top: 4, bottom: 4 }}
+      >
         <CartesianGrid stroke={theme.border} strokeDasharray="3 3" horizontal={false} />
         <XAxis
           type="number"
@@ -394,10 +589,22 @@ export function GroupedComparisonBars({
           axisLine={false}
           tickLine={false}
         />
-        <Tooltip content={<Tip />} />
-        <Legend wrapperStyle={{ fontSize: 11 }} />
-        <Bar dataKey="template" name="Template" fill={theme.accent} radius={[0, 4, 4, 0]} barSize={12} />
-        <Bar dataKey="actual" name="Actual" fill={theme.debit} radius={[0, 4, 4, 0]} barSize={12} />
+        <ReferenceLine x={0} stroke={theme.text} strokeOpacity={0.4} />
+        <Tooltip content={tipDelta} />
+        <Bar dataKey="delta" name="Change" radius={[4, 4, 4, 4]} barSize={14}>
+          {data.map((d, i) => (
+            <Cell key={i} fill={d.delta >= 0 ? theme.debit : theme.credit} />
+          ))}
+          <LabelList
+            dataKey="delta"
+            position="right"
+            formatter={(v) => {
+              const n = Number(v) || 0
+              return `${n >= 0 ? '+' : ''}${formatCompactINR(n)}`
+            }}
+            style={{ fill: theme.text, fontSize: 10, fontWeight: 600 }}
+          />
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )

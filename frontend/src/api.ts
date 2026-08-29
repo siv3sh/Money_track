@@ -1,6 +1,50 @@
 import type { AnalyticsPayload, CardType, Transaction, TxnType } from './types'
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || 'http://localhost:8000'
+// Dev default: same-origin /api (Vite proxies to uvicorn). Override with VITE_API_URL if needed.
+const API_BASE =
+  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ||
+  (import.meta.env.DEV ? '/api' : 'http://127.0.0.1:8000')
+
+const TOKEN_KEY = 'money-track-token'
+
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setStoredToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function logoutLocal(): void {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
+export type AuthUser = {
+  id: string
+  email: string
+  setup_completed?: boolean
+  setup_platform?: 'ios' | 'android' | string | null
+  created_at?: string | null
+}
+
+export type LinkedAccount = {
+  id: string
+  kind: string
+  identifier: string
+  label: string
+  linked_at?: string | null
+  last_seen_at?: string | null
+  active?: boolean
+  platform?: string | null
+  webhook_token?: string
+  webhook_url?: string | null
+  email_webhook_url?: string | null
+  webhook_url_hint?: string
+}
 
 function apiErrorMessage(detail: unknown, fallback: string): string {
   if (typeof detail === 'string' && detail.trim()) return detail.trim()
@@ -36,11 +80,13 @@ function apiErrorMessage(detail: unknown, fallback: string): string {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
+  const token = getStoredToken()
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...init,
       headers: {
         Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(init?.headers || {}),
       },
     })
@@ -48,6 +94,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(
       `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
     )
+  }
+  if (res.status === 401 && !path.startsWith('/auth/login')) {
+    logoutLocal()
   }
   if (!res.ok) {
     const fallback = `Request failed (${res.status})`
@@ -61,6 +110,75 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(detail || fallback)
   }
   return res.json() as Promise<T>
+}
+
+export function loginRequest(
+  email: string,
+  password: string,
+): Promise<{ access_token: string; token_type: string; user: AuthUser }> {
+  return request('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+}
+
+export function fetchMe(): Promise<AuthUser> {
+  return request('/auth/me')
+}
+
+export function saveSetup(payload: {
+  platform: 'ios' | 'android'
+  setup_completed?: boolean
+}): Promise<AuthUser> {
+  return request('/auth/setup', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setup_completed: true, ...payload }),
+  })
+}
+
+export function fetchLinkedAccounts(reveal = false): Promise<{
+  items: LinkedAccount[]
+  webhook_base: string
+}> {
+  return request(`/linked-accounts${reveal ? '?reveal=true' : ''}`)
+}
+
+export function createLinkedAccount(payload: {
+  label: string
+  identifier: string
+  kind?: 'phone' | 'bank_source' | 'email'
+  platform?: 'ios' | 'android' | 'email' | null
+}): Promise<LinkedAccount> {
+  return request('/linked-accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateLinkedAccount(
+  id: string,
+  payload: {
+    label?: string
+    identifier?: string
+    platform?: 'ios' | 'android'
+  },
+): Promise<LinkedAccount> {
+  return request(`/linked-accounts/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function rotateLinkedAccountToken(id: string): Promise<LinkedAccount> {
+  return request(`/linked-accounts/${id}/rotate-token`, { method: 'POST' })
+}
+
+export function deleteLinkedAccount(id: string): Promise<{ ok: boolean }> {
+  return request(`/linked-accounts/${id}`, { method: 'DELETE' })
 }
 
 export interface AnalyticsQuery {
@@ -547,8 +665,28 @@ export function createLearnedFact(payload: {
   value: string | number
   plain_language?: string
   meta?: Record<string, unknown>
+  source?: string
 }): Promise<{ fact: LearnedFact }> {
   return request('/learn/facts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function pasteBankEmail(payload: {
+  from?: string
+  subject?: string
+  text?: string
+  html?: string
+}): Promise<{
+  stored: boolean
+  reason?: string
+  id?: string
+  transaction?: Record<string, unknown>
+  hint?: string
+}> {
+  return request('/email-ingest/paste', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -776,6 +914,34 @@ export interface MonthlyReport {
     tax_flags: Array<{ type: string; message: string }>
     sip?: unknown
     drift?: unknown
+    month_end_review?: {
+      leakages?: Array<{
+        kind?: string
+        name?: string
+        amount?: number | null
+        change_inr?: number | null
+        change_pct?: number | null
+        message: string
+      }>
+      big_spends?: Array<{
+        name: string
+        amount: number
+        count?: number
+        share?: number | null
+        message: string
+      }>
+      checklist?: Array<{
+        id: string
+        status: 'action' | 'watch' | 'ok' | string
+        title: string
+        detail?: string
+      }>
+      recommendations?: Array<{
+        text: string
+        inr_impact?: number | null
+        source?: string
+      }>
+    }
   }
   narrative: {
     summary: string
@@ -797,6 +963,32 @@ export function fetchMonthlyReports(): Promise<{
 
 export function fetchMonthlyReport(month: string): Promise<MonthlyReport> {
   return request(`/reports/monthly/${month}`)
+}
+
+export function monthlyReportPdfUrl(month: string): string {
+  return `${API_BASE}/reports/monthly/${encodeURIComponent(month)}/pdf`
+}
+
+export async function downloadMonthlyReportPdf(month: string): Promise<void> {
+  const token = getStoredToken()
+  const res = await fetch(monthlyReportPdfUrl(month), {
+    headers: {
+      Accept: 'application/pdf',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  })
+  if (!res.ok) {
+    throw new Error(`PDF download failed (${res.status})`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `money-track-${month}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export function saveMonthlyReportSettings(payload: {

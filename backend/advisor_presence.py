@@ -27,7 +27,7 @@ from advisor_persona import (
     system_briefing,
 )
 from ai_insights import _compact
-from learned_facts import advisor_profile_from_facts, facts_for_ai_context, trained_profile_fields, upsert_fact
+from learned_facts import advisor_profile_from_facts, facts_for_ai_context, salary_needles_from_facts, trained_profile_fields, upsert_fact
 from llm import LLMError, get_chat_provider
 from merchant_label import is_salary_source
 from planning import temptation_label
@@ -907,13 +907,19 @@ def detect_money_mood(
 
     # 2) Salary landed this month — be happy
     recent_salary = None
+    salary_needles = salary_needles_from_facts(learned_facts)
     if transactions is not None:
         since = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         for doc in transactions.find(
             {"type": "credit", "received_at": {"$gte": since}},
             {"amount": 1, "merchant": 1, "raw_text": 1, "received_at": 1, "category": 1},
         ).sort("received_at", -1).limit(40):
-            if is_salary_source(doc.get("merchant"), doc.get("raw_text"), doc.get("category")):
+            if is_salary_source(
+                doc.get("merchant"),
+                doc.get("raw_text"),
+                doc.get("category"),
+                extra_needles=salary_needles,
+            ):
                 recent_salary = doc
                 break
             if str(doc.get("category") or "") == "Income" and float(doc.get("amount") or 0) >= 20_000:
@@ -1086,7 +1092,12 @@ def build_lifecycle_nudges(
             amt = float(doc.get("amount") or 0)
             if amt < CREDIT_ASK_INR:
                 continue
-            if is_salary_source(doc.get("merchant"), doc.get("raw_text"), doc.get("category")):
+            if is_salary_source(
+                doc.get("merchant"),
+                doc.get("raw_text"),
+                doc.get("category"),
+                extra_needles=salary_needles_from_facts(learned_facts),
+            ):
                 continue
             cat = str(doc.get("category") or "")
             if cat in {"Transfers", "Investments"}:
@@ -1187,7 +1198,12 @@ def on_new_transaction(
     message = None
     kind = "note"
 
-    if typ == "credit" and is_salary_source(txn.get("merchant"), txn.get("raw_text"), cat):
+    if typ == "credit" and is_salary_source(
+        txn.get("merchant"),
+        txn.get("raw_text"),
+        cat,
+        extra_needles=salary_needles_from_facts(learned_facts),
+    ):
         kind = "salary_day"
         drag = temptation_label(profile=profile, transactions=transactions)
         message = (

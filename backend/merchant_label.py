@@ -61,7 +61,7 @@ _BANK_NOISE = re.compile(
 
 # (substring/regex needle in lowercase blob, display name) — first match wins
 _BRAND_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"idea\s*elan"), "IDEA ELAN India (Salary)"),
+    (re.compile(r"idea\s*elan"), "Idea Elan"),
     (re.compile(r"geetha"), "Geetha (Family)"),
     (re.compile(r"greeshma"), "Greeshma (Family)"),
     (re.compile(r"pvbalan|\bbalan\d"), "Balan (Family)"),
@@ -89,25 +89,21 @@ _BRAND_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"nesto"), "Nesto Hypermarket"),
     (re.compile(r"paramount"), "Paramount Restaurant"),
     (re.compile(r"makemytrip|mmt"), "MakeMyTrip"),
-    (re.compile(r"idea\s*elan"), "Idea Elan"),
     (re.compile(r"vodafone|\bvi\b|idea\s*cellular"), "Vi (Vodafone Idea)"),
     (re.compile(r"\bfedone\b|\bfederal\s*bank\b"), "Federal Bank"),
     (re.compile(r"bigshopper"), "Bigshopper"),
 ]
 
-# Employers whose credits are salary, plus generic payroll wording
+# Generic payroll wording only — employers come from each user's profile keywords
 _SALARY_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"(?i)idea\s*elan"),
     re.compile(r"(?i)\bsalary\b"),
     re.compile(r"(?i)\bpayroll\b"),
+    re.compile(r"(?i)\bsalaries\b"),
 ]
 
-# Family UPI / people — transfers both ways, not income or lifestyle
-_FAMILY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"(?i)geetha"), "Geetha"),
-    (re.compile(r"(?i)greeshma"), "Greeshma"),
-    (re.compile(r"(?i)pvbalan|\bbalan\d"), "Balan"),
-]
+# Family UPI / people — transfers both ways, not income or lifestyle.
+# Personal names live in each user's Profile (people_relation), not hardcoded here.
+_FAMILY_PATTERNS: list[tuple[re.Pattern[str], str]] = []
 
 _LOCAL_BRANDS: list[tuple[str, str]] = [
     ("appleservices", "Apple Services"),
@@ -158,27 +154,57 @@ def _brand_from_local(local: str) -> Optional[str]:
     return None
 
 
-def is_salary_source(*texts: str | None) -> bool:
-    """True when a credit narration belongs to a known employer or payroll wording."""
+def is_salary_source(
+    *texts: str | None,
+    extra_needles: list[str] | None = None,
+) -> bool:
+    """True when credit text looks like payroll or matches the user's salary keywords."""
     blob = " ".join(t for t in texts if t)
     if not blob:
         return False
-    return any(pattern.search(blob) for pattern in _SALARY_PATTERNS)
+    if any(pattern.search(blob) for pattern in _SALARY_PATTERNS):
+        return True
+    lower = blob.lower()
+    for raw in extra_needles or []:
+        needle = str(raw or "").strip().lower()
+        if len(needle) < 3:
+            continue
+        # Allow multi-word employer names with flexible whitespace
+        compact_blob = re.sub(r"\s+", " ", lower)
+        compact_needle = re.sub(r"\s+", " ", needle)
+        if compact_needle in compact_blob:
+            return True
+        if re.search(re.escape(needle).replace(r"\ ", r"\s+"), lower):
+            return True
+    return False
 
 
-def family_person(*texts: str | None) -> Optional[str]:
+def family_person(
+    *texts: str | None,
+    extra_people: list[tuple[str, str]] | None = None,
+) -> Optional[str]:
     """Return family display name if narration matches a known relative."""
     blob = " ".join(t for t in texts if t)
     if not blob:
         return None
+    lower = blob.lower()
     for pattern, name in _FAMILY_PATTERNS:
-        if pattern.search(blob):
+        if pattern.search(lower):
+            return name
+    for needle, name in extra_people or []:
+        n = str(needle or "").strip().lower()
+        if len(n) < 3:
+            continue
+        if n in lower or re.search(re.escape(n).replace(r"\ ", r"\s+"), lower):
             return name
     return None
 
 
-def is_family_transfer(*texts: str | None) -> bool:
-    return family_person(*texts) is not None
+def is_family_transfer(
+    *texts: str | None,
+    extra_people: list[tuple[str, str]] | None = None,
+) -> bool:
+    return family_person(*texts, extra_people=extra_people) is not None
 
 
 _WEAK_LABELS = frozenset({"Bank transfer", "Unknown", "UPI transfer", "UPI merchant"})

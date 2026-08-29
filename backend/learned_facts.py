@@ -136,6 +136,8 @@ def _plain_language(doc: dict[str, Any]) -> str:
             return f"Expected take-home ~₹{amt:,.0f}/month"
         if k == "employer":
             return f"Employer: {value}"
+        if k in {"salary_keywords", "salary_sms_words"}:
+            return f"Salary SMS words: {value}"
         if k == "designation":
             return f"Role: {value}"
         if k == "gross_monthly":
@@ -211,6 +213,79 @@ def income_profile_from_facts(facts: Collection) -> dict[str, Any]:
     return out
 
 
+def salary_needles_from_profile(profile: dict[str, Any] | None) -> list[str]:
+    """Words/phrases from the user's profile that mark a credit as salary."""
+    if not profile:
+        return []
+    needles: list[str] = []
+    employer = str(profile.get("employer") or "").strip()
+    if employer:
+        needles.append(employer)
+    raw_kw = profile.get("salary_keywords")
+    if raw_kw is None:
+        raw_kw = profile.get("salary_sms_words")
+    if isinstance(raw_kw, list):
+        needles.extend(str(x).strip() for x in raw_kw if str(x).strip())
+    elif raw_kw is not None and str(raw_kw).strip():
+        needles.extend(
+            p.strip()
+            for p in re.split(r"[,;\n]+", str(raw_kw))
+            if p.strip()
+        )
+    # De-dupe case-insensitively while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in needles:
+        key = n.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out
+
+
+def salary_needles_from_facts(facts: Collection | None) -> list[str]:
+    if facts is None:
+        return []
+    return salary_needles_from_profile(income_profile_from_facts(facts))
+
+
+def people_patterns_from_facts(facts: Collection | None) -> list[tuple[str, str]]:
+    """(match_needle, display_name) from people_relation facts — family/friends transfers."""
+    if facts is None:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for d in facts.find({"fact_type": "people_relation"}):
+        key = str(d.get("key") or "").strip()
+        val = str(d.get("value") or "").strip()
+        if not key:
+            continue
+        needle = key.lower()
+        if needle in seen or len(needle) < 3:
+            continue
+        seen.add(needle)
+        # Prefer relation label in display when present
+        label = val if val else key.title()
+        if val and val.lower() not in {key.lower(), needle}:
+            label = f"{key.title()} ({val})"
+        else:
+            label = key.title()
+        out.append((needle, label))
+        # Also match on relation word if it's a unique name-like value
+        meta = d.get("meta") or {}
+        aliases = meta.get("aliases") or meta.get("match_words")
+        if isinstance(aliases, str):
+            aliases = [a.strip() for a in re.split(r"[,;\n]+", aliases) if a.strip()]
+        if isinstance(aliases, list):
+            for a in aliases:
+                an = str(a).strip().lower()
+                if len(an) >= 3 and an not in seen:
+                    seen.add(an)
+                    out.append((an, label))
+    return out
+
+
 ADVISOR_TRAINING_KEYS = (
     "preferred_name",
     "soft_spot",
@@ -226,13 +301,13 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
     {
         "key": "preferred_name",
         "prompt": "What should I call you when I’m coaching you?",
-        "placeholder": "e.g. Sivesh",
+        "placeholder": "e.g. your name",
         "hint": "I’ll use this when I’m proud of you — and when I’m calling you out.",
     },
     {
         "key": "soft_spot",
         "prompt": "Where do you usually slip? Be honest.",
-        "placeholder": "e.g. random shopping / Oxygen / food out",
+        "placeholder": "e.g. shopping, eating out, subscriptions",
         "hint": "I’ll watch this like a hawk. No judgment — just accountability.",
     },
     {
@@ -244,7 +319,7 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
     {
         "key": "why_money",
         "prompt": "Why does money matter to you right now — beyond numbers?",
-        "placeholder": "e.g. freedom, family security, proving I can build wealth at 5 LPA",
+        "placeholder": "e.g. freedom, family security, building wealth",
         "hint": "I’ll remind you of this when temptation hits.",
     },
     {
@@ -257,7 +332,7 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
     {
         "key": "pride",
         "prompt": "What money habit are you already proud of?",
-        "placeholder": "e.g. SIPs on INDmoney / sending family support / tracking spends",
+        "placeholder": "e.g. SIPs every month / tracking spends / helping family",
         "hint": "I’ll celebrate this so discipline doesn’t feel like punishment.",
     },
     {
@@ -269,7 +344,7 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
     {
         "key": "motivation",
         "prompt": "What goal makes you feel something when you picture it?",
-        "placeholder": "e.g. PS5 debt-free / emergency fund / parents’ peace of mind",
+        "placeholder": "e.g. emergency fund / trip / parents’ peace of mind",
         "hint": "I’ll tie every cut and SIP back to this feeling.",
     },
 ]

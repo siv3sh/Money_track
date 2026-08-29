@@ -1,12 +1,15 @@
-"""HTML monthly report email + Resend delivery."""
+"""HTML monthly report email + Resend delivery (optional PDF attachment)."""
 
 from __future__ import annotations
 
+import base64
 import os
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+
+from report_pdf import render_report_pdf
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 RESEND_FROM = os.getenv("RESEND_FROM_EMAIL", "Money Track <onboarding@resend.dev>").strip()
@@ -157,20 +160,6 @@ def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any
     delta_color = debit if (lifestyle_delta or 0) > 0 else credit
     savings = headline.get("savings_rate_pct")
 
-    going_well = "".join(
-        f'<li style="margin:0 0 8px;color:{text};">{_friendly(item)}</li>'
-        for item in (narrative.get("going_well") or [])
-    ) or f'<li style="color:{muted};">Not enough history for highlights yet.</li>'
-
-    suggestions = ""
-    for s in narrative.get("suggestions") or []:
-        text_s = _friendly(s.get("text") if isinstance(s, dict) else str(s))
-        impact = s.get("inr_impact") if isinstance(s, dict) else None
-        extra = f' <span style="color:{credit};font-weight:600;">(~{_fmt_inr(impact)})</span>' if impact else ""
-        suggestions += f'<li style="margin:0 0 10px;color:{text};">{text_s}{extra}</li>'
-    if not suggestions:
-        suggestions = f'<li style="color:{muted};">No specific suggestions this month.</li>'
-
     tax_block = ""
     tax_notes = narrative.get("tax_notes") or []
     tax_flags = stats.get("tax_flags") or []
@@ -277,6 +266,91 @@ def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any
         <tr><td style="padding:12px 0 8px;">{merchant_chart}</td></tr>
     """
 
+    review = stats.get("month_end_review") or {}
+
+    leak_chart_rows = [
+        {
+            "name": r.get("name") or "Leak",
+            "amount": float(r.get("change_inr") or r.get("amount") or 0),
+        }
+        for r in (review.get("leakages") or [])
+        if float(r.get("change_inr") or r.get("amount") or 0) > 0
+    ]
+    big_chart_rows = [
+        {"name": r.get("name"), "amount": r.get("amount")}
+        for r in (review.get("big_spends") or [])
+        if float(r.get("amount") or 0) > 0
+    ]
+    if not big_chart_rows:
+        big_chart_rows = list(top_merchants)
+
+    impact_rows = []
+    for s in list(narrative.get("suggestions") or []) or list(review.get("recommendations") or []):
+        if not isinstance(s, dict):
+            continue
+        try:
+            impact = float(s.get("inr_impact") or 0)
+        except (TypeError, ValueError):
+            impact = 0.0
+        if impact <= 0:
+            continue
+        impact_rows.append(
+            {
+                "name": str(s.get("text") or "Action")[:40],
+                "amount": impact,
+            }
+        )
+
+    leak_chart = _spend_chart_rows(
+        leak_chart_rows, name_key="name", amount_key="amount", muted=muted, text=text, border=border
+    )
+    big_chart = _spend_chart_rows(
+        big_chart_rows, name_key="name", amount_key="amount", muted=muted, text=text, border=border
+    )
+    impact_chart = _spend_chart_rows(
+        impact_rows, name_key="name", amount_key="amount", muted=muted, text=text, border=border
+    )
+
+    check_bits = []
+    for row in review.get("checklist") or []:
+        status = str(row.get("status") or "ok")
+        color = debit if status == "action" else (credit if status == "ok" else "#1a5f8a")
+        title = _friendly(row.get("title") or "")
+        check_bits.append(
+            f'<tr><td style="padding:6px 0;border-bottom:1px solid {border};">'
+            f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
+            f'background:{color};margin-right:8px;"></span>'
+            f'<span style="font-size:14px;color:{text};">{title}</span></td></tr>'
+        )
+    check_table = (
+        '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+        + ("".join(check_bits) or f'<tr><td style="color:{muted};">Pulse unavailable — regenerate in app.</td></tr>')
+        + "</table>"
+    )
+
+    review_block = f"""
+        <tr><td style="padding:24px 0 8px;">
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Leakages</h2>
+          <p style="margin:6px 0 0;font-size:13px;color:{muted};">Rs up vs prior</p>
+        </td></tr>
+        <tr><td style="padding:12px 0 8px;">{leak_chart}</td></tr>
+
+        <tr><td style="padding:16px 0 8px;">
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Big spends</h2>
+        </td></tr>
+        <tr><td style="padding:12px 0 8px;">{big_chart}</td></tr>
+
+        <tr><td style="padding:16px 0 8px;">
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Month-end pulse</h2>
+        </td></tr>
+        <tr><td style="padding:8px 0;">{check_table}</td></tr>
+
+        <tr><td style="padding:16px 0 8px;">
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Rs you can free</h2>
+        </td></tr>
+        <tr><td style="padding:12px 0 8px;">{impact_chart}</td></tr>
+    """
+
     report_url = f"{APP_BASE_URL}/monthly-reports/{month}" if month else f"{APP_BASE_URL}/monthly-reports"
 
     return f"""<!DOCTYPE html>
@@ -301,23 +375,18 @@ def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any
         </td></tr>
 
         <tr><td style="padding:0 0 8px;">
-          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Summary</h2>
+          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">At a glance</h2>
         </td></tr>
-        <tr><td style="padding:0 0 20px;font-size:16px;line-height:1.6;">{_friendly(narrative.get("summary") or "Report generated.")}</td></tr>
+        <tr><td style="padding:0 0 20px;font-size:15px;line-height:1.55;color:{muted};">
+          Charts below are the report — open the app for the interactive version.
+          {_friendly((narrative.get("summary") or "")[:220])}
+        </td></tr>
 
         <tr><td style="padding:8px 0 20px;">{kpi_table}</td></tr>
 
         {charts_block}
 
-        <tr><td style="padding:16px 0 8px;">
-          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">What's going well</h2>
-        </td></tr>
-        <tr><td style="padding:0 0 12px;"><ul style="margin:0;padding-left:18px;font-size:15px;line-height:1.5;">{going_well}</ul></td></tr>
-
-        <tr><td style="padding:16px 0 8px;">
-          <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Suggestions</h2>
-        </td></tr>
-        <tr><td style="padding:0 0 12px;"><ul style="margin:0;padding-left:18px;font-size:15px;line-height:1.5;">{suggestions}</ul></td></tr>
+        {review_block}
 
         {market_block}
         {tax_block}
@@ -325,7 +394,7 @@ def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any
         <tr><td style="padding:24px 0 8px;">
           <h2 style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:{muted};">Year to date</h2>
         </td></tr>
-        <tr><td style="padding:0 0 24px;font-size:15px;line-height:1.55;">{_friendly(narrative.get("ytd_snapshot") or "YTD data included in the app report.")}</td></tr>
+        <tr><td style="padding:0 0 24px;font-size:15px;line-height:1.55;">{_friendly(narrative.get("ytd_snapshot") or "See charts in the app report.")}</td></tr>
 
         <tr><td style="padding:20px 0 0;border-top:1px solid {border};">
           <p style="margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;">
@@ -360,11 +429,19 @@ def send_report_email(
     subject = (
         f"Your Money Advisor — {label}" + (f" · {who}" if who else "")
     )
-    payload = {
+    month_key = report.get("month") or "report"
+    pdf_bytes = render_report_pdf(report, advisor_profile=advisor_profile)
+    payload: dict[str, Any] = {
         "from": from_email or RESEND_FROM,
         "to": [to_email.strip()],
         "subject": subject,
         "html": html,
+        "attachments": [
+            {
+                "filename": f"money-track-{month_key}.pdf",
+                "content": base64.b64encode(pdf_bytes).decode("ascii"),
+            }
+        ],
     }
     with httpx.Client(timeout=30.0) as client:
         resp = client.post(
@@ -378,7 +455,13 @@ def send_report_email(
         if resp.status_code >= 400:
             raise RuntimeError(f"Resend error {resp.status_code}: {resp.text[:300]}")
         data = resp.json()
-    return {"ok": True, "id": data.get("id"), "to": to_email, "sent_at": datetime.now(timezone.utc).isoformat()}
+    return {
+        "ok": True,
+        "id": data.get("id"),
+        "to": to_email,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "pdf_attached": True,
+    }
 
 
 def email_configured() -> bool:

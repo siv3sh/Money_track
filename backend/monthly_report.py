@@ -207,6 +207,325 @@ def _suggestion_inputs(current: dict[str, Any], deltas: list[dict[str, Any]]) ->
     return seeds[:5]
 
 
+LEAKAGE_MIN_INR = 1500.0
+LEAKAGE_MIN_PCT = 25.0
+BIG_SPEND_MIN_INR = 3000.0
+
+
+def _build_leakages(
+    deltas: list[dict[str, Any]],
+    creep_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Categories/subscriptions that leaked vs prior month — deterministic."""
+    out: list[dict[str, Any]] = []
+    for d in deltas:
+        change = float(d.get("change_inr") or 0)
+        pct = float(d.get("change_pct") or 0)
+        prev = float(d.get("previous") or 0)
+        if change < LEAKAGE_MIN_INR:
+            continue
+        if prev > 0 and pct < LEAKAGE_MIN_PCT:
+            continue
+        name = str(d.get("name") or "Category")
+        out.append(
+            {
+                "kind": "category_spike",
+                "name": name,
+                "amount": round(float(d.get("current") or 0), 2),
+                "change_inr": round(change, 2),
+                "change_pct": round(pct, 1),
+                "message": (
+                    f"{name} up ₹{change:,.0f}"
+                    + (f" ({pct:+.0f}% vs prior)" if prev > 0 else " (new vs prior)")
+                ),
+            }
+        )
+    for item in creep_items:
+        st = str(item.get("status") or "")
+        if st not in {"price_up", "missing"}:
+            continue
+        name = str(item.get("name") or item.get("merchant") or "Subscription")
+        try:
+            amt = float(
+                item.get("amount")
+                or item.get("last_amount")
+                or item.get("latest_amount")
+                or item.get("typical_amount")
+                or 0
+            )
+        except (TypeError, ValueError):
+            amt = 0.0
+        detail = "price increased" if st == "price_up" else "charge missing / irregular"
+        msg = str(item.get("message") or "").strip()
+        out.append(
+            {
+                "kind": "subscription",
+                "name": name,
+                "amount": round(amt, 2) if amt else None,
+                "change_inr": None,
+                "change_pct": None,
+                "message": msg
+                or (
+                    f"Subscription '{name}' — {detail}"
+                    + (f" (₹{amt:,.0f})" if amt else "")
+                ),
+            }
+        )
+    return out[:10]
+
+
+def _build_big_spends(merchants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Largest lifestyle merchants worth a month-end look."""
+    out: list[dict[str, Any]] = []
+    for m in merchants:
+        try:
+            amt = float(m.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if amt < BIG_SPEND_MIN_INR:
+            continue
+        name = str(m.get("name") or "Merchant")
+        count = int(m.get("count") or 0)
+        share = m.get("share")
+        out.append(
+            {
+                "name": name,
+                "amount": round(amt, 2),
+                "count": count,
+                "share": share,
+                "message": (
+                    f"{name} — ₹{amt:,.0f}"
+                    + (f" across {count} pays" if count > 1 else "")
+                    + (
+                        f" ({share:.0f}% of lifestyle merchants)"
+                        if share is not None
+                        else ""
+                    )
+                ),
+            }
+        )
+    if not out and merchants:
+        for m in merchants[:5]:
+            try:
+                amt = float(m.get("amount") or 0)
+            except (TypeError, ValueError):
+                continue
+            if amt <= 0:
+                continue
+            out.append(
+                {
+                    "name": str(m.get("name") or "Merchant"),
+                    "amount": round(amt, 2),
+                    "count": int(m.get("count") or 0),
+                    "share": m.get("share"),
+                    "message": f"{m.get('name')} — ₹{amt:,.0f}",
+                }
+            )
+    return out[:8]
+
+
+def _build_month_end_checklist(
+    *,
+    current: dict[str, Any],
+    sip: dict[str, Any],
+    creep_items: list[dict[str, Any]],
+    liability_rows: list[dict[str, Any]],
+    goal_docs: list[dict[str, Any]] | None = None,
+    year: int,
+    month: int,
+) -> list[dict[str, Any]]:
+    """Fixed month-end 'what to look at' list — status: action | watch | ok."""
+    items: list[dict[str, Any]] = []
+
+    sip_problems = [
+        s
+        for s in (sip.get("sips") or [])
+        if str(s.get("status") or "") in {"missing", "stopped"}
+    ]
+    if sip_problems:
+        names = ", ".join(str(s.get("name") or "SIP") for s in sip_problems[:4])
+        items.append(
+            {
+                "id": "sips",
+                "status": "action",
+                "title": "SIPs need attention",
+                "detail": names,
+            }
+        )
+    else:
+        items.append(
+            {
+                "id": "sips",
+                "status": "ok",
+                "title": "SIPs look on track",
+                "detail": "No missing/stopped SIPs flagged this month",
+            }
+        )
+
+    cc_rows = [
+        r
+        for r in liability_rows
+        if str(r.get("type") or "") == "credit_card"
+        and float(r.get("outstanding") or 0) > 0
+    ]
+    if cc_rows:
+        total = sum(float(r.get("outstanding") or 0) for r in cc_rows)
+        due_bits = []
+        for r in cc_rows[:3]:
+            label = r.get("name") or (
+                f"{r.get('bank') or 'Card'} ••{r.get('last4') or ''}"
+            )
+            due = r.get("due_date")
+            due_bits.append(
+                f"{label} ₹{float(r.get('outstanding') or 0):,.0f}"
+                + (f" due {due}" if due else "")
+            )
+        items.append(
+            {
+                "id": "credit_cards",
+                "status": "action" if total >= 10000 else "watch",
+                "title": f"Credit card outstanding ₹{total:,.0f}",
+                "detail": "; ".join(due_bits)
+                if due_bits
+                else "Pay before due to avoid interest",
+            }
+        )
+    else:
+        items.append(
+            {
+                "id": "credit_cards",
+                "status": "ok",
+                "title": "No open credit-card balance flagged",
+                "detail": "Or cards not synced yet",
+            }
+        )
+
+    try:
+        lts = float(current.get("lifestyle_to_salary") or 0)
+    except (TypeError, ValueError):
+        lts = 0.0
+    if lts >= 85:
+        items.append(
+            {
+                "id": "lifestyle_ratio",
+                "status": "action",
+                "title": f"Lifestyle is {lts:.0f}% of salary credits",
+                "detail": "Little room left for buffer / goals — review discretionary",
+            }
+        )
+    elif lts >= 70:
+        items.append(
+            {
+                "id": "lifestyle_ratio",
+                "status": "watch",
+                "title": f"Lifestyle is {lts:.0f}% of salary credits",
+                "detail": "Tight but workable — keep an eye on soft-spot categories",
+            }
+        )
+    elif current.get("salary_total"):
+        items.append(
+            {
+                "id": "lifestyle_ratio",
+                "status": "ok",
+                "title": f"Lifestyle at {lts:.0f}% of salary credits",
+                "detail": "Healthy headroom vs income",
+            }
+        )
+
+    bad_subs = [
+        i for i in creep_items if str(i.get("status") or "") in {"price_up", "missing"}
+    ]
+    if bad_subs:
+        items.append(
+            {
+                "id": "subscriptions",
+                "status": "watch",
+                "title": f"{len(bad_subs)} subscription alert(s)",
+                "detail": ", ".join(
+                    str(i.get("name") or i.get("merchant") or "?") for i in bad_subs[:4]
+                ),
+            }
+        )
+    else:
+        items.append(
+            {
+                "id": "subscriptions",
+                "status": "ok",
+                "title": "No subscription creep alerts",
+                "detail": "Recurring charges look stable vs recent history",
+            }
+        )
+
+    ym = _ym(year, month)
+    py, pm = _prev_month(year, month)
+    prev = _ym(py, pm)
+    quiet_goals: list[str] = []
+    for g in goal_docs or []:
+        if (g.get("status") or "active") != "active":
+            continue
+        months = list(g.get("contribution_months") or [])
+        name = str(g.get("name") or "Goal")
+        if ym not in months and prev not in months and float(g.get("saved_amount") or 0) > 0:
+            quiet_goals.append(name)
+    if quiet_goals:
+        items.append(
+            {
+                "id": "goals",
+                "status": "watch",
+                "title": "Goal funding quiet",
+                "detail": ", ".join(quiet_goals[:4]),
+            }
+        )
+
+    return items
+
+
+def _build_month_end_review(
+    *,
+    deltas: list[dict[str, Any]],
+    merchants: list[dict[str, Any]],
+    current: dict[str, Any],
+    sip: dict[str, Any],
+    creep: dict[str, Any],
+    liability_rows: list[dict[str, Any]],
+    goal_docs: list[dict[str, Any]] | None,
+    year: int,
+    month: int,
+    suggestion_seeds: list[dict[str, Any]],
+) -> dict[str, Any]:
+    creep_items = list(creep.get("items") or [])
+    leakages = _build_leakages(deltas, creep_items)
+    big_spends = _build_big_spends(merchants)
+    checklist = _build_month_end_checklist(
+        current=current,
+        sip=sip,
+        creep_items=creep_items,
+        liability_rows=liability_rows,
+        goal_docs=goal_docs,
+        year=year,
+        month=month,
+    )
+    recommendations: list[dict[str, Any]] = []
+    for seed in suggestion_seeds[:5]:
+        text = seed.get("note") or (
+            f"Cut {seed.get('category')} — freeing "
+            f"~₹{float(seed.get('halving_would_free_inr') or 0):,.0f}"
+        )
+        recommendations.append(
+            {
+                "text": str(text),
+                "inr_impact": seed.get("halving_would_free_inr"),
+                "source": "seed",
+            }
+        )
+    return {
+        "leakages": leakages,
+        "big_spends": big_spends,
+        "checklist": checklist,
+        "recommendations": recommendations,
+    }
+
+
 def _tax_flags(ytd: dict[str, Any], investments: dict[str, Any]) -> list[dict[str, Any]]:
     """India tax-relevant flags only when thresholds are genuinely approached."""
     flags: list[dict[str, Any]] = []
@@ -265,6 +584,7 @@ def build_report_stats(
     settings: Collection | None = None,
     news_cache: Collection | None = None,
     learned_facts: Collection | None = None,
+    goals_col: Collection | None = None,
 ) -> dict[str, Any]:
     """Pre-compute all numbers for the monthly report (no LLM)."""
     start, end = _month_bounds(year, month)
@@ -363,7 +683,36 @@ def build_report_stats(
     smart = current_a.get("smart") or {}
     sip = smart.get("sip") or {}
     drift = smart.get("drift") or {}
+    creep = smart.get("subscription_creep") or {}
     holdings = (current_a.get("investments") or {}).get("holdings") or []
+    seeds = _suggestion_inputs(current, deltas)
+
+    liability_rows: list[dict[str, Any]] = []
+    if liabilities is not None:
+        try:
+            liability_rows = list(liabilities.find().sort("outstanding", -1).limit(20))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: liabilities for month-end review skipped: {exc}")
+
+    goal_docs: list[dict[str, Any]] = []
+    if goals_col is not None:
+        try:
+            goal_docs = list(goals_col.find({"status": "active"}).limit(20))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: goals for month-end review skipped: {exc}")
+
+    month_end_review = _build_month_end_review(
+        deltas=deltas,
+        merchants=current.get("top_merchants") or [],
+        current=current,
+        sip=sip,
+        creep=creep,
+        liability_rows=liability_rows,
+        goal_docs=goal_docs,
+        year=year,
+        month=month,
+        suggestion_seeds=seeds,
+    )
 
     news = fetch_relevant_news(holdings, cache=news_cache, limit=5)
     tax = _tax_flags(ytd, current_a.get("investments") or {})
@@ -382,7 +731,8 @@ def build_report_stats(
         "trailing_6m_avg": trail_avg,
         "ytd": ytd,
         "category_changes": deltas,
-        "suggestion_seeds": _suggestion_inputs(current, deltas),
+        "suggestion_seeds": seeds,
+        "month_end_review": month_end_review,
         "sip": {
             "flagged": sip.get("flagged"),
             "sips": [
@@ -399,6 +749,19 @@ def build_report_stats(
             "reference_source": drift.get("reference_source"),
             "threshold_pp": drift.get("threshold_pp"),
             "drifts": drift.get("drifts") or [],
+        },
+        "subscription_creep": {
+            "items": [
+                {
+                    "name": i.get("name") or i.get("merchant"),
+                    "merchant": i.get("merchant"),
+                    "status": i.get("status"),
+                    "amount": i.get("last_amount") or i.get("amount"),
+                    "last_amount": i.get("last_amount"),
+                    "message": i.get("message"),
+                }
+                for i in (creep.get("items") or [])[:10]
+            ]
         },
         "news": {
             "entities": news.get("entities") or [],
@@ -561,6 +924,7 @@ def _narrate_report(
         "news_note": stats["news"].get("note"),
         "tax_flags": stats["tax_flags"],
         "holdings": stats["investments"]["holdings"],
+        "month_end_review": stats.get("month_end_review") or {},
     }
     # Build a mini analytics bundle for severity from report stats
     analytics_for_sev = {
@@ -627,6 +991,8 @@ def _narrate_report(
         "}\n"
         "Rules: use only numbers from context; include ≥1 positive in going_well; "
         "suggestions must use suggestion_seeds ₹ amounts; "
+        "lean on month_end_review.leakages / big_spends / checklist for what to call out; "
+        "do not invent merchants or leakages not in context; "
         "inr_impact must be a plain number (e.g. 1914) or null — never paste objects/code; "
         "leave market_context empty if headlines list is empty; "
         "only mention tax_flags that are present; "
@@ -721,6 +1087,7 @@ def generate_monthly_report(
         settings=settings,
         news_cache=news_cache,
         learned_facts=learned_facts,
+        goals_col=goals_col,
     )
     if memories_col is not None:
         stats["_memories_col"] = memories_col

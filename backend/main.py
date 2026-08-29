@@ -13,9 +13,9 @@ from bson.errors import InvalidId
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from pymongo import DESCENDING, MongoClient
+from pymongo import DESCENDING, MongoClient, ReturnDocument
 
 # Load .env before local modules that read os.getenv at import time (e.g. llm).
 load_dotenv()
@@ -60,6 +60,21 @@ from tally import compute_tally, run_ai_tally
 from smart_insights import attach_smart_insights, find_ambiguous_transfers
 from monthly_report import generate_monthly_report, get_report, list_reports
 from email_report import email_configured, render_report_html, send_report_email
+from report_pdf import render_report_pdf
+from auth_users import (
+    authenticate_user,
+    create_access_token,
+    ensure_auth_indexes,
+    ensure_default_linked_account,
+    find_linked_by_token,
+    get_current_user,
+    get_primary_user,
+    migrate_assign_user_id,
+    seed_user_from_env,
+    serialize_linked_account,
+    serialize_user,
+    user_match,
+)
 from advisor_persona import (
     default_persona_text,
     get_advisor_persona_settings,
@@ -130,8 +145,17 @@ learn_question_events = db["learn_question_events"]
 planning_goals = db["planning_goals"]
 advisor_memories = db["advisor_memories"]
 advisor_chat_sessions = db["advisor_chat_sessions"]
+users_col = db["users"]
+linked_accounts_col = db["linked_accounts"]
 
 API_KEY = os.getenv("API_KEY", "")
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173").strip().rstrip("/")
+# Where phones POST SMS (API host). Do not use the Vercel frontend URL here.
+WEBHOOK_PUBLIC_BASE = (
+    os.getenv("WEBHOOK_PUBLIC_BASE", "").strip().rstrip("/")
+    or os.getenv("API_PUBLIC_URL", "").strip().rstrip("/")
+    or "http://localhost:8000"
+)
 CORS_ORIGINS = [
     o.strip()
     for o in os.getenv(
@@ -148,6 +172,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.state.users = users_col
+app.state.linked_accounts = linked_accounts_col
+
+
+@app.middleware("http")
+async def require_login_middleware(request: Request, call_next):
+    """Gate app APIs behind login; SMS webhook + login + health stay public."""
+    path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    public = (
+        path == "/health"
+        or path.startswith("/docs")
+        or path.startswith("/openapi")
+        or path.startswith("/redoc")
+        or path == "/auth/login"
+        or path.startswith("/sms-webhook")
+        or path.startswith("/email-webhook")
+        or path.startswith("/jobs/")
+    )
+    if public:
+        return await call_next(request)
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return JSONResponse({"detail": "Please log in"}, status_code=401)
+    token = auth.split(" ", 1)[1].strip()
+    try:
+        from auth_users import decode_token
+
+        payload = decode_token(token)
+        uid = ObjectId(str(payload.get("sub")))
+        user = users_col.find_one({"_id": uid})
+        if not user:
+            return JSONResponse({"detail": "Please log in"}, status_code=401)
+        request.state.user = user
+        request.state.user_id = uid
+    except HTTPException as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    except Exception:
+        return JSONResponse({"detail": "Please log in"}, status_code=401)
+    return await call_next(request)
+
+
 # Useful indexes for the dashboard queries below
 try:
     transactions.create_index([("received_at", DESCENDING)])
@@ -155,6 +222,8 @@ try:
     transactions.create_index("bank")
     transactions.create_index("type")
     transactions.create_index("category")
+    transactions.create_index("user_id")
+    transactions.create_index("linked_account_id")
     credit_cards_col.create_index([("bank", 1), ("last4", 1)], unique=True)
     credit_cards_col.create_index("last4")
     liabilities_col.create_index(
@@ -178,8 +247,19 @@ try:
     advisor_chat_sessions.create_index("session_key", unique=True)
     import_rag_examples.create_index([("created_at", DESCENDING)])
     import_rag_examples.create_index("kind")
+    ensure_auth_indexes(users_col, linked_accounts_col)
 except Exception as exc:  # noqa: BLE001 — allow import/boot without Mongo during local checks
     print(f"Warning: could not create Mongo indexes yet: {exc}")
+
+# Seed login user + backfill user_id + default linked phone account
+try:
+    seeded = seed_user_from_env(users_col)
+    primary = seeded or get_primary_user(users_col)
+    if primary:
+        migrate_assign_user_id(db, primary["_id"])
+        ensure_default_linked_account(linked_accounts_col, user_id=primary["_id"])
+except Exception as exc:  # noqa: BLE001
+    print(f"Warning: auth seed/migrate skipped: {exc}")
 
 # Seed MerchantKnowledge from existing category_memory (once, capped)
 try:
@@ -351,6 +431,26 @@ def _load_merchant_memory() -> dict[str, str]:
     return memory
 
 
+def _load_salary_needles() -> list[str]:
+    try:
+        from learned_facts import salary_needles_from_facts
+
+        return salary_needles_from_facts(user_learned_facts)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not load salary keywords: {exc}")
+        return []
+
+
+def _load_people_patterns() -> list[tuple[str, str]]:
+    try:
+        from learned_facts import people_patterns_from_facts
+
+        return people_patterns_from_facts(user_learned_facts)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not load people patterns: {exc}")
+        return []
+
+
 def require_api_key(x_api_key: Optional[str] = Header(default=None, alias="X-API-Key")) -> None:
     if not API_KEY:
         raise HTTPException(
@@ -496,6 +596,8 @@ def _import_statement_docs(
             doc,
             memory,
             credit_card_accounts=list_credit_cards(credit_cards_col),
+            salary_needles=_load_salary_needles(),
+            people_patterns=_load_people_patterns(),
         )
         # Second-pass RAG for remaining Other rows
         if (doc.get("category") or "Other") == "Other":
@@ -653,11 +755,21 @@ def _analyze_import_batch(
     }
 
 
+def _jsonable(value: Any) -> Any:
+    """Recursively convert Mongo/BSON types so FastAPI jsonable_encoder succeeds."""
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
 def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
-    out = {**doc, "_id": str(doc["_id"])}
-    received = out.get("received_at")
-    if isinstance(received, datetime):
-        out["received_at"] = received.isoformat()
+    out = _jsonable(doc)
     raw_merchant = out.get("merchant")
     if raw_merchant:
         out["merchant_raw"] = raw_merchant
@@ -668,6 +780,188 @@ def _serialize(doc: dict[str, Any]) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+class LoginPayload(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+class SetupPayload(BaseModel):
+    platform: str = Field(..., pattern="^(ios|android)$")
+    setup_completed: bool = True
+
+
+class LinkedAccountCreate(BaseModel):
+    label: str = Field(..., min_length=1, max_length=80)
+    kind: str = Field(default="phone", pattern="^(phone|bank_source|email)$")
+    identifier: str = Field(..., min_length=1, max_length=64)
+    platform: str | None = Field(default=None, pattern="^(ios|android|email)$")
+
+
+@app.post("/auth/login")
+def auth_login(payload: LoginPayload):
+    user = authenticate_user(users_col, payload.email, payload.password)
+    token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": serialize_user(user),
+    }
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    return serialize_user(user)
+
+
+@app.patch("/auth/setup")
+def auth_setup(payload: SetupPayload, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    users_col.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "setup_platform": payload.platform,
+                "setup_completed": payload.setup_completed,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+    refreshed = users_col.find_one({"_id": user["_id"]})
+    return serialize_user(refreshed or user)
+
+
+@app.get("/linked-accounts")
+def list_linked_accounts(
+    request: Request,
+    reveal: bool = Query(default=False, description="Include private webhook URLs"),
+):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    rows = list(linked_accounts_col.find({"user_id": user["_id"]}).sort("linked_at", 1))
+    return {
+        "items": [
+            serialize_linked_account(
+                r,
+                include_token=reveal,
+                webhook_base=WEBHOOK_PUBLIC_BASE,
+            )
+            for r in rows
+        ],
+        "webhook_base": WEBHOOK_PUBLIC_BASE,
+    }
+
+
+@app.post("/linked-accounts")
+def create_linked_account(payload: LinkedAccountCreate, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    now = datetime.now(timezone.utc)
+    ident = payload.identifier.strip()
+    doc = {
+        "user_id": user["_id"],
+        "kind": payload.kind,
+        "identifier": ident,
+        "label": payload.label.strip(),
+        "webhook_token": secrets.token_urlsafe(24),
+        "linked_at": now,
+        "last_seen_at": None,
+        "active": True,
+        "platform": payload.platform,
+    }
+    try:
+        res = linked_accounts_col.insert_one(doc)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=409,
+            detail="That phone/bank source is already linked. Use a different label or number.",
+        ) from exc
+    doc["_id"] = res.inserted_id
+    return serialize_linked_account(doc, include_token=True, webhook_base=WEBHOOK_PUBLIC_BASE)
+
+
+class LinkedAccountUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    identifier: str | None = Field(default=None, min_length=1, max_length=64)
+    platform: str | None = Field(default=None, pattern="^(ios|android)$")
+
+
+@app.patch("/linked-accounts/{account_id}")
+def update_linked_account(account_id: str, payload: LinkedAccountUpdate, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    try:
+        oid = ObjectId(account_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid account id") from exc
+    updates: dict[str, Any] = {}
+    if payload.label is not None:
+        updates["label"] = payload.label.strip()
+    if payload.identifier is not None:
+        updates["identifier"] = payload.identifier.strip()
+    if payload.platform is not None:
+        updates["platform"] = payload.platform
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    result = linked_accounts_col.find_one_and_update(
+        {"_id": oid, "user_id": user["_id"], "active": {"$ne": False}},
+        {"$set": updates},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Linked account not found")
+    return serialize_linked_account(result, include_token=True, webhook_base=WEBHOOK_PUBLIC_BASE)
+
+
+@app.post("/linked-accounts/{account_id}/rotate-token")
+def rotate_linked_token(account_id: str, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    try:
+        oid = ObjectId(account_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid account id") from exc
+    token = secrets.token_urlsafe(24)
+    result = linked_accounts_col.find_one_and_update(
+        {"_id": oid, "user_id": user["_id"]},
+        {"$set": {"webhook_token": token}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Linked account not found")
+    return serialize_linked_account(result, include_token=True, webhook_base=WEBHOOK_PUBLIC_BASE)
+
+
+@app.delete("/linked-accounts/{account_id}")
+def delete_linked_account(account_id: str, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    try:
+        oid = ObjectId(account_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid account id") from exc
+    count = linked_accounts_col.count_documents({"user_id": user["_id"], "active": {"$ne": False}})
+    if count <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Keep at least one linked phone/account so SMS can still arrive.",
+        )
+    linked_accounts_col.update_one(
+        {"_id": oid, "user_id": user["_id"]},
+        {"$set": {"active": False}},
+    )
+    return {"ok": True}
 
 
 def _log_webhook_event(event: dict[str, Any]) -> None:
@@ -753,36 +1047,27 @@ async def _extract_sms_fields(request: Request) -> dict[str, Any]:
 
 @app.get("/sms-webhook")
 def sms_webhook_get_hint():
-    """iOS Shortcuts defaults to GET — tell the user exactly how to fix it."""
+    """Phones sometimes open the URL in a browser (GET). SMS must be POST."""
     return {
         "ok": False,
         "error": "Use POST, not GET",
-        "fix": (
-            "In Shortcuts → Get Contents of URL → expand the action → "
-            "set Method to POST, add header X-API-Key, Request Body = JSON "
-            "with sender=Sender and body=Message Contents."
+        "ios": (
+            "iPhone Shortcuts → Get Contents of URL → Method POST. "
+            "Use your private webhook link from Money Track → Accounts. "
+            "JSON body: sender + Message Contents."
+        ),
+        "android": (
+            "MacroDroid or Tasker → HTTP Request POST to your private webhook link "
+            "from Money Track → Accounts. JSON: sender + full SMS text."
         ),
     }
 
 
-@app.post("/sms-webhook")
-async def receive_sms(request: Request):
-    # Check the API key inside the handler so failed auth attempts are logged too
-    provided_key = request.headers.get("x-api-key") or ""
-    if not API_KEY or not provided_key or not secrets.compare_digest(provided_key, API_KEY):
-        _log_webhook_event(
-            {
-                "stored": False,
-                "reason": "bad_api_key" if provided_key else "missing_api_key",
-                "key_preview": (provided_key[:6] + "…") if provided_key else "",
-                "content_type": request.headers.get("content-type") or "unknown",
-            }
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key",
-        )
-
+async def _ingest_sms_request(
+    request: Request,
+    *,
+    linked_account: dict | None = None,
+) -> dict:
     fields = await _extract_sms_fields(request)
     sender = fields["sender"]
     body = fields["body"]
@@ -928,10 +1213,22 @@ async def receive_sms(request: Request):
         "source": "sms",
         "received_at": received_at,
     }
+    if linked_account:
+        doc["user_id"] = linked_account.get("user_id")
+        doc["linked_account_id"] = linked_account.get("_id")
+        try:
+            linked_accounts_col.update_one(
+                {"_id": linked_account["_id"]},
+                {"$set": {"last_seen_at": received_at}},
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: linked account last_seen update skipped: {exc}")
     apply_category(
         doc,
         _load_merchant_memory(),
         credit_card_accounts=list_credit_cards(credit_cards_col),
+        salary_needles=_load_salary_needles(),
+        people_patterns=_load_people_patterns(),
     )
 
     result = transactions.insert_one(doc)
@@ -992,6 +1289,57 @@ async def receive_sms(request: Request):
     }
 
 
+
+
+@app.post("/sms-webhook")
+async def receive_sms(request: Request):
+    """Legacy: API key auth — routes into the owner's primary linked account."""
+    provided_key = request.headers.get("x-api-key") or ""
+    if not API_KEY or not provided_key or not secrets.compare_digest(provided_key, API_KEY):
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "bad_api_key" if provided_key else "missing_api_key",
+                "key_preview": (provided_key[:6] + "…") if provided_key else "",
+                "content_type": request.headers.get("content-type") or "unknown",
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key",
+        )
+    linked = None
+    primary = get_primary_user(users_col)
+    if primary:
+        linked = linked_accounts_col.find_one(
+            {"user_id": primary["_id"], "active": {"$ne": False}},
+            sort=[("linked_at", 1)],
+        )
+    return await _ingest_sms_request(request, linked_account=linked)
+
+
+@app.post("/sms-webhook/{token}")
+async def receive_sms_with_token(token: str, request: Request):
+    """Preferred: each phone/account has a private link (no shared API key)."""
+    linked = find_linked_by_token(linked_accounts_col, token)
+    if not linked:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "bad_webhook_token",
+                "token_preview": (token[:6] + "…") if token else "",
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "This SMS link is unknown or turned off. "
+                "Open Money Track → Accounts and copy a fresh link for this phone."
+            ),
+        )
+    return await _ingest_sms_request(request, linked_account=linked)
+
+
 @app.get("/sms-webhook/debug")
 def sms_webhook_debug(limit: int = Query(default=20, ge=1, le=100)):
     """Recent webhook attempts — use this to see why phone automations failed."""
@@ -1005,6 +1353,266 @@ def sms_webhook_debug(limit: int = Query(default=20, ge=1, le=100)):
             item["received_at"] = received.isoformat()
         out.append(item)
     return {"count": len(out), "events": out}
+
+
+@app.get("/email-webhook")
+def email_webhook_get_hint():
+    return {
+        "ok": False,
+        "error": "Use POST, not GET",
+        "hint": (
+            "Forward bank alert emails to an inbound service that POSTs JSON here, "
+            "or paste an email on Money Track → Phones. "
+            "JSON fields: from, subject, text (or html)."
+        ),
+    }
+
+
+async def _ingest_email_request(
+    request: Request,
+    *,
+    linked_account: dict | None = None,
+    forced: dict[str, str] | None = None,
+) -> dict:
+    from email_ingest import normalize_email_payload, parse_bank_email
+    from agents.import_graph import _fingerprint
+
+    if forced:
+        fields = {
+            "from": forced.get("from", ""),
+            "subject": forced.get("subject", ""),
+            "text": forced.get("text", ""),
+            "html": forced.get("html", ""),
+        }
+    else:
+        content_type = (request.headers.get("content-type") or "").lower()
+        data: dict[str, Any] = {}
+        try:
+            if "application/json" in content_type:
+                raw = await request.json()
+                data = raw if isinstance(raw, dict) else {}
+            elif (
+                "application/x-www-form-urlencoded" in content_type
+                or "multipart/form-data" in content_type
+            ):
+                form = await request.form()
+                data = {str(k): str(v) for k, v in form.items()}
+            else:
+                text = (await request.body()).decode("utf-8", errors="replace").strip()
+                if text.startswith("{"):
+                    try:
+                        data = json.loads(text)
+                    except Exception:
+                        data = {"text": text}
+                else:
+                    data = {"text": text}
+        except Exception as exc:  # noqa: BLE001
+            _log_webhook_event(
+                {"stored": False, "reason": "email_body_read_error", "error": str(exc), "channel": "email"}
+            )
+            raise HTTPException(status_code=400, detail=f"Could not read email body: {exc}") from exc
+        fields = normalize_email_payload(data)
+
+    sender = fields["from"]
+    subject = fields["subject"]
+    text = fields["text"]
+    html = fields["html"]
+    if not text and not html and not subject:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "missing_email_body",
+                "channel": "email",
+                "from": sender,
+                "subject": subject,
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "missing email body",
+            "hint": "Send JSON with from, subject, and text (or html) of the bank alert.",
+        }
+
+    try:
+        txn = parse_bank_email(sender=sender, subject=subject, text=text, html=html)
+    except Exception as exc:  # noqa: BLE001
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "email_parse_error",
+                "channel": "email",
+                "error": str(exc),
+                "from": sender,
+                "subject": subject[:120],
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse email: {_exc_detail(exc)}",
+        ) from exc
+
+    if txn is None:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "not_a_transaction_email",
+                "channel": "email",
+                "from": sender,
+                "subject": subject[:120],
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "not a bank transaction email (OTP, promo, or unparseable)",
+            "received": {"from": sender, "subject": subject[:120]},
+        }
+
+    received_at = datetime.now(timezone.utc)
+    doc = {
+        **txn,
+        "sender": sender or "EMAIL",
+        "source": "email",
+        "email_subject": subject or None,
+        "received_at": received_at,
+    }
+    if linked_account:
+        doc["user_id"] = linked_account.get("user_id")
+        doc["linked_account_id"] = linked_account.get("_id")
+        try:
+            linked_accounts_col.update_one(
+                {"_id": linked_account["_id"]},
+                {"$set": {"last_seen_at": received_at}},
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: linked account last_seen update skipped: {exc}")
+
+    apply_category(
+        doc,
+        _load_merchant_memory(),
+        credit_card_accounts=list_credit_cards(credit_cards_col),
+        salary_needles=_load_salary_needles(),
+        people_patterns=_load_people_patterns(),
+    )
+
+    # Skip exact duplicates already captured via SMS/statement/email
+    try:
+        fp = _fingerprint(doc)
+        existing = transactions.find_one(
+            {
+                "amount": doc.get("amount"),
+                "type": doc.get("type"),
+                "account_last4": doc.get("account_last4"),
+            },
+            sort=[("received_at", DESCENDING)],
+        )
+        if existing and _fingerprint(existing) == fp:
+            _log_webhook_event(
+                {
+                    "stored": False,
+                    "reason": "duplicate_email",
+                    "channel": "email",
+                    "existing_id": str(existing["_id"]),
+                    "from": sender,
+                    "subject": subject[:120],
+                }
+            )
+            return {
+                "stored": False,
+                "reason": "duplicate — already tracked (likely via SMS)",
+                "existing_id": str(existing["_id"]),
+            }
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: email dedupe skipped: {exc}")
+
+    result = transactions.insert_one(doc)
+    if not result.inserted_id:
+        raise HTTPException(status_code=500, detail="Failed to store email transaction")
+
+    _log_webhook_event(
+        {
+            "stored": True,
+            "channel": "email",
+            "id": str(result.inserted_id),
+            "from": sender,
+            "subject": subject[:120],
+            "amount": txn.get("amount"),
+            "type": txn.get("type"),
+            "category": doc.get("category"),
+        }
+    )
+
+    advisor_nudge = None
+    try:
+        from advisor_presence import on_new_transaction
+
+        advisor_nudge = on_new_transaction(
+            txn={**doc, "_id": result.inserted_id},
+            memories=advisor_memories,
+            sessions=advisor_chat_sessions,
+            learned_facts=user_learned_facts,
+            goals_col=planning_goals,
+            transactions=transactions,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: advisor live nudge skipped: {exc}")
+
+    return {
+        "stored": True,
+        "id": str(result.inserted_id),
+        "transaction": {**txn, "category": doc.get("category"), "mcc": doc.get("mcc")},
+        "advisor_nudge": advisor_nudge,
+    }
+
+
+@app.post("/email-webhook/{token}")
+async def receive_email_with_token(token: str, request: Request):
+    """Private link for bank alert emails (Resend inbound / forwarder / Zapier)."""
+    linked = find_linked_by_token(linked_accounts_col, token)
+    if not linked:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "bad_email_webhook_token",
+                "channel": "email",
+                "token_preview": (token[:6] + "…") if token else "",
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "This email link is unknown or turned off. "
+                "Open Money Track → Phones and copy a fresh email link."
+            ),
+        )
+    return await _ingest_email_request(request, linked_account=linked)
+
+
+class EmailPastePayload(BaseModel):
+    from_address: str = Field(default="", max_length=200, alias="from")
+    subject: str = Field(default="", max_length=300)
+    text: str = Field(default="", max_length=20000)
+    html: str = Field(default="", max_length=50000)
+
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/email-ingest/paste")
+async def paste_bank_email(payload: EmailPastePayload, request: Request):
+    """Logged-in paste of a bank email — useful before wiring auto-forward."""
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    linked = linked_accounts_col.find_one(
+        {"user_id": user["_id"], "active": {"$ne": False}},
+        sort=[("linked_at", 1)],
+    )
+    forced = {
+        "from": payload.from_address,
+        "subject": payload.subject,
+        "text": payload.text,
+        "html": payload.html,
+    }
+    return await _ingest_email_request(request, linked_account=linked, forced=forced)
 
 
 @app.post("/statements/upload")
@@ -1228,6 +1836,7 @@ def _parse_optional_date(value: str | None, end_of_day: bool = False) -> datetim
 
 @app.get("/analytics")
 def analytics(
+    request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
     bank: str | None = Query(default=None, description="Comma-separated bank names"),
@@ -1240,6 +1849,7 @@ def analytics(
         sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: credit card→liability sync skipped: {exc}")
+    uid = getattr(request.state, "user_id", None)
     payload = build_analytics(
         transactions,
         date_from=start,
@@ -1250,6 +1860,7 @@ def analytics(
         liabilities=liabilities_col,
         budgets=budgets_col,
         learned_facts=user_learned_facts,
+        user_id=uid,
     )
     return attach_smart_insights(
         payload,
@@ -2494,6 +3105,27 @@ def reports_monthly_preview_html(month: str):
     )
 
 
+@app.get("/reports/monthly/{month}/pdf")
+def reports_monthly_pdf(month: str):
+    """Download the month-end report as PDF (same payload as email attachment)."""
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    doc = get_report(monthly_reports, month)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report not found")
+    profile = __import__(
+        "learned_facts", fromlist=["advisor_profile_from_facts"]
+    ).advisor_profile_from_facts(user_learned_facts)
+    pdf_bytes = render_report_pdf(doc, advisor_profile=profile)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="money-track-{month}.pdf"'
+        },
+    )
+
+
 # ── Money Planning ───────────────────────────────────────────────────────────
 
 
@@ -2673,19 +3305,21 @@ def advisor_presence_get():
     except Exception:  # noqa: BLE001
         questions = []
     try:
-        return presence_bootstrap(
-            sessions=advisor_chat_sessions,
-            memories=advisor_memories,
-            transactions=transactions,
-            portfolio=portfolio,
-            networth_snapshots=networth_snapshots,
-            liabilities=liabilities_col,
-            budgets=budgets_col,
-            sip_overrides=sip_overrides,
-            settings=app_settings,
-            learned_facts=user_learned_facts,
-            goals_col=planning_goals,
-            learn_questions=questions,
+        return _jsonable(
+            presence_bootstrap(
+                sessions=advisor_chat_sessions,
+                memories=advisor_memories,
+                transactions=transactions,
+                portfolio=portfolio,
+                networth_snapshots=networth_snapshots,
+                liabilities=liabilities_col,
+                budgets=budgets_col,
+                sip_overrides=sip_overrides,
+                settings=app_settings,
+                learned_facts=user_learned_facts,
+                goals_col=planning_goals,
+                learn_questions=questions,
+            )
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Advisor presence failed: {exc}") from exc
@@ -2694,20 +3328,22 @@ def advisor_presence_get():
 @app.post("/advisor/chat")
 def advisor_chat_post(payload: AdvisorChatPayload):
     try:
-        return advisor_chat(
-            sessions=advisor_chat_sessions,
-            memories=advisor_memories,
-            question=payload.message,
-            transactions=transactions,
-            portfolio=portfolio,
-            networth_snapshots=networth_snapshots,
-            liabilities=liabilities_col,
-            budgets=budgets_col,
-            sip_overrides=sip_overrides,
-            settings=app_settings,
-            learned_facts=user_learned_facts,
-            goals_col=planning_goals,
-            provider_name=payload.provider,
+        return _jsonable(
+            advisor_chat(
+                sessions=advisor_chat_sessions,
+                memories=advisor_memories,
+                question=payload.message,
+                transactions=transactions,
+                portfolio=portfolio,
+                networth_snapshots=networth_snapshots,
+                liabilities=liabilities_col,
+                budgets=budgets_col,
+                sip_overrides=sip_overrides,
+                settings=app_settings,
+                learned_facts=user_learned_facts,
+                goals_col=planning_goals,
+                provider_name=payload.provider,
+            )
         )
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

@@ -55,12 +55,15 @@ def _match_range(
     date_to: datetime | None,
     banks: list[str] | None = None,
     categories: list[str] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     # Wallet/FASTag debits are excluded from all money totals — the bank was
     # already debited at recharge time, counting the wallet spend double-counts.
     # CC statement / payment-received SMS mis-ingested as spend are also excluded
     # until an approved backfill removes them.
     match: dict[str, Any] = {"card_type": {"$ne": "wallet"}, **credit_card_noise_mongo_clause()}
+    if user_id is not None:
+        match["user_id"] = user_id
     if date_from or date_to:
         received: dict[str, Any] = {}
         if date_from:
@@ -115,8 +118,9 @@ def build_analytics(
     liabilities: Collection | None = None,
     budgets: Collection | None = None,
     learned_facts: Collection | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
-    match = _match_range(date_from, date_to, banks=banks)
+    match = _match_range(date_from, date_to, banks=banks, user_id=user_id)
     base = [{"$match": match}] if match else []
 
     # Totals
@@ -576,6 +580,14 @@ def build_analytics(
     )
     salary_total = 0.0
     salary_count = 0
+    salary_needles: list[str] = []
+    if learned_facts is not None:
+        try:
+            from learned_facts import salary_needles_from_facts
+
+            salary_needles = salary_needles_from_facts(learned_facts)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load salary keywords: {exc}")
     for doc in transactions.find(
         {**match, "type": "credit"}, {"merchant": 1, "raw_text": 1, "category": 1, "amount": 1}
     ):
@@ -587,7 +599,9 @@ def build_analytics(
         amount = float(doc.get("amount") or 0)
         income_totals[label]["amount"] += amount
         income_totals[label]["count"] += 1
-        if is_salary_source(label, doc.get("merchant"), doc.get("raw_text")):
+        if is_salary_source(
+            label, doc.get("merchant"), doc.get("raw_text"), extra_needles=salary_needles
+        ):
             income_totals[label]["salary"] = 1.0
             salary_total += amount
             salary_count += 1

@@ -16,3 +16,4 @@ frontend/.env
 .vscode/
 *.log
 .cursor/
+.vercel

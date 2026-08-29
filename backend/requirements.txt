@@ -8,6 +8,9 @@ python-multipart
 openpyxl
 xlrd
 pdfplumber
+argon2-cffi
+PyJWT
+fpdf2
 httpx
 numpy
 langgraph

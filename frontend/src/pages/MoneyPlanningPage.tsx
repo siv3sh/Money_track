@@ -942,7 +942,7 @@ export function MoneyPlanningPage() {
                 What are you saving for?
                 <input
                   className="field mt-1"
-                  placeholder="e.g. PS5, Goa trip, iPhone"
+                  placeholder="e.g. Goa trip, emergency fund, new phone"
                   value={goalName}
                   onChange={(e) => setGoalName(e.target.value)}
                   required

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { FileText, Loader2, Mail, RefreshCw, Settings2 } from 'lucide-react'
+import { FileDown, FileText, Loader2, Mail, RefreshCw, Settings2 } from 'lucide-react'
 import {
+  downloadMonthlyReportPdf,
   fetchMonthlyReport,
   fetchMonthlyReports,
   generateMonthlyReport,
@@ -10,7 +11,7 @@ import {
   type MonthlyReportListItem,
   type MonthlyReportSettings,
 } from '../api'
-import { HorizontalBars } from '../components/charts'
+import { DeltaBars, DonutChart, GroupedComparisonBars, HorizontalBars } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
 
@@ -38,13 +39,18 @@ function normalizeNarrative(n: MonthlyReport['narrative']): MonthlyReport['narra
 function ReportDetail({
   report,
   onBack,
+  onDownloadPdf,
+  pdfBusy,
 }: {
   report: MonthlyReport
   onBack?: () => void
+  onDownloadPdf?: () => void
+  pdfBusy?: boolean
 }) {
   const n = normalizeNarrative(report.narrative)
   const s = report.stats
   const h = s.headline_metric
+  const review = s.month_end_review
 
   const categoryBars = useMemo(() => {
     const cats = (s.current?.categories || [])
@@ -67,13 +73,134 @@ function ReportDetail({
       .slice(0, 8)
   }, [s])
 
+  const leakageBars = useMemo(() => {
+    return (review?.leakages || [])
+      .filter((l) => (l.change_inr != null && l.change_inr > 0) || (l.amount != null && l.amount > 0))
+      .map((l) => ({
+        name: (l.name || 'Item').slice(0, 22),
+        value: Number(l.change_inr != null && l.change_inr > 0 ? l.change_inr : l.amount) || 0,
+      }))
+      .slice(0, 8)
+  }, [review])
+
+  const bigSpendBars = useMemo(() => {
+    return (review?.big_spends || [])
+      .map((m) => ({ name: m.name.slice(0, 22), value: m.amount }))
+      .slice(0, 8)
+  }, [review])
+
+  const priorVsNow = useMemo(() => {
+    return (s.category_changes || [])
+      .slice(0, 6)
+      .map((c) => ({
+        name: c.name.slice(0, 18),
+        template: c.previous,
+        actual: c.current,
+      }))
+  }, [s])
+
+  const categoryDeltas = useMemo(() => {
+    return (s.category_changes || [])
+      .slice(0, 8)
+      .map((c) => ({
+        name: c.name.slice(0, 18),
+        delta: c.change_inr,
+        prior: c.previous,
+        current: c.current,
+      }))
+      .filter((c) => c.delta !== 0)
+  }, [s])
+
+  const leakageDeltas = useMemo(() => {
+    return (review?.leakages || [])
+      .map((l) => {
+        const delta =
+          l.change_inr != null && l.change_inr !== 0
+            ? Number(l.change_inr)
+            : Number(l.amount) || 0
+        return {
+          name: (l.name || 'Item').slice(0, 18),
+          delta,
+          prior: undefined as number | undefined,
+          current: l.amount != null ? Number(l.amount) : undefined,
+        }
+      })
+      .filter((r) => r.delta !== 0)
+      .slice(0, 8)
+  }, [review])
+
+  const impactBars = useMemo(() => {
+    const fromNarrative = (n.suggestions || [])
+      .filter((x) => x.inr_impact != null && Number(x.inr_impact) > 0)
+      .map((x) => ({
+        name: (x.text || 'Action').slice(0, 28),
+        value: Number(x.inr_impact) || 0,
+      }))
+    if (fromNarrative.length) return fromNarrative.slice(0, 6)
+    return (review?.recommendations || [])
+      .filter((x) => x.inr_impact != null && Number(x.inr_impact) > 0)
+      .map((x) => ({
+        name: (x.text || 'Action').slice(0, 28),
+        value: Number(x.inr_impact) || 0,
+      }))
+      .slice(0, 6)
+  }, [n.suggestions, review])
+
+  const ytdDonut = useMemo(() => {
+    const lifestyle = Number(s.ytd?.lifestyle_spend) || 0
+    const credit = Number(s.ytd?.total_credit) || 0
+    const invested = Number(s.ytd?.investments_debit) || 0
+    const saved = Math.max(credit - lifestyle, 0)
+    const rows = [
+      { name: 'Lifestyle', value: lifestyle },
+      { name: 'Invested', value: invested },
+      { name: 'Other kept', value: Math.max(saved - invested, 0) },
+    ].filter((r) => r.value > 0)
+    return rows
+  }, [s.ytd])
+
+  const monthPulse = useMemo(() => {
+    const cur = s.current as Record<string, unknown>
+    const prev = s.previous as Record<string, unknown>
+    const keys: Array<{ key: string; label: string }> = [
+      { key: 'lifestyle_spend', label: 'Lifestyle' },
+      { key: 'total_credit', label: 'Credited' },
+      { key: 'total_debit', label: 'Debited' },
+      { key: 'credit_card_spend', label: 'Cards' },
+    ]
+    return keys
+      .map(({ key, label }) => ({
+        name: label,
+        template: Number(prev?.[key]) || 0,
+        actual: Number(cur?.[key]) || 0,
+      }))
+      .filter((r) => r.template > 0 || r.actual > 0)
+  }, [s])
+
+  const checklist = review?.checklist || []
+
   return (
     <div className="space-y-5">
-      {onBack ? (
-        <button type="button" className="btn text-xs" onClick={onBack}>
-          ← All reports
-        </button>
-      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {onBack ? (
+          <button type="button" className="btn text-xs" onClick={onBack}>
+            ← All reports
+          </button>
+        ) : (
+          <span />
+        )}
+        {onDownloadPdf ? (
+          <button
+            type="button"
+            className="btn text-xs"
+            disabled={pdfBusy}
+            onClick={onDownloadPdf}
+          >
+            {pdfBusy ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+            Download PDF
+          </button>
+        ) : null}
+      </div>
 
       <div className="mb-2 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
@@ -102,136 +229,131 @@ function ReportDetail({
         />
       </div>
 
-      <ChartCard title="Summary" subtitle={report.label}>
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{n.summary}</p>
-        {!s.history_ok ? (
-          <p className="mt-3 text-xs text-[var(--muted)]">
-            Limited history — prior-month comparison may be incomplete.
-          </p>
-        ) : null}
-      </ChartCard>
+      {monthPulse.length ? (
+        <ChartCard title="This month vs prior" subtitle="Column compare — labels show ₹">
+          <GroupedComparisonBars data={monthPulse} orientation="vertical" />
+        </ChartCard>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="Spend by category" subtitle="Lifestyle this month">
-          <HorizontalBars data={categoryBars} />
-        </ChartCard>
-        <ChartCard title="Top spend" subtitle="Largest merchants">
-          {merchantBars.length ? (
-            <HorizontalBars data={merchantBars} />
+        <ChartCard title="Leakages" subtitle="Red = up vs prior · zero line = no change">
+          {leakageDeltas.length ? (
+            <DeltaBars data={leakageDeltas} />
+          ) : leakageBars.length ? (
+            <HorizontalBars data={leakageBars} showLabels toneByRank />
           ) : (
-            <p className="text-sm text-[var(--muted)]">No merchant ranking for this month yet.</p>
+            <p className="text-sm text-[var(--muted)]">
+              No material leakages vs prior
+              {!review ? ' — regenerate to refresh charts' : ''}.
+            </p>
+          )}
+        </ChartCard>
+        <ChartCard title="Big spends" subtitle="Largest merchants — bar length = ₹">
+          {bigSpendBars.length ? (
+            <HorizontalBars data={bigSpendBars} showLabels toneByRank />
+          ) : merchantBars.length ? (
+            <HorizontalBars data={merchantBars} showLabels toneByRank />
+          ) : (
+            <p className="text-sm text-[var(--muted)]">No merchant spend chart yet.</p>
           )}
         </ChartCard>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <ChartCard title="What's going well">
-          <ul className="space-y-2">
-            {(n.going_well || []).length ? (
-              (n.going_well || []).map((item, i) => (
-                <li
-                  key={i}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
-                >
-                  {item}
-                </li>
-              ))
-            ) : (
-              <li className="text-sm text-[var(--muted)]">Not enough highlights yet.</li>
-            )}
-          </ul>
+      {categoryDeltas.length ? (
+        <ChartCard title="Category Δ" subtitle="Spend change vs prior (red up · green down)">
+          <DeltaBars data={categoryDeltas} />
         </ChartCard>
-        <ChartCard title="Suggestions">
-          <ul className="space-y-2">
-            {(n.suggestions || []).length ? (
-              (n.suggestions || []).map((item, i) => (
-                <li
-                  key={i}
-                  className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm"
-                >
-                  {item.text}
-                  {item.inr_impact != null ? (
-                    <span className="ml-1 text-[var(--credit)]">
-                      (~{formatINR(item.inr_impact)})
-                    </span>
-                  ) : null}
-                </li>
-              ))
-            ) : (
-              <li className="text-sm text-[var(--muted)]">No specific suggestions this month.</li>
-            )}
-          </ul>
+      ) : priorVsNow.length ? (
+        <ChartCard title="Category moves" subtitle="Prior vs this month by category">
+          <GroupedComparisonBars data={priorVsNow} />
+        </ChartCard>
+      ) : null}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Spend mix" subtitle="Lifestyle categories this month">
+          <HorizontalBars data={categoryBars} showLabels toneByRank />
+        </ChartCard>
+        <ChartCard title="YTD split" subtitle="Where credited money went">
+          {ytdDonut.length ? (
+            <DonutChart data={ytdDonut} />
+          ) : (
+            <p className="text-sm text-[var(--muted)]">Not enough YTD totals for a chart.</p>
+          )}
         </ChartCard>
       </div>
 
-      {n.market_context ? (
-        <ChartCard title="Market context" subtitle="Tied to your holdings">
-          <p className="text-sm leading-relaxed">{n.market_context}</p>
-          {(s.news.headlines || []).length > 0 ? (
-            <ul className="mt-3 space-y-1 text-xs text-[var(--muted)]">
-              {s.news.headlines.map((hline, i) => (
-                <li key={i}>• {hline.title}</li>
+      <ChartCard title="Month-end pulse" subtitle="Status at a glance">
+        {checklist.length ? (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {checklist.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-start gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5"
+              >
+                <span
+                  className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                    item.status === 'action'
+                      ? 'bg-[var(--debit)]'
+                      : item.status === 'watch'
+                        ? 'bg-[var(--accent)]'
+                        : 'bg-[var(--credit)]'
+                  }`}
+                  title={item.status}
+                />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-[var(--text)]">{item.title}</p>
+                  {item.detail ? (
+                    <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--muted)]">{item.detail}</p>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-[var(--muted)]">
+            Regenerate this report to load the month-end pulse chart.
+          </p>
+        )}
+      </ChartCard>
+
+      <ChartCard title="₹ you can free" subtitle="Larger bar = more upside if you act">
+        {impactBars.length ? (
+          <HorizontalBars data={impactBars} color="var(--credit)" showLabels toneByRank />
+        ) : (
+          <p className="text-sm text-[var(--muted)]">No ₹-impact actions quantified this month.</p>
+        )}
+      </ChartCard>
+
+      {(n.summary || (n.going_well || []).length > 0) && (
+        <details className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+          <summary className="cursor-pointer text-sm font-medium text-[var(--muted)]">
+            Advisor note (optional read)
+          </summary>
+          {n.summary ? (
+            <p className="mt-3 text-sm leading-relaxed text-[var(--text)]">{n.summary}</p>
+          ) : null}
+          {(n.going_well || []).length ? (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[var(--text)]">
+              {(n.going_well || []).map((item, i) => (
+                <li key={i}>{item}</li>
               ))}
             </ul>
           ) : null}
-        </ChartCard>
-      ) : null}
-
-      {(n.tax_notes || []).length > 0 || (s.tax_flags || []).length > 0 ? (
-        <ChartCard title="Tax notes" subtitle="Only when thresholds are near">
-          <ul className="space-y-2 text-sm">
-            {(n.tax_notes || []).map((t, i) => (
-              <li key={i}>{t}</li>
-            ))}
-            {!n.tax_notes?.length
-              ? (s.tax_flags || []).map((t, i) => (
-                  <li key={i}>{t.message}</li>
-                ))
-              : null}
-          </ul>
-        </ChartCard>
-      ) : null}
-
-      <ChartCard title="Year to date">
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{n.ytd_snapshot}</p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3 text-xs text-[var(--muted)]">
-          <div>
-            YTD lifestyle{' '}
-            <strong className="text-[var(--text)]">{formatINR(s.ytd.lifestyle_spend)}</strong>
-          </div>
-          <div>
-            YTD credited{' '}
-            <strong className="text-[var(--text)]">{formatINR(s.ytd.total_credit)}</strong>
-          </div>
-          <div>
-            YTD savings rate{' '}
-            <strong className="text-[var(--text)]">
-              {s.ytd.savings_rate_pct != null ? `${s.ytd.savings_rate_pct}%` : '—'}
-            </strong>
-          </div>
-        </div>
-      </ChartCard>
-
-      {(s.category_changes || []).length > 0 ? (
-        <ChartCard title="Category moves" subtitle="Largest ₹ changes vs prior month">
-          <ul className="divide-y divide-[var(--border)] text-sm">
-            {s.category_changes.slice(0, 6).map((c) => (
-              <li key={c.name} className="flex justify-between gap-3 py-2">
-                <span>{c.name}</span>
-                <span
-                  className={
-                    c.change_inr > 0 ? 'text-[var(--debit)]' : 'text-[var(--credit)]'
-                  }
-                >
-                  {c.change_inr > 0 ? '+' : ''}
-                  {formatINR(c.change_inr)} ({c.change_pct > 0 ? '+' : ''}
-                  {c.change_pct}%)
-                </span>
-              </li>
-            ))}
-          </ul>
-        </ChartCard>
-      ) : null}
+          {n.market_context ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">{n.market_context}</p>
+          ) : null}
+          {(n.tax_notes || []).length || (s.tax_flags || []).length ? (
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-[var(--muted)]">
+              {(n.tax_notes || []).map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+              {!n.tax_notes?.length
+                ? (s.tax_flags || []).map((t, i) => <li key={i}>{t.message}</li>)
+                : null}
+            </ul>
+          ) : null}
+        </details>
+      )}
 
       <p className="text-[11px] text-[var(--muted)]">
         Generated {report.generated_at ? new Date(report.generated_at).toLocaleString('en-IN') : '—'}
@@ -239,6 +361,7 @@ function ReportDetail({
         {report.emailed_at
           ? ` · emailed ${new Date(report.emailed_at).toLocaleString('en-IN')}`
           : ''}
+        {!s.history_ok ? ' · limited prior-month history' : ''}
       </p>
     </div>
   )
@@ -252,6 +375,7 @@ export function MonthlyReportsPage() {
   const [report, setReport] = useState<MonthlyReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [pdfBusy, setPdfBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [emailDraft, setEmailDraft] = useState('')
   const [emailEnabled, setEmailEnabled] = useState(true)
@@ -328,11 +452,24 @@ export function MonthlyReportsPage() {
     }
   }
 
+  const handleDownloadPdf = async () => {
+    if (!report?.month) return
+    setPdfBusy(true)
+    setError(null)
+    try {
+      await downloadMonthlyReportPdf(report.month)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'PDF download failed')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
   return (
     <div className="fade-in">
       <PageHeader
         title="Monthly reports"
-        description="AI analysis of the prior month — computed numbers first, LLM narration second. Optional email on the 1st."
+        description="Chart-first month-end review — leakages, big spends, and ₹ impact. Words are optional. Email includes the same charts + PDF."
         actions={
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn" onClick={() => setShowSettings((v) => !v)}>
@@ -387,6 +524,7 @@ export function MonthlyReportsPage() {
             />
             <p className="text-xs text-[var(--muted)]">
               Email via Resend{settings?.email_configured ? ' (configured)' : ' — set RESEND_API_KEY on the server'}.
+              Generate & email attaches a PDF of the month-end review.
             </p>
             <button type="button" className="btn self-start" disabled={busy} onClick={() => void saveSettings()}>
               Save
@@ -400,6 +538,8 @@ export function MonthlyReportsPage() {
       ) : report ? (
         <ReportDetail
           report={report}
+          pdfBusy={pdfBusy}
+          onDownloadPdf={() => void handleDownloadPdf()}
           onBack={() => {
             setReport(null)
             if (monthParam) navigate('/monthly-reports')
