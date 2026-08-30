@@ -52,6 +52,7 @@ export function ImportPage() {
   const [err, setErr] = useState<string | null>(null)
   const [result, setResult] = useState<StatementImportResult | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [pdfPassword, setPdfPassword] = useState('')
 
   const saveFile = async (file: File | null) => {
     if (!file) return
@@ -60,7 +61,7 @@ export function ImportPage() {
     setErr(null)
     setResult(null)
     try {
-      const res = await uploadStatementFile(file)
+      const res = await uploadStatementFile(file, undefined, 'auto', pdfPassword)
       setResult(res)
       const detected = res.detected
       const bankLabel = detected?.bank
@@ -122,6 +123,23 @@ export function ImportPage() {
         <p className="mt-1 text-sm text-[var(--muted)]">
           PDF, Excel, or CSV. Cross-source dedup against SMS + past imports.
         </p>
+
+        <label className="mt-4 block text-sm">
+          <span className="font-medium text-[var(--text)]">PDF password (if locked)</span>
+          <input
+            type="password"
+            autoComplete="off"
+            value={pdfPassword}
+            onChange={(e) => setPdfPassword(e.target.value)}
+            disabled={busy}
+            placeholder="Optional — leave blank if unlocked"
+            className="mt-1.5 w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)]"
+          />
+          <span className="mt-1 block text-xs text-[var(--muted)]">
+            Indian banks often use DOB (DDMMYYYY), PAN, or last 4–6 digits of account/card. Password
+            is used only to unlock this upload — not stored.
+          </span>
+        </label>
 
         {stages.length ? (
           <PipelineTicks stages={stages} current={currentStage} />

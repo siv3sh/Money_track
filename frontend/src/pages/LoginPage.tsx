@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
@@ -18,6 +19,8 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [signupCode, setSignupCode] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -117,31 +120,51 @@ export function LoginPage() {
           </label>
           <label className="block text-sm">
             <span className="mb-1 block text-[var(--muted)]">Password</span>
-            <input
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)]"
-              type="password"
-              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-              required
-              minLength={mode === 'signup' ? 8 : 1}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'}
-            />
+            <div className="relative">
+              <input
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 pr-11 text-[var(--text)]"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                required
+                minLength={mode === 'signup' ? 8 : 1}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'}
+              />
+              <button
+                type="button"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                onClick={() => setShowPassword((v) => !v)}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </label>
           {mode === 'signup' ? (
             <>
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--muted)]">Confirm password</span>
-                <input
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)]"
-                  type="password"
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  placeholder="Repeat password"
-                />
+                <div className="relative">
+                  <input
+                    className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 pr-11 text-[var(--text)]"
+                    type={showConfirm ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    required
+                    minLength={8}
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    placeholder="Repeat password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+                    aria-label={showConfirm ? 'Hide password' : 'Show password'}
+                    onClick={() => setShowConfirm((v) => !v)}
+                  >
+                    {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </label>
               <label className="block text-sm">
                 <span className="mb-1 block text-[var(--muted)]">

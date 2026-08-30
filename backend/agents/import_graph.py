@@ -24,8 +24,10 @@ from rag.embeddings import embed_text
 from rag.vector_store import VectorStore, get_vector_store
 from statement_parser import (
     HEADER_ALIASES as STMT_ALIASES,
+    PdfPasswordRequired,
     detect_statement_profile,
     enrich_imported_txn,
+    open_statement_pdf,
     parse_statement_csv,
     parse_statement_excel,
     parse_statement_pdf,
@@ -54,6 +56,7 @@ class ImportGraphState(TypedDict, total=False):
     filename: str
     flow: Flow
     bank: Optional[str]
+    pdf_password: Optional[str]
     stage: str
     steps: list[dict[str, Any]]
     warnings: list[str]
@@ -160,8 +163,11 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
     pairs: list = []
 
     if kind == "pdf":
+        pdf_password = (state.get("pdf_password") or "").strip() or None
         try:
-            pairs = parse_statement_pdf(raw, bank=state.get("bank"))
+            pairs = parse_statement_pdf(raw, bank=state.get("bank"), password=pdf_password)
+        except PdfPasswordRequired:
+            raise
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"PDF parse skipped bad rows: {exc}")
             pairs = []
@@ -177,10 +183,10 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
                 )
         peek = ""
         try:
-            import pdfplumber
-
-            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            with open_statement_pdf(raw, password=pdf_password) as pdf:
                 peek = "\n".join((p.extract_text() or "") for p in pdf.pages[:3])[:8000]
+        except PdfPasswordRequired:
+            raise
         except Exception:  # noqa: BLE001
             peek = ""
         profile = detect_statement_profile(f"{filename}\n{peek}", filename)
@@ -740,6 +746,7 @@ def run_import_pipeline(
     *,
     flow: Flow = "statement",
     bank: str | None = None,
+    pdf_password: str | None = None,
     merchant_memory: dict[str, str] | None = None,
     exact_fps: set[str] | None = None,
     soft_fps: set[str] | None = None,
@@ -754,6 +761,7 @@ def run_import_pipeline(
         "filename": filename,
         "flow": flow,
         "bank": bank,
+        "pdf_password": (pdf_password or "").strip() or None,
         "stage": "extracting",
         "steps": [],
         "warnings": [],
@@ -767,6 +775,8 @@ def run_import_pipeline(
     # TypedDict doesn't love private keys — pass via object mutation in nodes using state get
     try:
         final = graph.invoke(initial)
+    except PdfPasswordRequired:
+        raise
     except Exception as exc:  # noqa: BLE001
         return {
             "protocol": "langgraph-import/v1",

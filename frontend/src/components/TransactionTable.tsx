@@ -16,6 +16,8 @@ export interface Filters {
   order: 'asc' | 'desc'
   bank?: string
   q?: string
+  amount_min?: string
+  amount_max?: string
 }
 
 export type CategoryChangeResult = {
@@ -221,14 +223,23 @@ export function TransactionTable({
 }: Props) {
   return (
     <div className="space-y-3">
-      <div className="panel flex flex-wrap items-end gap-2 p-3">
+      <div className="panel p-3">
+        {showSearch ? (
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-[var(--text)]">Find transactions</h2>
+            <p className="text-xs text-[var(--muted)]">
+              Filter by merchant, category, dates, amount, and more
+            </p>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap items-end gap-2">
         {showSearch ? (
           <label className="flex min-w-[160px] flex-1 flex-col gap-1 text-xs text-[var(--muted)]">
-            Search
+            Merchant / text
             <input
               type="search"
               className={inputClass}
-              placeholder="Merchant or description"
+              placeholder="e.g. Swiggy"
               value={filters.q || ''}
               onChange={(e) => onFiltersChange({ ...filters, q: e.target.value })}
             />
@@ -315,6 +326,30 @@ export function TransactionTable({
             onChange={(e) => onFiltersChange({ ...filters, date_to: e.target.value })}
           />
         </label>
+        {showSearch ? (
+          <>
+            <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+              Min ₹
+              <input
+                inputMode="decimal"
+                className={inputClass}
+                placeholder="0"
+                value={filters.amount_min || ''}
+                onChange={(e) => onFiltersChange({ ...filters, amount_min: e.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+              Max ₹
+              <input
+                inputMode="decimal"
+                className={inputClass}
+                placeholder="Any"
+                value={filters.amount_max || ''}
+                onChange={(e) => onFiltersChange({ ...filters, amount_max: e.target.value })}
+              />
+            </label>
+          </>
+        ) : null}
         <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
           Sort
           <select
@@ -334,6 +369,7 @@ export function TransactionTable({
             <option value="amount:asc">Amount low</option>
           </select>
         </label>
+        </div>
       </div>
 
       <div className="panel overflow-hidden">

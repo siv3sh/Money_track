@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
 import { LoadingBlock, PageHeader } from '../components/ui'
@@ -9,23 +10,33 @@ import { MomCompareStrip } from '../components/spending/MomCompareStrip'
 import { SpendingTrend } from '../components/spending/SpendingTrend'
 import { SubscriptionsCard } from '../components/spending/SubscriptionsCard'
 import { TopMerchants } from '../components/spending/TopMerchants'
-import { TxnSearchPanel } from '../components/spending/TxnSearchPanel'
 import {
-  EMPTY_SEARCH_FILTERS,
   lifestyleCategories,
   resolveAnomalies,
   resolveMomCompare,
-  type SpendingSearchFilters,
 } from '../components/spending/utils'
 
+function buildTxnSearchUrl(opts: {
+  merchant?: string
+  category?: string
+  dateFrom?: string
+  dateTo?: string
+  amountMin?: string
+}): string {
+  const p = new URLSearchParams()
+  if (opts.merchant) p.set('q', opts.merchant)
+  if (opts.category) p.set('category', opts.category)
+  if (opts.dateFrom) p.set('date_from', opts.dateFrom)
+  if (opts.dateTo) p.set('date_to', opts.dateTo)
+  if (opts.amountMin) p.set('amount_min', opts.amountMin)
+  p.set('type', 'debit')
+  const qs = p.toString()
+  return qs ? `/transactions?${qs}` : '/transactions'
+}
+
 export function SpendingPage() {
+  const navigate = useNavigate()
   const { data, loading, error, dateFrom, dateTo } = useFilters()
-  const [searchFilters, setSearchFilters] = useState<SpendingSearchFilters>(EMPTY_SEARCH_FILTERS)
-  const [applyRequest, setApplyRequest] = useState<{
-    id: number
-    filters: SpendingSearchFilters
-  } | null>(null)
-  const searchPanelRef = useRef<HTMLDivElement>(null)
 
   const cats = useMemo(
     () => lifestyleCategories(data?.by_category_lifestyle, data?.by_category),
@@ -49,31 +60,27 @@ export function SpendingPage() {
     [data?.alerts, data?.lifestyle_category_monthly, data?.category_monthly, cats],
   )
 
-  const pushToSearch = useCallback(
-    (patch: Partial<SpendingSearchFilters>) => {
-      const next: SpendingSearchFilters = {
-        ...EMPTY_SEARCH_FILTERS,
-        dateFrom: dateFrom || '',
-        dateTo: dateTo || '',
-        ...patch,
-      }
-      setSearchFilters(next)
-      setApplyRequest({ id: Date.now(), filters: next })
-      requestAnimationFrame(() => {
-        searchPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
+  const openFindTxns = useCallback(
+    (opts: { merchant?: string; category?: string; amountMin?: string }) => {
+      navigate(
+        buildTxnSearchUrl({
+          ...opts,
+          dateFrom: dateFrom || undefined,
+          dateTo: dateTo || undefined,
+        }),
+      )
     },
-    [dateFrom, dateTo],
+    [navigate, dateFrom, dateTo],
   )
 
   const onCategoryClick = useCallback(
-    (category: string) => pushToSearch({ category, merchant: '' }),
-    [pushToSearch],
+    (category: string) => openFindTxns({ category }),
+    [openFindTxns],
   )
 
   const onMerchantClick = useCallback(
-    (merchant: string) => pushToSearch({ merchant, category: '' }),
-    [pushToSearch],
+    (merchant: string) => openFindTxns({ merchant }),
+    [openFindTxns],
   )
 
   const onAnomalyClick = useCallback(
@@ -81,15 +88,14 @@ export function SpendingPage() {
       const amountMin =
         item.amount != null && item.amount > 0
           ? String(Math.floor(item.amount * 0.95))
-          : ''
-      pushToSearch({
-        merchant: item.merchant || '',
-        category: item.category || '',
+          : undefined
+      openFindTxns({
+        merchant: item.merchant || undefined,
+        category: item.category || undefined,
         amountMin,
-        amountMax: '',
       })
     },
-    [pushToSearch],
+    [openFindTxns],
   )
 
   return (
@@ -117,13 +123,6 @@ export function SpendingPage() {
           <BudgetVsActual budgets={data.budgets} categories={cats} />
           <SubscriptionsCard merchants={data.recurring?.merchants || []} />
           <AnomalyFlags items={anomalies} onAnomalyClick={onAnomalyClick} />
-          <TxnSearchPanel
-            filters={searchFilters}
-            onFiltersChange={setSearchFilters}
-            applyRequest={applyRequest}
-            categoryOptions={cats.map((c) => c.name)}
-            panelRef={searchPanelRef}
-          />
         </>
       ) : null}
     </div>

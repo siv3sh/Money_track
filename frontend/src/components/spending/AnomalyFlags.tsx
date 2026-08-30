@@ -13,7 +13,7 @@ export function AnomalyFlags({
   return (
     <ChartCard
       title="Anomaly flags"
-      subtitle="Click a row to track it in Find transactions — txn spikes and category over 1.5× trailing avg"
+      subtitle="Click a row to open Find transactions — txn spikes and category over 1.5× trailing avg"
       className="mb-5"
     >
       {!items.length ? (

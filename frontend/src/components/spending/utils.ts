@@ -1,23 +1,5 @@
 import type { AnalyticsAlert, BreakdownRow, MonthlyRow } from '../../types'
 
-export type SpendingSearchFilters = {
-  merchant: string
-  category: string
-  dateFrom: string
-  dateTo: string
-  amountMin: string
-  amountMax: string
-}
-
-export const EMPTY_SEARCH_FILTERS: SpendingSearchFilters = {
-  merchant: '',
-  category: '',
-  dateFrom: '',
-  dateTo: '',
-  amountMin: '',
-  amountMax: '',
-}
-
 /** Lifestyle categories for the donut (excludes Transfers / Investments / Income). */
 export function lifestyleCategories(
   lifestyle: BreakdownRow[] | undefined,
@@ -135,7 +117,7 @@ const TRAIL_MONTHS = 3
 /**
  * Combine transaction-level anomaly alerts with category spikes
  * (>1.5× trailing 3-month average). Both are tracked so users can
- * click through into Find transactions.
+ * click through into Find transactions on the Transactions page.
  */
 export function resolveAnomalies(args: {
   alerts: AnalyticsAlert[] | undefined

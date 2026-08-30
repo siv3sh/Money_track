@@ -284,6 +284,8 @@ export interface TransactionQuery {
   sort?: 'received_at' | 'amount'
   order?: 'asc' | 'desc'
   q?: string
+  amount_min?: number
+  amount_max?: number
 }
 
 export function fetchTransactions(query: TransactionQuery = {}): Promise<Transaction[]> {
@@ -299,6 +301,8 @@ export function fetchTransactions(query: TransactionQuery = {}): Promise<Transac
   if (query.sort) params.set('sort', query.sort)
   if (query.order) params.set('order', query.order)
   if (query.q) params.set('q', query.q)
+  if (query.amount_min != null) params.set('amount_min', String(query.amount_min))
+  if (query.amount_max != null) params.set('amount_max', String(query.amount_max))
   const qs = params.toString()
   return request(`/transactions${qs ? `?${qs}` : ''}`)
 }
@@ -430,14 +434,21 @@ export async function uploadStatementFile(
   file: File,
   bank?: string,
   format: 'auto' | 'csv' | 'text' = 'auto',
+  password?: string,
 ): Promise<StatementImportResult> {
   const form = new FormData()
   form.append('file', file)
   if (bank) form.append('bank', bank)
   form.append('format', format)
+  const pwd = password?.trim()
+  if (pwd) form.append('password', pwd)
 
+  const token = getStoredToken()
   const res = await fetch(`${API_BASE}/statements/upload`, {
     method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: form,
   })
   if (!res.ok) {

@@ -672,10 +672,41 @@ def parse_statement_excel(
     return best
 
 
+class PdfPasswordRequired(Exception):
+    """PDF is encrypted; password missing or incorrect."""
+
+
+def open_statement_pdf(raw: bytes, *, password: Optional[str] = None):
+    """Open a statement PDF; raise PdfPasswordRequired if locked / wrong password."""
+    import pdfplumber
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+    from pdfplumber.utils.exceptions import PdfminerException
+
+    kwargs: dict[str, Any] = {}
+    if password:
+        kwargs["password"] = password
+    try:
+        return pdfplumber.open(io.BytesIO(raw), **kwargs)
+    except PDFPasswordIncorrect as exc:
+        raise PdfPasswordRequired(
+            "This PDF is password-protected. Enter the statement password "
+            "(banks often use DOB as DDMMYYYY, PAN, or last 4–6 digits of the account/card)."
+        ) from exc
+    except PdfminerException as exc:
+        inner = exc.args[0] if exc.args else None
+        if isinstance(inner, PDFPasswordIncorrect) or "PasswordIncorrect" in type(inner).__name__:
+            raise PdfPasswordRequired(
+                "This PDF is password-protected. Enter the statement password "
+                "(banks often use DOB as DDMMYYYY, PAN, or last 4–6 digits of the account/card)."
+            ) from exc
+        raise
+
+
 def parse_statement_pdf(
     raw: bytes,
     *,
     bank: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> list[tuple[Transaction, datetime]]:
     """
     Parse PDF bank statements:
@@ -683,12 +714,10 @@ def parse_statement_pdf(
     2) plain text line parsing
     Prefer whichever yields more unique rows (tables can be partial).
     """
-    import pdfplumber
-
     table_pairs: list[tuple[Transaction, datetime]] = []
     text_chunks: list[str] = []
 
-    with pdfplumber.open(io.BytesIO(raw)) as pdf:
+    with open_statement_pdf(raw, password=password) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables() or []
             for table in tables:

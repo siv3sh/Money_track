@@ -46,6 +46,8 @@ function filtersFromParams(params: URLSearchParams): Filters & { bank: string; q
     order: (params.get('order') as Filters['order']) || 'desc',
     bank: params.get('source') || params.get('bank') || '',
     q: params.get('q') || params.get('search') || '',
+    amount_min: params.get('amount_min') || '',
+    amount_max: params.get('amount_max') || '',
   }
 }
 
@@ -58,6 +60,8 @@ function paramsFromFilters(f: Filters & { bank: string; q: string }, page: numbe
   if (f.date_to) p.set('date_to', f.date_to)
   if (f.bank) p.set('source', f.bank)
   if (f.q) p.set('q', f.q)
+  if (f.amount_min) p.set('amount_min', f.amount_min)
+  if (f.amount_max) p.set('amount_max', f.amount_max)
   if (f.sort !== 'received_at') p.set('sort', f.sort)
   if (f.order !== 'desc') p.set('order', f.order)
   if (page > 0) p.set('page', String(page))
@@ -112,6 +116,14 @@ export function TransactionsPage() {
         sort: filters.sort,
         order: filters.order,
         q: filters.q || undefined,
+        amount_min: (() => {
+          const n = Number(String(filters.amount_min || '').replace(/,/g, ''))
+          return filters.amount_min && !Number.isNaN(n) ? n : undefined
+        })(),
+        amount_max: (() => {
+          const n = Number(String(filters.amount_max || '').replace(/,/g, ''))
+          return filters.amount_max && !Number.isNaN(n) ? n : undefined
+        })(),
       })
       setRows(data)
       setHasMore(data.length >= PAGE_SIZE)
@@ -139,6 +151,8 @@ export function TransactionsPage() {
     filters.bank && `Source: ${filters.bank}`,
     filters.type && `Type: ${filters.type}`,
     filters.q && `Search: ${filters.q}`,
+    filters.amount_min && `Min: ₹${filters.amount_min}`,
+    filters.amount_max && `Max: ₹${filters.amount_max}`,
     filters.date_from && `From: ${filters.date_from}`,
     filters.date_to && `To: ${filters.date_to}`,
   ].filter(Boolean) as string[]
@@ -174,6 +188,8 @@ export function TransactionsPage() {
                 order: 'desc',
                 bank: '',
                 q: '',
+                amount_min: '',
+                amount_max: '',
               })
             }
           >
@@ -252,6 +268,14 @@ export function TransactionsPage() {
             ...next,
             bank: 'bank' in next ? String((next as { bank?: string }).bank || '') : filters.bank,
             q: 'q' in next ? String((next as { q?: string }).q || '') : filters.q,
+            amount_min:
+              'amount_min' in next
+                ? String((next as { amount_min?: string }).amount_min || '')
+                : filters.amount_min,
+            amount_max:
+              'amount_max' in next
+                ? String((next as { amount_max?: string }).amount_max || '')
+                : filters.amount_max,
           })
         }
         onPageChange={(p) => {

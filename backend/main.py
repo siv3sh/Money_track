@@ -43,6 +43,7 @@ from agents.import_graph import (
     feedback_merchant_correction,
     run_import_pipeline,
 )
+from statement_parser import PdfPasswordRequired
 from rag.vector_store import get_vector_store
 from categorizer import CATEGORIES, apply_category
 from cc_payment_pairing import apply_cc_payoff_tags, scan_and_tag_payoffs
@@ -411,6 +412,7 @@ def _run_statement_langgraph(
     filename: str,
     *,
     bank: str | None = None,
+    pdf_password: str | None = None,
     user_id: ObjectId | None = None,
 ) -> dict[str, Any]:
     exact, soft = _cross_source_fingerprints(user_id=user_id)
@@ -419,6 +421,7 @@ def _run_statement_langgraph(
         filename,
         flow="statement",
         bank=bank,
+        pdf_password=pdf_password,
         merchant_memory=_load_merchant_memory(user_id=user_id),
         exact_fps=exact,
         soft_fps=soft,
@@ -1938,6 +1941,7 @@ async def upload_statement(
     file: UploadFile = File(...),
     bank: str | None = Form(default=None),
     format: str = Form(default="auto"),
+    password: str | None = Form(default=None),
 ):
     """Upload statement via LangGraph: extract → map → categorize → validate → review."""
     bank_s = (bank or "").strip() or None
@@ -1959,13 +1963,17 @@ async def upload_statement(
     if len(raw) > max_bytes:
         raise HTTPException(status_code=400, detail="File too large (max 5–8MB)")
 
+    pdf_password = (password or "").strip() or None
     try:
         return _run_statement_langgraph(
             raw,
             file.filename or name,
             bank=bank_s,
+            pdf_password=pdf_password,
             user_id=_require_user_id(request),
         )
+    except PdfPasswordRequired as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=422,
@@ -1987,6 +1995,8 @@ def list_transactions(
     sort: str = Query(default="received_at", pattern="^(received_at|amount)$"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
     q: str | None = Query(default=None, max_length=120),
+    amount_min: float | None = Query(default=None, ge=0),
+    amount_max: float | None = Query(default=None, ge=0),
 ):
     query: dict[str, Any] = {"user_id": _require_user_id(request)}
     if card_type:
@@ -2004,6 +2014,14 @@ def list_transactions(
             {"raw_text": {"$regex": needle, "$options": "i"}},
             {"merchant_raw": {"$regex": needle, "$options": "i"}},
         ]
+
+    amount_filter: dict[str, Any] = {}
+    if amount_min is not None:
+        amount_filter["$gte"] = float(amount_min)
+    if amount_max is not None:
+        amount_filter["$lte"] = float(amount_max)
+    if amount_filter:
+        query["amount"] = amount_filter
 
     received_filter: dict[str, Any] = {}
     if date_from:
