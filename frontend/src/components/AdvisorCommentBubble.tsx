@@ -1,4 +1,5 @@
 import type { AdvisorComment, GoalImpact } from '../api'
+import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 
 export function AdvisorCommentBubble({
   comment,
@@ -9,11 +10,12 @@ export function AdvisorCommentBubble({
   impact?: GoalImpact | null
   className?: string
 }) {
+  const { enabled } = useAdvisorSettings()
   const text =
     typeof comment === 'string'
       ? comment
       : comment?.comment || impact?.comment || null
-  if (!text) return null
+  if (!enabled || !text) return null
   const severity =
     typeof comment === 'object' && comment?.advisor_severity
       ? comment.advisor_severity

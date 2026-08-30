@@ -1,9 +1,11 @@
 import { X } from 'lucide-react'
 import { APP_NAV } from '../lib/navConfig'
+import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 import { ALWAYS_VISIBLE_NAV, useNavVisibility } from '../hooks/useNavVisibility'
 
 export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { visible, toggle, showAll } = useNavVisibility()
+  const { enabled: advisorEnabled } = useAdvisorSettings()
 
   if (!open) return null
 
@@ -27,6 +29,9 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
             </h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
               Tick only the pages you use. Dashboard and Profile stay on so you can always find settings.
+              {!advisorEnabled
+                ? ' Advisor is off in Profile — the Advisor page stays hidden until you turn it back on.'
+                : null}
             </p>
           </div>
           <button type="button" className="btn" aria-label="Close" onClick={onClose}>
@@ -35,7 +40,7 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
         </div>
 
         <ul className="max-h-[50vh] space-y-1 overflow-y-auto">
-          {APP_NAV.map((item) => {
+          {APP_NAV.filter((item) => advisorEnabled || item.id !== 'planning').map((item) => {
             const locked = ALWAYS_VISIBLE_NAV.includes(item.id)
             const checked = visible[item.id] !== false
             return (

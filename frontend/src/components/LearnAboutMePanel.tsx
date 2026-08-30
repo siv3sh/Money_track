@@ -11,6 +11,7 @@ import {
   type LearnQuestion,
   type LearnedFact,
 } from '../api'
+import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 import { ChartCard } from './ui'
 import { DEFAULT_CATEGORIES } from '../types'
 
@@ -24,6 +25,18 @@ const FACT_TYPE_OPTIONS = [
 ] as const
 
 export function LearnAboutMePanel({
+  dateFrom,
+  dateTo,
+}: {
+  dateFrom?: string
+  dateTo?: string
+}) {
+  const { enabled } = useAdvisorSettings()
+  if (!enabled) return null
+  return <LearnAboutMePanelInner dateFrom={dateFrom} dateTo={dateTo} />
+}
+
+function LearnAboutMePanelInner({
   dateFrom,
   dateTo,
 }: {

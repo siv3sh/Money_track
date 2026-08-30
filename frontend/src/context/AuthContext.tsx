@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import {
+  API_BASE,
   fetchMe,
   getStoredToken,
   loginRequest,
@@ -60,6 +61,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true
     }
   }, [])
+
+  // Keep Render free tier warm while the tab is open (cold starts are ~15–60s).
+  useEffect(() => {
+    if (!user) return
+    const ping = () => {
+      void fetch(`${API_BASE}/health`).catch(() => undefined)
+    }
+    ping()
+    const id = window.setInterval(ping, 8 * 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [user])
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await loginRequest(email, password)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { CheckCircle2, Circle, UserRound } from 'lucide-react'
+import { CheckCircle2, Circle, Sparkles, UserRound } from 'lucide-react'
 import {
   createLearnedFact,
   deleteLearnedFact,
@@ -13,10 +13,12 @@ import {
   type PlanningGoal,
 } from '../api'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
+import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 
 const RELATION_OPTIONS = ['Mom', 'Dad', 'Spouse', 'Sibling', 'Family', 'Friend', 'Roommate', 'Other']
 
 export function ProfilePage() {
+  const { enabled: advisorEnabled, setEnabled: setAdvisorEnabled } = useAdvisorSettings()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -277,6 +279,48 @@ export function ProfilePage() {
         description="A short checklist so Money Track understands your salary, family, and goals — no tech skills needed."
       />
 
+      <ChartCard
+        title="Money Advisor"
+        subtitle="Turn the floating chat, banners, comments, and Advisor page on or off."
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
+              <Sparkles size={16} />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-[var(--text)]">
+                {advisorEnabled ? 'Advisor is on' : 'Advisor is off'}
+              </p>
+              <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
+                {advisorEnabled
+                  ? 'Chat, nudges, voice banners, and the Advisor page are available.'
+                  : 'All advisor UI is hidden. Goals and salary settings on this page still work.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={advisorEnabled}
+            aria-label={advisorEnabled ? 'Turn advisor off' : 'Turn advisor on'}
+            onClick={() => {
+              setAdvisorEnabled(!advisorEnabled)
+              flash(advisorEnabled ? 'Advisor turned off' : 'Advisor turned on')
+            }}
+            className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
+              advisorEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                advisorEnabled ? 'translate-x-6' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+      </ChartCard>
+
       {error ? (
         <div className="rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
           {error}
@@ -435,6 +479,7 @@ export function ProfilePage() {
         </form>
       </ChartCard>
 
+      {advisorEnabled ? (
       <ChartCard
         title="3. How the advisor coaches you"
         subtitle={`${Math.round(completeness)}% complete — answer what feels useful`}
@@ -472,6 +517,7 @@ export function ProfilePage() {
           </button>
         </form>
       </ChartCard>
+      ) : null}
 
       <ChartCard title="4. Monthly budget caps" subtitle="Soft limits the advisor watches — change anytime">
         {budgets.length ? (

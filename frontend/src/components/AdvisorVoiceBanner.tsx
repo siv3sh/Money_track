@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Sparkles } from 'lucide-react'
+import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 
 export type AdvisorBriefing = {
   preferred_name?: string
@@ -26,6 +27,8 @@ export function AdvisorVoiceBanner({
   advisor?: AdvisorBriefing | null
   className?: string
 }) {
+  const { enabled } = useAdvisorSettings()
+  if (!enabled) return null
   if (!advisor?.headline) return null
   const level = (advisor.level || 'informational').toLowerCase()
   const mood = (advisor.mood || '').toLowerCase()

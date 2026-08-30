@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
+import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 import { useNavVisibility } from '../hooks/useNavVisibility'
 import { APP_NAV } from '../lib/navConfig'
 import { AccountMenu } from './AccountMenu'
@@ -20,7 +21,11 @@ const FILTER_ANALYTICS_PATHS = new Set([
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { isVisible } = useNavVisibility()
-  const shownNav = APP_NAV.filter((item) => isVisible(item.id))
+  const { enabled: advisorEnabled } = useAdvisorSettings()
+  const shownNav = APP_NAV.filter((item) => {
+    if (item.id === 'planning' && !advisorEnabled) return false
+    return isVisible(item.id)
+  })
   const location = useLocation()
   const loadSharedAnalytics = FILTER_ANALYTICS_PATHS.has(location.pathname)
 
@@ -105,7 +110,7 @@ export function AppShell() {
             <Outlet />
           </main>
         </div>
-        <AdvisorChatWidget />
+        {advisorEnabled ? <AdvisorChatWidget /> : null}
       </div>
     </FilterProvider>
   )
