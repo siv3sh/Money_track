@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { CheckCircle2, Circle, Sparkles, UserRound } from 'lucide-react'
+import { CheckCircle2, Circle, Sparkles, UserRound, Wallet } from 'lucide-react'
 import {
   createLearnedFact,
   deleteLearnedFact,
@@ -14,11 +14,13 @@ import {
 } from '../api'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
+import { useWealthSettings } from '../hooks/useWealthSettings'
 
 const RELATION_OPTIONS = ['Mom', 'Dad', 'Spouse', 'Sibling', 'Family', 'Friend', 'Roommate', 'Other']
 
 export function ProfilePage() {
   const { enabled: advisorEnabled, setEnabled: setAdvisorEnabled } = useAdvisorSettings()
+  const { enabled: wealthEnabled, setEnabled: setWealthEnabled } = useWealthSettings()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -315,6 +317,48 @@ export function ProfilePage() {
             <span
               className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
                 advisorEnabled ? 'translate-x-6' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+      </ChartCard>
+
+      <ChartCard
+        title="Wealth"
+        subtitle="Show or hide the Wealth page and INDmoney import."
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
+              <Wallet size={16} />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-[var(--text)]">
+                {wealthEnabled ? 'Wealth is on' : 'Wealth is off'}
+              </p>
+              <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
+                {wealthEnabled
+                  ? 'Net worth, holdings, and INDmoney import stay in the menu.'
+                  : 'Wealth and INDmoney pages are hidden until you turn this back on.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={wealthEnabled}
+            aria-label={wealthEnabled ? 'Turn wealth off' : 'Turn wealth on'}
+            onClick={() => {
+              setWealthEnabled(!wealthEnabled)
+              flash(wealthEnabled ? 'Wealth turned off' : 'Wealth turned on')
+            }}
+            className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
+              wealthEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                wealthEnabled ? 'translate-x-6' : 'translate-x-0'
               }`}
             />
           </button>

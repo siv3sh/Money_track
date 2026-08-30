@@ -119,6 +119,7 @@ def build_analytics(
     budgets: Collection | None = None,
     learned_facts: Collection | None = None,
     user_id: Any = None,
+    lite: bool = False,
 ) -> dict[str, Any]:
     match = _match_range(date_from, date_to, banks=banks, user_id=user_id)
     base = [{"$match": match}] if match else []
@@ -239,69 +240,71 @@ def build_analytics(
         if r.get("_id")
     ]
 
-    # Weekday
-    weekday_map = {
-        1: "Sun",
-        2: "Mon",
-        3: "Tue",
-        4: "Wed",
-        5: "Thu",
-        6: "Fri",
-        7: "Sat",
-    }
-    weekday = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "debit"}},
-                {
-                    "$group": {
-                        "_id": {"$dayOfWeek": "$received_at"},
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]
-        )
-    )
-    weekday_rows = [
-        {
-            "day": weekday_map.get(int(r["_id"]), str(r["_id"])),
-            "dow": int(r["_id"]),
-            "amount": float(r.get("amount") or 0),
-            "count": int(r.get("count") or 0),
+    # Weekday / day-of-month — skip on lite (charts don't use them)
+    weekday_rows: list[dict[str, Any]] = []
+    day_of_month: list[dict[str, Any]] = []
+    if not lite:
+        weekday_map = {
+            1: "Sun",
+            2: "Mon",
+            3: "Tue",
+            4: "Wed",
+            5: "Thu",
+            6: "Fri",
+            7: "Sat",
         }
-        for r in weekday
-        if r.get("_id") is not None
-    ]
+        weekday = list(
+            transactions.aggregate(
+                base
+                + [
+                    {"$match": {"type": "debit"}},
+                    {
+                        "$group": {
+                            "_id": {"$dayOfWeek": "$received_at"},
+                            "amount": {"$sum": "$amount"},
+                            "count": {"$sum": 1},
+                        }
+                    },
+                    {"$sort": {"_id": 1}},
+                ]
+            )
+        )
+        weekday_rows = [
+            {
+                "day": weekday_map.get(int(r["_id"]), str(r["_id"])),
+                "dow": int(r["_id"]),
+                "amount": float(r.get("amount") or 0),
+                "count": int(r.get("count") or 0),
+            }
+            for r in weekday
+            if r.get("_id") is not None
+        ]
 
-    # Day of month heatmap (1-31)
-    dom = list(
-        transactions.aggregate(
-            base
-            + [
-                {"$match": {"type": "debit"}},
-                {
-                    "$group": {
-                        "_id": {"$dayOfMonth": "$received_at"},
-                        "amount": {"$sum": "$amount"},
-                        "count": {"$sum": 1},
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]
+        dom = list(
+            transactions.aggregate(
+                base
+                + [
+                    {"$match": {"type": "debit"}},
+                    {
+                        "$group": {
+                            "_id": {"$dayOfMonth": "$received_at"},
+                            "amount": {"$sum": "$amount"},
+                            "count": {"$sum": 1},
+                        }
+                    },
+                    {"$sort": {"_id": 1}},
+                ]
+            )
         )
-    )
-    day_of_month = [
-        {
-            "day": int(r["_id"]),
-            "amount": float(r.get("amount") or 0),
-            "count": int(r.get("count") or 0),
-        }
-        for r in dom
-        if r.get("_id") is not None
-    ]
+        day_of_month = [
+            {
+                "day": int(r["_id"]),
+                "amount": float(r.get("amount") or 0),
+                "count": int(r.get("count") or 0),
+            }
+            for r in dom
+            if r.get("_id") is not None
+        ]
 
     # Category × month (for stacked area)
     cat_month = list(
@@ -391,51 +394,53 @@ def build_analytics(
 
     # Merchants + recurring, grouped by normalized label so statement
     # reference numbers don't split one merchant into many
-    merchant_totals: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"amount": 0.0, "count": 0.0}
-    )
-    for doc in transactions.find(
-        {**match, "type": "debit", "merchant": {"$nin": [None, ""]}},
-        {"merchant": 1, "raw_text": 1, "amount": 1},
-    ):
-        label = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
-        merchant_totals[label]["amount"] += float(doc.get("amount") or 0)
-        merchant_totals[label]["count"] += 1
-
-    merchant_sorted = sorted(
-        merchant_totals.items(), key=lambda kv: -kv[1]["amount"]
-    )
-    merchant_rows = [
-        {
-            "merchant": name,
-            "amount": vals["amount"],
-            "count": int(vals["count"]),
-            "avg": round(vals["amount"] / max(vals["count"], 1), 2),
-            "share": round(vals["amount"] / total_debit * 100, 1) if total_debit else 0.0,
-        }
-        for name, vals in merchant_sorted[:15]
-    ]
-
-    # Recurring vs one-time (merchant appears ≥3 times = recurring)
+    merchant_rows: list[dict[str, Any]] = []
     recurring_amount = 0.0
     onetime_amount = 0.0
-    recurring_merchants = []
-    for name, vals in merchant_sorted:
-        amt = vals["amount"]
-        cnt = int(vals["count"])
-        if cnt >= 3:
-            recurring_amount += amt
-            recurring_merchants.append(
-                {
-                    "merchant": name,
-                    "amount": amt,
-                    "count": cnt,
-                    "avg": round(amt / cnt, 2),
-                }
-            )
-        else:
-            onetime_amount += amt
-    recurring_merchants.sort(key=lambda x: -x["amount"])
+    recurring_merchants: list[dict[str, Any]] = []
+    if not lite:
+        merchant_totals: dict[str, dict[str, float]] = defaultdict(
+            lambda: {"amount": 0.0, "count": 0.0}
+        )
+        for doc in transactions.find(
+            {**match, "type": "debit", "merchant": {"$nin": [None, ""]}},
+            {"merchant": 1, "raw_text": 1, "amount": 1},
+        ):
+            label = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
+            merchant_totals[label]["amount"] += float(doc.get("amount") or 0)
+            merchant_totals[label]["count"] += 1
+
+        merchant_sorted = sorted(
+            merchant_totals.items(), key=lambda kv: -kv[1]["amount"]
+        )
+        merchant_rows = [
+            {
+                "merchant": name,
+                "amount": vals["amount"],
+                "count": int(vals["count"]),
+                "avg": round(vals["amount"] / max(vals["count"], 1), 2),
+                "share": round(vals["amount"] / total_debit * 100, 1) if total_debit else 0.0,
+            }
+            for name, vals in merchant_sorted[:15]
+        ]
+
+        # Recurring vs one-time (merchant appears ≥3 times = recurring)
+        for name, vals in merchant_sorted:
+            amt = vals["amount"]
+            cnt = int(vals["count"])
+            if cnt >= 3:
+                recurring_amount += amt
+                recurring_merchants.append(
+                    {
+                        "merchant": name,
+                        "amount": amt,
+                        "count": cnt,
+                        "avg": round(amt / cnt, 2),
+                    }
+                )
+            else:
+                onetime_amount += amt
+        recurring_merchants.sort(key=lambda x: -x["amount"])
 
     # Account balances (latest non-null balance per bank+last4)
     bal_pipeline = [
@@ -479,91 +484,116 @@ def build_analytics(
     liquid_total = sms_liquid_total
     liquid_source = "sms"
 
-    # Investments inferred — group by canonical instrument, not raw narration
+    # Investments — prefer manual portfolio; only scan SMS invests when needed
     inv_match = {**match, "category": "Investments"}
     inv_base = [{"$match": inv_match}]
-    instrument_totals: dict[str, dict[str, Any]] = {}
-    for doc in transactions.find(
-        {**inv_match, "type": "debit"}, {"merchant": 1, "raw_text": 1, "amount": 1}
-    ):
-        instrument, asset_class = _instrument_for(doc.get("merchant"), doc.get("raw_text"))
-        bucket = instrument_totals.setdefault(
-            instrument,
-            {"asset_class": asset_class, "invested": 0.0, "count": 0},
-        )
-        bucket["invested"] += float(doc.get("amount") or 0)
-        bucket["count"] += 1
-
-    inv_monthly = list(
-        transactions.aggregate(
-            inv_base
-            + [
-                {
-                    "$group": {
-                        "_id": {
-                            "$dateToString": {
-                                "format": "%Y-%m",
-                                "date": "$received_at",
-                                "timezone": "Asia/Kolkata",
-                            }
-                        },
-                        "invested": {
-                            "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
-                        },
-                        "returned": {
-                            "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
-                        },
-                    }
-                },
-                {"$sort": {"_id": 1}},
-            ]
-        )
-    )
-    total_invested = sum(v["invested"] for v in instrument_totals.values())
-    # Inferred holdings from transactions (cost basis, P&L 0)
-    holdings = [
-        {
-            "name": name,
-            "asset_class": vals["asset_class"],
-            "invested": vals["invested"],
-            "current_value": vals["invested"],
-            "pnl": 0.0,
-            "pnl_pct": 0.0,
-            "count": vals["count"],
-        }
-        for name, vals in sorted(
-            instrument_totals.items(), key=lambda kv: -kv[1]["invested"]
-        )
-    ]
-    total_current = total_invested
+    holdings: list[dict[str, Any]] = []
+    total_invested = 0.0
+    total_current = 0.0
     total_pnl = 0.0
     inv_note = "Current value equals cost basis until you add market prices."
+    inv_monthly_rows: list[dict[str, Any]] = []
 
-    # If a manual portfolio exists (market values from broker apps), it wins
+    manual: list[dict[str, Any]] = []
     if portfolio is not None:
-        manual = list(portfolio.find())
-        if manual:
-            holdings = []
-            for doc in manual:
-                invested = float(doc.get("invested") or 0)
-                current = float(doc.get("current_value") or 0)
-                pnl = current - invested
-                holdings.append(
+        try:
+            manual = list(portfolio.find())
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load portfolio: {exc}")
+            manual = []
+
+    if manual:
+        for doc in manual:
+            invested = float(doc.get("invested") or 0)
+            current = float(doc.get("current_value") or 0)
+            pnl = current - invested
+            holdings.append(
+                {
+                    "name": str(doc.get("name") or "Unknown"),
+                    "asset_class": str(doc.get("asset_class") or "Other Investments"),
+                    "invested": invested,
+                    "current_value": current,
+                    "pnl": round(pnl, 2),
+                    "pnl_pct": round(pnl / invested * 100, 2) if invested else 0.0,
+                    "count": 0,
+                }
+            )
+        holdings.sort(key=lambda h: -h["current_value"])
+        total_invested = sum(h["invested"] for h in holdings)
+        total_current = sum(h["current_value"] for h in holdings)
+        total_pnl = round(total_current - total_invested, 2)
+        inv_note = "Market values from your portfolio — update them on this page."
+    else:
+        instrument_totals: dict[str, dict[str, Any]] = {}
+        for doc in transactions.find(
+            {**inv_match, "type": "debit"}, {"merchant": 1, "raw_text": 1, "amount": 1}
+        ):
+            instrument, asset_class = _instrument_for(doc.get("merchant"), doc.get("raw_text"))
+            bucket = instrument_totals.setdefault(
+                instrument,
+                {"asset_class": asset_class, "invested": 0.0, "count": 0},
+            )
+            bucket["invested"] += float(doc.get("amount") or 0)
+            bucket["count"] += 1
+        total_invested = sum(v["invested"] for v in instrument_totals.values())
+        holdings = [
+            {
+                "name": name,
+                "asset_class": vals["asset_class"],
+                "invested": vals["invested"],
+                "current_value": vals["invested"],
+                "pnl": 0.0,
+                "pnl_pct": 0.0,
+                "count": vals["count"],
+            }
+            for name, vals in sorted(
+                instrument_totals.items(), key=lambda kv: -kv[1]["invested"]
+            )
+        ]
+        total_current = total_invested
+        total_pnl = 0.0
+
+    if not lite or not manual:
+        inv_monthly = list(
+            transactions.aggregate(
+                inv_base
+                + [
                     {
-                        "name": str(doc.get("name") or "Unknown"),
-                        "asset_class": str(doc.get("asset_class") or "Other Investments"),
-                        "invested": invested,
-                        "current_value": current,
-                        "pnl": round(pnl, 2),
-                        "pnl_pct": round(pnl / invested * 100, 2) if invested else 0.0,
-                        "count": 0,
-                    }
-                )
-            holdings.sort(key=lambda h: -h["current_value"])
-            total_invested = sum(h["invested"] for h in holdings)
-            total_current = sum(h["current_value"] for h in holdings)
-            total_pnl = round(total_current - total_invested, 2)
-            inv_note = "Market values from your portfolio — update them on this page."
+                        "$group": {
+                            "_id": {
+                                "$dateToString": {
+                                    "format": "%Y-%m",
+                                    "date": "$received_at",
+                                    "timezone": "Asia/Kolkata",
+                                }
+                            },
+                            "invested": {
+                                "$sum": {"$cond": [{"$eq": ["$type", "debit"]}, "$amount", 0]}
+                            },
+                            "returned": {
+                                "$sum": {"$cond": [{"$eq": ["$type", "credit"]}, "$amount", 0]}
+                            },
+                        }
+                    },
+                    {"$sort": {"_id": 1}},
+                ]
+            )
+        )
+        inv_running = 0.0
+        for r in inv_monthly:
+            if not r.get("_id"):
+                continue
+            invested = float(r.get("invested") or 0)
+            returned = float(r.get("returned") or 0)
+            inv_running += invested - returned
+            inv_monthly_rows.append(
+                {
+                    "month": r["_id"],
+                    "invested": invested,
+                    "returned": returned,
+                    "cumulative": round(inv_running, 2),
+                }
+            )
 
     by_asset: dict[str, float] = defaultdict(float)
     for h in holdings:
@@ -571,27 +601,9 @@ def build_analytics(
     asset_allocation = [
         {"name": k, "value": v} for k, v in sorted(by_asset.items(), key=lambda x: -x[1])
     ]
-    inv_monthly_rows = []
-    inv_running = 0.0
-    for r in inv_monthly:
-        if not r.get("_id"):
-            continue
-        invested = float(r.get("invested") or 0)
-        returned = float(r.get("returned") or 0)
-        inv_running += invested - returned
-        inv_monthly_rows.append(
-            {
-                "month": r["_id"],
-                "invested": invested,
-                "returned": returned,
-                "cumulative": round(inv_running, 2),
-            }
-        )
 
     # Income sources (credits by normalized merchant)
-    income_totals: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"amount": 0.0, "count": 0.0, "salary": 0.0}
-    )
+    income_rows: list[dict[str, Any]] = []
     salary_total = 0.0
     salary_count = 0
     salary_needles: list[str] = []
@@ -602,33 +614,38 @@ def build_analytics(
             salary_needles = salary_needles_from_facts(learned_facts)
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load salary keywords: {exc}")
-    for doc in transactions.find(
-        {**match, "type": "credit"}, {"merchant": 1, "raw_text": 1, "category": 1, "amount": 1}
-    ):
-        label = (
-            _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
-            if doc.get("merchant")
-            else str(doc.get("category") or "Other income")
+    if not lite:
+        income_totals: dict[str, dict[str, float]] = defaultdict(
+            lambda: {"amount": 0.0, "count": 0.0, "salary": 0.0}
         )
-        amount = float(doc.get("amount") or 0)
-        income_totals[label]["amount"] += amount
-        income_totals[label]["count"] += 1
-        if is_salary_source(
-            label, doc.get("merchant"), doc.get("raw_text"), extra_needles=salary_needles
+        for doc in transactions.find(
+            {**match, "type": "credit"},
+            {"merchant": 1, "raw_text": 1, "category": 1, "amount": 1},
         ):
-            income_totals[label]["salary"] = 1.0
-            salary_total += amount
-            salary_count += 1
-    income_rows = [
-        {
-            "name": name,
-            "amount": vals["amount"],
-            "count": int(vals["count"]),
-            "is_salary": bool(vals["salary"]),
-        }
-        for name, vals in sorted(income_totals.items(), key=lambda kv: -kv[1]["amount"])[:12]
-    ]
-    salary_total = round(salary_total, 2)
+            label = (
+                _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
+                if doc.get("merchant")
+                else str(doc.get("category") or "Other income")
+            )
+            amount = float(doc.get("amount") or 0)
+            income_totals[label]["amount"] += amount
+            income_totals[label]["count"] += 1
+            if is_salary_source(
+                label, doc.get("merchant"), doc.get("raw_text"), extra_needles=salary_needles
+            ):
+                income_totals[label]["salary"] = 1.0
+                salary_total += amount
+                salary_count += 1
+        income_rows = [
+            {
+                "name": name,
+                "amount": vals["amount"],
+                "count": int(vals["count"]),
+                "is_salary": bool(vals["salary"]),
+            }
+            for name, vals in sorted(income_totals.items(), key=lambda kv: -kv[1]["amount"])[:12]
+        ]
+        salary_total = round(salary_total, 2)
     other_income_total = round(total_credit - salary_total, 2)
 
     by_category = group_breakdown("category")
@@ -653,28 +670,40 @@ def build_analytics(
     )
 
     # Credit-card purchases (merchants) — kept separate from bank/UPI lifestyle
-    cc_merchants: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"amount": 0.0, "count": 0.0}
-    )
+    credit_card_merchants: list[dict[str, Any]] = []
     cc_count = 0
-    for doc in transactions.find(
-        {**match, "type": "debit", "card_type": "credit_card"},
-        {"merchant": 1, "raw_text": 1, "amount": 1, "category": 1},
-    ):
-        label = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
-        amt = float(doc.get("amount") or 0)
-        cc_merchants[label]["amount"] += amt
-        cc_merchants[label]["count"] += 1
-        cc_count += 1
-    credit_card_merchants = [
-        {
-            "merchant": name,
-            "amount": round(vals["amount"], 2),
-            "count": int(vals["count"]),
-            "share": round(vals["amount"] / credit_card_spend * 100, 1) if credit_card_spend else 0.0,
-        }
-        for name, vals in sorted(cc_merchants.items(), key=lambda kv: -kv[1]["amount"])[:15]
-    ]
+    if not lite:
+        cc_merchants: dict[str, dict[str, float]] = defaultdict(
+            lambda: {"amount": 0.0, "count": 0.0}
+        )
+        for doc in transactions.find(
+            {**match, "type": "debit", "card_type": "credit_card"},
+            {"merchant": 1, "raw_text": 1, "amount": 1, "category": 1},
+        ):
+            label = _clean_merchant_label(doc.get("merchant"), doc.get("raw_text"))
+            amt = float(doc.get("amount") or 0)
+            cc_merchants[label]["amount"] += amt
+            cc_merchants[label]["count"] += 1
+            cc_count += 1
+        credit_card_merchants = [
+            {
+                "merchant": name,
+                "amount": round(vals["amount"], 2),
+                "count": int(vals["count"]),
+                "share": round(vals["amount"] / credit_card_spend * 100, 1)
+                if credit_card_spend
+                else 0.0,
+            }
+            for name, vals in sorted(cc_merchants.items(), key=lambda kv: -kv[1]["amount"])[:15]
+        ]
+    else:
+        cc_count = int(
+            next(
+                (r.get("count") for r in by_card_type if r.get("name") == "credit_card"),
+                0,
+            )
+            or 0
+        )
 
     # Lifestyle excludes Transfers/Investments/Income AND paired bank→card payoffs
     lifestyle_match = {**match, **cc_payoff_lifestyle_exclusion()}
@@ -703,8 +732,12 @@ def build_analytics(
     )
     cc_payoff_total = float((payoff_agg[0] if payoff_agg else {}).get("total") or 0)
     cc_payoff_count = int((payoff_agg[0] if payoff_agg else {}).get("count") or 0)
-    ambiguous_payoffs = transactions.count_documents(
-        {**match, "type": "debit", "cc_payoff_status": "ambiguous"}
+    ambiguous_payoffs = (
+        0
+        if lite
+        else transactions.count_documents(
+            {**match, "type": "debit", "cc_payoff_status": "ambiguous"}
+        )
     )
 
     lifestyle_category_monthly = []
@@ -717,42 +750,51 @@ def build_analytics(
         lifestyle_category_monthly.append(filtered)
 
     # Wallet / FASTag spends — informational only, excluded from all totals above
-    wallet_match = {**match, "card_type": "wallet"}
     wallet_total = 0.0
     wallet_count = 0
     wallet_recent: list[dict[str, Any]] = []
-    for doc in (
-        transactions.find(
-            {**wallet_match, "type": "debit"},
-            {"merchant": 1, "raw_text": 1, "amount": 1, "received_at": 1},
-        )
-        .sort("received_at", -1)
-        .limit(200)
-    ):
-        amt = float(doc.get("amount") or 0)
-        wallet_total += amt
-        wallet_count += 1
-        if len(wallet_recent) < 10:
-            ts = doc.get("received_at")
-            wallet_recent.append(
-                {
-                    "merchant": _clean_merchant_label(doc.get("merchant"), doc.get("raw_text")),
-                    "amount": amt,
-                    "received_at": ts.isoformat() if isinstance(ts, datetime) else None,
-                }
+    if not lite:
+        wallet_match = {**match, "card_type": "wallet"}
+        for doc in (
+            transactions.find(
+                {**wallet_match, "type": "debit"},
+                {"merchant": 1, "raw_text": 1, "amount": 1, "received_at": 1},
             )
+            .sort("received_at", -1)
+            .limit(200)
+        ):
+            amt = float(doc.get("amount") or 0)
+            wallet_total += amt
+            wallet_count += 1
+            if len(wallet_recent) < 10:
+                ts = doc.get("received_at")
+                wallet_recent.append(
+                    {
+                        "merchant": _clean_merchant_label(doc.get("merchant"), doc.get("raw_text")),
+                        "amount": amt,
+                        "received_at": ts.isoformat() if isinstance(ts, datetime) else None,
+                    }
+                )
 
     # MoM change for KPIs
     mom = _mom_change(monthly_rows)
 
     active_days = len(daily_rows)
-    # Always expose full bank list for the filter UI (unscoped)
-    banks_list = sorted(
-        {
-            str(doc.get("bank") or "Unknown")
-            for doc in transactions.find({}, {"bank": 1})
-        }
-    )
+    # Bank filter list — distinct is far cheaper than scanning every doc
+    bank_q: dict[str, Any] = {}
+    if user_id is not None:
+        bank_q["user_id"] = user_id
+    try:
+        banks_list = sorted(
+            str(b) for b in transactions.distinct("bank", bank_q) if b
+        )
+    except Exception:  # noqa: BLE001
+        banks_list = sorted(
+            {
+                str(doc.get("bank") or "Unknown")
+                for doc in transactions.find(bank_q, {"bank": 1})
+            }
+        )
 
     net_worth_estimate = liquid_total + total_current
     liabilities_total = 0.0
@@ -867,41 +909,49 @@ def build_analytics(
         "last_portfolio_at": None,
         "last_indmoney_at": indmoney_snapshot.get("captured_at") if indmoney_snapshot else None,
     }
-    try:
-        sms_doc = transactions.find_one(
-            {"source": "sms"}, sort=[("received_at", -1)], projection={"received_at": 1}
-        )
-        if sms_doc and isinstance(sms_doc.get("received_at"), datetime):
-            freshness["last_sms_at"] = sms_doc["received_at"].isoformat()
-        stmt_doc = transactions.find_one(
-            {"source": "statement"}, sort=[("received_at", -1)], projection={"received_at": 1}
-        )
-        if stmt_doc and isinstance(stmt_doc.get("received_at"), datetime):
-            freshness["last_statement_at"] = stmt_doc["received_at"].isoformat()
-        if portfolio is not None:
-            port_doc = portfolio.find_one(sort=[("updated_at", -1)], projection={"updated_at": 1, "import_date": 1})
-            if port_doc:
-                ts = port_doc.get("updated_at") or port_doc.get("import_date")
-                if isinstance(ts, datetime):
-                    freshness["last_portfolio_at"] = ts.isoformat()
-    except Exception as exc:  # noqa: BLE001
-        print(f"Warning: could not compute freshness: {exc}")
+    if not lite:
+        try:
+            sms_doc = transactions.find_one(
+                {"source": "sms"}, sort=[("received_at", -1)], projection={"received_at": 1}
+            )
+            if sms_doc and isinstance(sms_doc.get("received_at"), datetime):
+                freshness["last_sms_at"] = sms_doc["received_at"].isoformat()
+            stmt_doc = transactions.find_one(
+                {"source": "statement"},
+                sort=[("received_at", -1)],
+                projection={"received_at": 1},
+            )
+            if stmt_doc and isinstance(stmt_doc.get("received_at"), datetime):
+                freshness["last_statement_at"] = stmt_doc["received_at"].isoformat()
+            if portfolio is not None:
+                port_doc = portfolio.find_one(
+                    sort=[("updated_at", -1)],
+                    projection={"updated_at": 1, "import_date": 1},
+                )
+                if port_doc:
+                    ts = port_doc.get("updated_at") or port_doc.get("import_date")
+                    if isinstance(ts, datetime):
+                        freshness["last_portfolio_at"] = ts.isoformat()
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not compute freshness: {exc}")
 
-    # Alerts / insights (rebuild with budgets)
-    alerts = _build_alerts(
-        transactions,
-        match,
-        total_debit=total_debit,
-        debit_count=debit_count,
-        avg_debit=float(debit.get("avg") or 0),
-        by_category=by_category,
-        recurring_merchants=recurring_merchants[:8],
-        monthly_rows=monthly_rows,
-        total_credit=total_credit,
-        total_invested=total_invested,
-        budgets=budget_map,
-        one_off_fingerprints=one_off_fps,
-    )
+    # Alerts / insights (rebuild with budgets) — expensive; skip on lite chart loads
+    alerts: list[dict[str, Any]] = []
+    if not lite:
+        alerts = _build_alerts(
+            transactions,
+            match,
+            total_debit=total_debit,
+            debit_count=debit_count,
+            avg_debit=float(debit.get("avg") or 0),
+            by_category=by_category,
+            recurring_merchants=recurring_merchants[:8],
+            monthly_rows=monthly_rows,
+            total_credit=total_credit,
+            total_invested=total_invested,
+            budgets=budget_map,
+            one_off_fingerprints=one_off_fps,
+        )
 
     return {
         "range": {

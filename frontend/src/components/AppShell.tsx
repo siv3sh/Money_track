@@ -3,6 +3,7 @@ import { Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
+import { useWealthSettings } from '../hooks/useWealthSettings'
 import { useNavVisibility } from '../hooks/useNavVisibility'
 import { APP_NAV } from '../lib/navConfig'
 import { AccountMenu } from './AccountMenu'
@@ -18,19 +19,25 @@ const FILTER_ANALYTICS_PATHS = new Set([
   '/investments/indmoney',
 ])
 
+/** Full analytics (merchants, recurring, budgets, alerts) — slower path. */
+const FULL_ANALYTICS_PATHS = new Set(['/ai', '/spending'])
+
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { isVisible } = useNavVisibility()
   const { enabled: advisorEnabled } = useAdvisorSettings()
+  const { enabled: wealthEnabled } = useWealthSettings()
   const shownNav = APP_NAV.filter((item) => {
     if (item.id === 'planning' && !advisorEnabled) return false
+    if (item.id === 'wealth' && !wealthEnabled) return false
     return isVisible(item.id)
   })
   const location = useLocation()
   const loadSharedAnalytics = FILTER_ANALYTICS_PATHS.has(location.pathname)
+  const liteAnalytics = !FULL_ANALYTICS_PATHS.has(location.pathname)
 
   return (
-    <FilterProvider autoLoad={loadSharedAnalytics}>
+    <FilterProvider autoLoad={loadSharedAnalytics} lite={liteAnalytics}>
       <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
         {mobileOpen ? (
           <button

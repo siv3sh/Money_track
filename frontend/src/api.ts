@@ -193,6 +193,8 @@ export interface AnalyticsQuery {
   date_from?: string
   date_to?: string
   bank?: string[]
+  /** Skip SIP/drift/smart insights — much faster for dashboard charts. */
+  lite?: boolean
 }
 
 export function fetchAnalytics(query: AnalyticsQuery = {}): Promise<AnalyticsPayload> {
@@ -200,6 +202,7 @@ export function fetchAnalytics(query: AnalyticsQuery = {}): Promise<AnalyticsPay
   if (query.date_from) params.set('date_from', query.date_from)
   if (query.date_to) params.set('date_to', query.date_to)
   if (query.bank?.length) params.set('bank', query.bank.join(','))
+  if (query.lite) params.set('lite', 'true')
   const qs = params.toString()
   return request(`/analytics${qs ? `?${qs}` : ''}`)
 }

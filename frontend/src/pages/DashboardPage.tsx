@@ -292,7 +292,7 @@ export function DashboardPage() {
     setLoading(true)
     try {
       const [a, t] = await Promise.all([
-        fetchAnalytics({ date_from: range.from, date_to: range.to }),
+        fetchAnalytics({ date_from: range.from, date_to: range.to, lite: true }),
         fetchTransactions({
           date_from: range.from,
           date_to: range.to,
@@ -336,7 +336,7 @@ export function DashboardPage() {
     setMonthTxns(null)
     setMonthAnalytics(null)
     void Promise.all([
-      fetchAnalytics({ date_from, date_to }),
+      fetchAnalytics({ date_from, date_to, lite: true }),
       fetchTransactions({
         date_from,
         date_to,

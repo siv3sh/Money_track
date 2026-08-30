@@ -71,10 +71,13 @@ const FilterContext = createContext<FilterState | null>(null)
 export function FilterProvider({
   children,
   autoLoad = true,
+  /** Skip SIP/drift/smart insights — faster charts (Dashboard / Cash Flow / Spending). */
+  lite = true,
 }: {
   children: ReactNode
   /** When false, skip the heavy /analytics fetch (Dashboard loads its own data). */
   autoLoad?: boolean
+  lite?: boolean
 }) {
   const initial = presetRange('month')
   const [preset, setPresetState] = useState<DatePreset | 'custom'>('month')
@@ -92,6 +95,7 @@ export function FilterProvider({
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         bank: banks.length ? banks : undefined,
+        lite,
       })
       setData(payload)
       setError(null)
@@ -100,7 +104,7 @@ export function FilterProvider({
     } finally {
       setLoading(false)
     }
-  }, [banks, dateFrom, dateTo])
+  }, [banks, dateFrom, dateTo, lite])
 
   useEffect(() => {
     if (!autoLoad) {

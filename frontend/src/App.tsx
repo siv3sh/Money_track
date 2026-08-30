@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 import { AppShell } from './components/AppShell'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { AdvisorSettingsProvider, useAdvisorSettings } from './hooks/useAdvisorSettings'
+import { WealthSettingsProvider, useWealthSettings } from './hooks/useWealthSettings'
 import { ThemeProvider } from './hooks/useTheme'
 import { NavVisibilityProvider } from './hooks/useNavVisibility'
 import { AiInsightsPage } from './pages/AiInsightsPage'
@@ -51,45 +52,55 @@ function RequireAdvisorEnabled() {
   return <Outlet />
 }
 
+function RequireWealthEnabled() {
+  const { enabled } = useWealthSettings()
+  if (!enabled) return <Navigate to="/profile" replace />
+  return <Outlet />
+}
+
 export default function App() {
   return (
     <ThemeProvider>
       <NavVisibilityProvider>
         <AdvisorSettingsProvider>
-          <AuthProvider>
-            <BrowserRouter>
-              <Routes>
-                <Route path="/login" element={<LoginPage />} />
-                <Route element={<RequireLogin />}>
-                  <Route path="/setup" element={<SetupPage />} />
-                  <Route element={<RequireSetupDone />}>
-                    <Route element={<AppShell />}>
-                      <Route index element={<DashboardPage />} />
-                      <Route path="dashboard" element={<DashboardPage />} />
-                      <Route path="wealth" element={<WealthPage />} />
-                      <Route path="net-worth" element={<Navigate to="/wealth" replace />} />
-                      <Route path="investments" element={<Navigate to="/wealth" replace />} />
-                      <Route path="investments/indmoney" element={<IndmoneyImportPage />} />
-                      <Route element={<RequireAdvisorEnabled />}>
-                        <Route path="planning" element={<MoneyPlanningPage />} />
+          <WealthSettingsProvider>
+            <AuthProvider>
+              <BrowserRouter>
+                <Routes>
+                  <Route path="/login" element={<LoginPage />} />
+                  <Route element={<RequireLogin />}>
+                    <Route path="/setup" element={<SetupPage />} />
+                    <Route element={<RequireSetupDone />}>
+                      <Route element={<AppShell />}>
+                        <Route index element={<DashboardPage />} />
+                        <Route path="dashboard" element={<DashboardPage />} />
+                        <Route element={<RequireWealthEnabled />}>
+                          <Route path="wealth" element={<WealthPage />} />
+                          <Route path="investments/indmoney" element={<IndmoneyImportPage />} />
+                        </Route>
+                        <Route path="net-worth" element={<Navigate to="/wealth" replace />} />
+                        <Route path="investments" element={<Navigate to="/wealth" replace />} />
+                        <Route element={<RequireAdvisorEnabled />}>
+                          <Route path="planning" element={<MoneyPlanningPage />} />
+                        </Route>
+                        <Route path="cash-flow" element={<CashFlowPage />} />
+                        <Route path="spending" element={<SpendingPage />} />
+                        <Route path="transactions" element={<TransactionsPage />} />
+                        <Route path="ai" element={<AiInsightsPage />} />
+                        <Route path="monthly-reports" element={<MonthlyReportsPage />} />
+                        <Route path="monthly-reports/:month" element={<MonthlyReportsPage />} />
+                        <Route path="import" element={<ImportPage />} />
+                        <Route path="reports" element={<MonthlyReportsPage />} />
+                        <Route path="accounts" element={<AccountsPage />} />
+                        <Route path="profile" element={<ProfilePage />} />
                       </Route>
-                      <Route path="cash-flow" element={<CashFlowPage />} />
-                      <Route path="spending" element={<SpendingPage />} />
-                      <Route path="transactions" element={<TransactionsPage />} />
-                      <Route path="ai" element={<AiInsightsPage />} />
-                      <Route path="monthly-reports" element={<MonthlyReportsPage />} />
-                      <Route path="monthly-reports/:month" element={<MonthlyReportsPage />} />
-                      <Route path="import" element={<ImportPage />} />
-                      <Route path="reports" element={<MonthlyReportsPage />} />
-                      <Route path="accounts" element={<AccountsPage />} />
-                      <Route path="profile" element={<ProfilePage />} />
                     </Route>
                   </Route>
-                </Route>
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </BrowserRouter>
-          </AuthProvider>
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </BrowserRouter>
+            </AuthProvider>
+          </WealthSettingsProvider>
         </AdvisorSettingsProvider>
       </NavVisibilityProvider>
     </ThemeProvider>

@@ -4,6 +4,7 @@ import io
 import json
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -1911,20 +1912,49 @@ def _parse_optional_date(value: str | None, end_of_day: bool = False) -> datetim
     return dt
 
 
+_ANALYTICS_CACHE: dict[str, tuple[float, Any]] = {}
+_ANALYTICS_CACHE_TTL_SEC = 60.0
+_ANALYTICS_CACHE_MAX = 64
+
+
+def _analytics_cache_get(key: str) -> Any | None:
+    hit = _ANALYTICS_CACHE.get(key)
+    if not hit:
+        return None
+    ts, payload = hit
+    if time.time() - ts > _ANALYTICS_CACHE_TTL_SEC:
+        _ANALYTICS_CACHE.pop(key, None)
+        return None
+    return payload
+
+
+def _analytics_cache_set(key: str, payload: Any) -> None:
+    if len(_ANALYTICS_CACHE) >= _ANALYTICS_CACHE_MAX:
+        oldest = min(_ANALYTICS_CACHE.items(), key=lambda kv: kv[1][0])[0]
+        _ANALYTICS_CACHE.pop(oldest, None)
+    _ANALYTICS_CACHE[key] = (time.time(), payload)
+
+
 @app.get("/analytics")
 def analytics(
     request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
     bank: str | None = Query(default=None, description="Comma-separated bank names"),
+    lite: bool = Query(
+        default=False,
+        description="Skip SIP/drift/smart insights (faster charts)",
+    ),
 ):
     """Unified analytics payload for Net Worth, Cash Flow, Spending, Sources, Investments, Alerts."""
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
     uid = getattr(request.state, "user_id", None)
-    # Skip credit-card→liability sync on every analytics hit (was adding seconds per load).
-    # Sync still runs on SMS ingest and explicit CC endpoints.
+    cache_key = f"{uid}|{date_from}|{date_to}|{bank}|{int(lite)}"
+    cached = _analytics_cache_get(cache_key)
+    if cached is not None:
+        return cached
     payload = build_analytics(
         transactions,
         date_from=start,
@@ -1936,15 +1966,20 @@ def analytics(
         budgets=budgets_col,
         learned_facts=user_learned_facts,
         user_id=uid,
+        lite=lite,
     )
-    return attach_smart_insights(
-        payload,
-        transactions,
-        sip_overrides=sip_overrides,
-        settings=app_settings,
-        learned_facts=user_learned_facts,
-        goals_col=planning_goals,
-    )
+    if not lite:
+        payload = attach_smart_insights(
+            payload,
+            transactions,
+            sip_overrides=sip_overrides,
+            settings=app_settings,
+            learned_facts=user_learned_facts,
+            goals_col=planning_goals,
+        )
+    _analytics_cache_set(cache_key, payload)
+    return payload
+
 
 
 class PortfolioHolding(BaseModel):

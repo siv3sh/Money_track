@@ -1,13 +1,19 @@
 import { X } from 'lucide-react'
 import { APP_NAV } from '../lib/navConfig'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
+import { useWealthSettings } from '../hooks/useWealthSettings'
 import { ALWAYS_VISIBLE_NAV, useNavVisibility } from '../hooks/useNavVisibility'
 
 export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { visible, toggle, showAll } = useNavVisibility()
   const { enabled: advisorEnabled } = useAdvisorSettings()
+  const { enabled: wealthEnabled } = useWealthSettings()
 
   if (!open) return null
+
+  const hintParts: string[] = []
+  if (!advisorEnabled) hintParts.push('Advisor is off in Profile')
+  if (!wealthEnabled) hintParts.push('Wealth is off in Profile')
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-[color-mix(in_srgb,var(--ink)_45%,transparent)] p-4 sm:items-center">
@@ -28,9 +34,10 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
               What shows in the menu?
             </h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Tick only the pages you use. Dashboard stays in the sidebar; Profile is in the top-right avatar menu.
-              {!advisorEnabled
-                ? ' Advisor is off in Profile — the Advisor page stays hidden until you turn it back on.'
+              Tick only the pages you use. Dashboard stays in the sidebar; Profile is in the top-right avatar
+              menu.
+              {hintParts.length
+                ? ` ${hintParts.join(' · ')} — those pages stay hidden until you turn them back on.`
                 : null}
             </p>
           </div>
@@ -40,7 +47,11 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
         </div>
 
         <ul className="max-h-[50vh] space-y-1 overflow-y-auto">
-          {APP_NAV.filter((item) => advisorEnabled || item.id !== 'planning').map((item) => {
+          {APP_NAV.filter((item) => {
+            if (!advisorEnabled && item.id === 'planning') return false
+            if (!wealthEnabled && item.id === 'wealth') return false
+            return true
+          }).map((item) => {
             const locked = ALWAYS_VISIBLE_NAV.includes(item.id)
             const checked = visible[item.id] !== false
             return (
