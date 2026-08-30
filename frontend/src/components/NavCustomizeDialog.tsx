@@ -28,7 +28,7 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
               What shows in the menu?
             </h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Tick only the pages you use. Dashboard and Profile stay on so you can always find settings.
+              Tick only the pages you use. Dashboard stays in the sidebar; Profile is in the top-right avatar menu.
               {!advisorEnabled
                 ? ' Advisor is off in Profile — the Advisor page stays hidden until you turn it back on.'
                 : null}

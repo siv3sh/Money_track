@@ -8,7 +8,6 @@ import {
   Sparkles,
   Target,
   Upload,
-  UserRound,
   Wallet,
   type LucideIcon,
 } from 'lucide-react'
@@ -22,6 +21,7 @@ export type NavItem = {
   end?: boolean
 }
 
+/** Side nav only — Profile lives in the top-right avatar menu. */
 export const APP_NAV: NavItem[] = [
   { id: 'dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { id: 'wealth', to: '/wealth', label: 'Wealth', icon: Wallet },
@@ -33,5 +33,4 @@ export const APP_NAV: NavItem[] = [
   { id: 'monthly-reports', to: '/monthly-reports', label: 'Reports', icon: FileText },
   { id: 'import', to: '/import', label: 'Import', icon: Upload },
   { id: 'accounts', to: '/accounts', label: 'Phones & email', icon: Smartphone },
-  { id: 'profile', to: '/profile', label: 'Profile', icon: UserRound },
 ]

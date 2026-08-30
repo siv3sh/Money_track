@@ -22,12 +22,11 @@ export const NAV_PREF_IDS = [
   'monthly-reports',
   'import',
   'accounts',
-  'profile',
 ] as const
 
 export type NavPrefId = (typeof NAV_PREF_IDS)[number]
 
-export const ALWAYS_VISIBLE_NAV: NavPrefId[] = ['dashboard', 'profile']
+export const ALWAYS_VISIBLE_NAV: NavPrefId[] = ['dashboard']
 
 const DEFAULT_VISIBLE: Record<NavPrefId, boolean> = {
   dashboard: true,
@@ -40,7 +39,6 @@ const DEFAULT_VISIBLE: Record<NavPrefId, boolean> = {
   'monthly-reports': true,
   import: false,
   accounts: true,
-  profile: true,
 }
 
 function loadPrefs(): Record<NavPrefId, boolean> {
