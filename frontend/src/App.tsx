@@ -7,6 +7,7 @@ import { ThemeProvider } from './hooks/useTheme'
 import { NavVisibilityProvider } from './hooks/useNavVisibility'
 import { AiInsightsPage } from './pages/AiInsightsPage'
 import { AccountsPage } from './pages/AccountsPage'
+import { AdminPage } from './pages/AdminPage'
 import { CashFlowPage } from './pages/CashFlowPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { GettingStartedPage } from './pages/GettingStartedPage'
@@ -107,6 +108,7 @@ export default function App() {
                         <Route path="reports" element={<MonthlyReportsPage />} />
                         <Route path="accounts" element={<AccountsPage />} />
                         <Route path="profile" element={<ProfilePage />} />
+                        <Route path="admin" element={<AdminPage />} />
                       </Route>
                     </Route>
                   </Route>

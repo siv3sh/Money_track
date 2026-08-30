@@ -29,6 +29,8 @@ export type AuthUser = {
   setup_completed?: boolean
   setup_platform?: 'ios' | 'android' | string | null
   onboarding_completed?: boolean
+  disabled?: boolean
+  is_admin?: boolean
   created_at?: string | null
 }
 
@@ -171,6 +173,42 @@ export function saveOnboarding(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ onboarding_completed: true, ...payload }),
   })
+}
+
+export type AdminUserRow = AuthUser & {
+  counts: {
+    transactions: number
+    linked_accounts: number
+    portfolio: number
+    liabilities: number
+    learned_facts: number
+    goals: number
+  }
+}
+
+export function fetchAdminUsers(): Promise<{
+  items: AdminUserRow[]
+  total_users: number
+  signup_code_required: boolean
+}> {
+  return request('/admin/users')
+}
+
+export function patchAdminUser(
+  userId: string,
+  payload: { disabled?: boolean },
+): Promise<AuthUser> {
+  return request(`/admin/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAdminUser(
+  userId: string,
+): Promise<{ ok: boolean; email?: string; deleted?: Record<string, number> }> {
+  return request(`/admin/users/${userId}`, { method: 'DELETE' })
 }
 
 export function fetchLinkedAccounts(reveal = false): Promise<{

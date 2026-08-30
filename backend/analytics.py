@@ -497,7 +497,10 @@ def build_analytics(
     manual: list[dict[str, Any]] = []
     if portfolio is not None:
         try:
-            manual = list(portfolio.find())
+            pq: dict[str, Any] = {}
+            if user_id is not None:
+                pq["user_id"] = user_id
+            manual = list(portfolio.find(pq))
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load portfolio: {exc}")
             manual = []
@@ -611,7 +614,7 @@ def build_analytics(
         try:
             from learned_facts import salary_needles_from_facts
 
-            salary_needles = salary_needles_from_facts(learned_facts)
+            salary_needles = salary_needles_from_facts(learned_facts, user_id=user_id)
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load salary keywords: {exc}")
     if not lite:
@@ -801,7 +804,10 @@ def build_analytics(
     liability_rows: list[dict[str, Any]] = []
     if liabilities is not None:
         try:
-            for doc in liabilities.find().sort("outstanding", -1):
+            lq: dict[str, Any] = {}
+            if user_id is not None:
+                lq["user_id"] = user_id
+            for doc in liabilities.find(lq).sort("outstanding", -1):
                 amt = float(doc.get("outstanding") or 0)
                 liabilities_total += amt
                 updated = doc.get("updated_at") or doc.get("last_updated")
@@ -875,7 +881,10 @@ def build_analytics(
     budget_map: dict[str, float] = {}
     if budgets is not None:
         try:
-            for doc in budgets.find():
+            bq: dict[str, Any] = {}
+            if user_id is not None:
+                bq["user_id"] = user_id
+            for doc in budgets.find(bq):
                 cat = str(doc.get("category") or "").strip()
                 amt = float(doc.get("amount") or 0)
                 if cat and amt > 0:
@@ -894,11 +903,17 @@ def build_analytics(
             )
 
             # Learned budget targets fill gaps; explicit budgets_col wins on conflict
-            learned_budgets = budget_targets_from_facts(learned_facts)
+            try:
+                learned_budgets = budget_targets_from_facts(learned_facts, user_id=user_id)
+            except TypeError:
+                learned_budgets = budget_targets_from_facts(learned_facts)
             for cat, amt in learned_budgets.items():
                 budget_map.setdefault(cat, amt)
-            one_off_fps = one_off_fingerprints(learned_facts)
-            income_profile = income_profile_from_facts(learned_facts)
+            try:
+                one_off_fps = one_off_fingerprints(learned_facts, user_id=user_id)
+            except TypeError:
+                one_off_fps = one_off_fingerprints(learned_facts)
+            income_profile = income_profile_from_facts(learned_facts, user_id=user_id)
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load learned facts for analytics: {exc}")
 

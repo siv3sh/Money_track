@@ -70,6 +70,7 @@ from auth_users import (
     find_linked_by_token,
     get_current_user,
     get_primary_user,
+    is_admin_user,
     migrate_assign_user_id,
     register_user,
     seed_user_from_env,
@@ -237,50 +238,104 @@ async def require_login_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# Useful indexes for the dashboard queries below
+# Useful indexes for the dashboard queries below (per-user where multi-tenant)
 try:
     transactions.create_index([("received_at", DESCENDING)])
     transactions.create_index([("user_id", 1), ("received_at", DESCENDING)])
+    transactions.create_index([("user_id", 1), ("type", 1), ("received_at", DESCENDING)])
     transactions.create_index("card_type")
     transactions.create_index("bank")
     transactions.create_index("type")
     transactions.create_index("category")
     transactions.create_index("user_id")
     transactions.create_index("linked_account_id")
-    credit_cards_col.create_index([("bank", 1), ("last4", 1)], unique=True)
-    credit_cards_col.create_index("last4")
+
+    # Drop legacy global uniques that break open signup, then create per-user uniques.
+    for col, name in (
+        (credit_cards_col, "bank_1_last4_1"),
+        (category_memory, "merchant_key_1"),
+        (sip_overrides, "instrument_1_month_1"),
+        (monthly_reports, "month_1"),
+        (user_learned_facts, "fact_type_1_key_norm_1"),
+        (advisor_chat_sessions, "session_key_1"),
+        (portfolio, "instrument_key_1"),
+    ):
+        try:
+            col.drop_index(name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    credit_cards_col.create_index([("user_id", 1), ("bank", 1), ("last4", 1)], unique=True)
+    credit_cards_col.create_index([("user_id", 1), ("last4", 1)])
     liabilities_col.create_index(
-        [("source", 1), ("bank", 1), ("last4", 1)],
+        [("user_id", 1), ("source", 1), ("bank", 1), ("last4", 1)],
         unique=True,
         partialFilterExpression={"source": "credit_cards"},
     )
-    category_memory.create_index("merchant_key", unique=True)
-    sip_overrides.create_index([("instrument", 1), ("month", 1)], unique=True)
-    transfer_suggestions.create_index("txn_id", unique=True)
-    monthly_reports.create_index("month", unique=True)
+    try:
+        liabilities_col.drop_index("source_1_bank_1_last4_1")
+    except Exception:  # noqa: BLE001
+        pass
+    category_memory.create_index([("user_id", 1), ("merchant_key", 1)], unique=True)
+    sip_overrides.create_index([("user_id", 1), ("instrument", 1), ("month", 1)], unique=True)
+    transfer_suggestions.create_index([("user_id", 1), ("txn_id", 1)], unique=True)
+    try:
+        transfer_suggestions.drop_index("txn_id_1")
+    except Exception:  # noqa: BLE001
+        pass
+    monthly_reports.create_index([("user_id", 1), ("month", 1)], unique=True)
     news_cache.create_index("expires_at")
-    portfolio.create_index("instrument_key")
-    portfolio.create_index("source")
-    user_learned_facts.create_index([("fact_type", 1), ("key_norm", 1)], unique=True)
-    learn_question_events.create_index([("at", -1)])
+    portfolio.create_index([("user_id", 1), ("instrument_key", 1)], unique=True, sparse=True)
+    portfolio.create_index([("user_id", 1), ("source", 1)])
+    user_learned_facts.create_index([("user_id", 1), ("fact_type", 1), ("key_norm", 1)], unique=True)
+    budgets_col.create_index([("user_id", 1), ("category", 1)], unique=True)
+    learn_question_events.create_index([("user_id", 1), ("at", -1)])
     learn_question_events.create_index("question_id")
-    planning_goals.create_index([("status", 1), ("priority", 1)])
-    advisor_memories.create_index([("occurred_at", -1)])
-    advisor_memories.create_index("dedupe_key", unique=True, sparse=True)
-    advisor_chat_sessions.create_index("session_key", unique=True)
+    planning_goals.create_index([("user_id", 1), ("status", 1), ("priority", 1)])
+    advisor_memories.create_index([("user_id", 1), ("occurred_at", -1)])
+    advisor_memories.create_index([("user_id", 1), ("dedupe_key", 1)], unique=True, sparse=True)
+    try:
+        advisor_memories.drop_index("dedupe_key_1")
+    except Exception:  # noqa: BLE001
+        pass
+    advisor_chat_sessions.create_index([("user_id", 1), ("session_key", 1)], unique=True)
     import_rag_examples.create_index([("created_at", DESCENDING)])
     import_rag_examples.create_index("kind")
+    webhook_events.create_index([("user_id", 1), ("received_at", DESCENDING)])
+    users_col.create_index("disabled")
     ensure_auth_indexes(users_col, linked_accounts_col)
 except Exception as exc:  # noqa: BLE001 — allow import/boot without Mongo during local checks
     print(f"Warning: could not create Mongo indexes yet: {exc}")
 
-# Seed login user + backfill user_id + default linked phone account
+# Seed login user + one-shot legacy orphan backfill + default linked phone
 try:
     seeded = seed_user_from_env(users_col)
     primary = seeded or get_primary_user(users_col)
     if primary:
-        migrate_assign_user_id(db, primary["_id"])
         ensure_default_linked_account(linked_accounts_col, user_id=primary["_id"])
+        # NEVER re-assign orphans to the seed user on every boot after open signup —
+        # that steals new users' unscoped docs. One-shot legacy migrate only.
+        force = (os.getenv("FORCE_LEGACY_USER_MIGRATE") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        migrated_flag = app_settings.find_one({"_id": "legacy_user_id_migrated"})
+        if force or not migrated_flag:
+            counts = migrate_assign_user_id(db, primary["_id"])
+            app_settings.update_one(
+                {"_id": "legacy_user_id_migrated"},
+                {
+                    "$set": {
+                        "at": datetime.now(timezone.utc),
+                        "primary_user_id": primary["_id"],
+                        "counts": counts,
+                        "forced": force,
+                    }
+                },
+                upsert=True,
+            )
+            print(f"Legacy user_id migrate applied for {primary.get('email')}: {counts}")
 except Exception as exc:  # noqa: BLE001
     print(f"Warning: auth seed/migrate skipped: {exc}")
 
@@ -324,14 +379,21 @@ def _get_import_rag(*, force_reload: bool = False) -> ImportRAG:
     return rag
 
 
-def _cross_source_fingerprints(limit: int = 8000) -> tuple[set[str], set[str]]:
+def _cross_source_fingerprints(
+    limit: int = 8000,
+    *,
+    user_id: ObjectId | None = None,
+) -> tuple[set[str], set[str]]:
     """Build exact/soft fingerprint sets across SMS + statement + all sources."""
     from agents.import_graph import _fingerprint, _soft_fingerprint
 
     exact: set[str] = set()
     soft: set[str] = set()
+    q: dict[str, Any] = {}
+    if user_id is not None:
+        q["user_id"] = user_id
     for doc in transactions.find(
-        {},
+        q,
         {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1, "merchant": 1},
     ).limit(limit):
         exact.add(_fingerprint(doc))
@@ -349,14 +411,15 @@ def _run_statement_langgraph(
     filename: str,
     *,
     bank: str | None = None,
+    user_id: ObjectId | None = None,
 ) -> dict[str, Any]:
-    exact, soft = _cross_source_fingerprints()
+    exact, soft = _cross_source_fingerprints(user_id=user_id)
     pipeline = run_import_pipeline(
         raw,
         filename,
         flow="statement",
         bank=bank,
-        merchant_memory=_load_merchant_memory(),
+        merchant_memory=_load_merchant_memory(user_id=user_id),
         exact_fps=exact,
         soft_fps=soft,
         mongo_db=db,
@@ -416,6 +479,7 @@ def _run_statement_langgraph(
         profile=pipeline.get("profile") or {},
         agent_meta=agent_meta,
         run_ai=True,
+        user_id=user_id,
     )
     # Surface held rows for UI (not committed)
     result["review_queue"] = [
@@ -436,10 +500,13 @@ def _run_statement_langgraph(
     return result
 
 
-def _load_merchant_memory() -> dict[str, str]:
+def _load_merchant_memory(*, user_id: ObjectId | None = None) -> dict[str, str]:
     memory: dict[str, str] = {}
+    q: dict[str, Any] = {}
+    if user_id is not None:
+        q["user_id"] = user_id
     try:
-        for row in category_memory.find({}, {"merchant_key": 1, "category": 1}):
+        for row in category_memory.find(q, {"merchant_key": 1, "category": 1}):
             key = (row.get("merchant_key") or "").strip().lower()
             cat = row.get("category")
             if key and cat:
@@ -448,27 +515,38 @@ def _load_merchant_memory() -> dict[str, str]:
         print(f"Warning: could not load category memory: {exc}")
     try:
         # Learned merchant→category facts win over older memory on conflict
-        memory.update(merchant_category_overrides(user_learned_facts))
+        memory.update(merchant_category_overrides(user_learned_facts, user_id=user_id))
+    except TypeError:
+        try:
+            memory.update(merchant_category_overrides(user_learned_facts))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: could not load learned merchant facts: {exc}")
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not load learned merchant facts: {exc}")
     return memory
 
 
-def _load_salary_needles() -> list[str]:
+def _load_salary_needles(*, user_id: ObjectId | None = None) -> list[str]:
     try:
         from learned_facts import salary_needles_from_facts
 
-        return salary_needles_from_facts(user_learned_facts)
+        try:
+            return salary_needles_from_facts(user_learned_facts, user_id=user_id)
+        except TypeError:
+            return salary_needles_from_facts(user_learned_facts)
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not load salary keywords: {exc}")
         return []
 
 
-def _load_people_patterns() -> list[tuple[str, str]]:
+def _load_people_patterns(*, user_id: ObjectId | None = None) -> list[tuple[str, str]]:
     try:
         from learned_facts import people_patterns_from_facts
 
-        return people_patterns_from_facts(user_learned_facts)
+        try:
+            return people_patterns_from_facts(user_learned_facts, user_id=user_id)
+        except TypeError:
+            return people_patterns_from_facts(user_learned_facts)
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not load people patterns: {exc}")
         return []
@@ -570,6 +648,7 @@ def _import_statement_docs(
     profile: dict[str, Any] | None = None,
     run_ai: bool = True,
     agent_meta: dict[str, Any] | None = None,
+    user_id: ObjectId | None = None,
 ) -> dict[str, Any]:
     if not docs:
         return {
@@ -587,8 +666,9 @@ def _import_statement_docs(
     exact: set[str] = set()
     soft: set[str] = set()
     soft_examples: dict[str, dict[str, Any]] = {}
+    existing_q: dict[str, Any] = {"user_id": user_id} if user_id is not None else {}
     for doc in transactions.find(
-        {},
+        existing_q,
         {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1, "merchant": 1, "source": 1},
     ).limit(8000):
         exact.add(_fingerprint(doc))
@@ -604,7 +684,7 @@ def _import_statement_docs(
             },
         )
 
-    memory = _load_merchant_memory()
+    memory = _load_merchant_memory(user_id=user_id)
     rag = _get_import_rag()
     to_insert: list[dict[str, Any]] = []
     skipped = 0
@@ -655,9 +735,9 @@ def _import_statement_docs(
         apply_category(
             doc,
             memory,
-            credit_card_accounts=list_credit_cards(credit_cards_col),
-            salary_needles=_load_salary_needles(),
-            people_patterns=_load_people_patterns(),
+            credit_card_accounts=list_credit_cards(credit_cards_col, user_id=user_id),
+            salary_needles=_load_salary_needles(user_id=user_id),
+            people_patterns=_load_people_patterns(user_id=user_id),
         )
         # Second-pass RAG for remaining Other rows
         if (doc.get("category") or "Other") == "Other":
@@ -669,10 +749,12 @@ def _import_statement_docs(
                 doc["category"] = suggestion["category"]
                 doc["category_source"] = f"rag:{suggestion['source']}"
                 apply_cc_payoff_tags(
-                    doc, list_credit_cards(credit_cards_col)
+                    doc, list_credit_cards(credit_cards_col, user_id=user_id)
                 )
                 doc["category_confidence"] = suggestion["confidence"]
         doc.pop("_investment_hint", None)
+        if user_id is not None:
+            doc["user_id"] = user_id
         to_insert.append(doc)
 
     ids: list[str] = []
@@ -693,6 +775,7 @@ def _import_statement_docs(
                     "parsed": len(docs),
                     "detected": profile,
                     "agent": agent_meta,
+                    "user_id": user_id,
                     "created_at": datetime.now(timezone.utc),
                 }
             )
@@ -940,6 +1023,107 @@ def auth_onboarding(payload: OnboardingPayload, request: Request):
     )
     refreshed = users_col.find_one({"_id": user["_id"]})
     return serialize_user(refreshed or user)
+
+
+def _require_admin(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "user", None)
+    if not user or not is_admin_user(user):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+class AdminUserPatch(BaseModel):
+    disabled: bool | None = None
+
+
+@app.get("/admin/users")
+def admin_list_users(request: Request):
+    """List accounts with collection counts — admin (ADMIN_EMAIL / SEED_USER_EMAIL) only."""
+    _require_admin(request)
+    rows = []
+    for doc in users_col.find().sort("created_at", 1):
+        uid = doc["_id"]
+        rows.append(
+            {
+                **serialize_user(doc),
+                "counts": {
+                    "transactions": transactions.count_documents({"user_id": uid}),
+                    "linked_accounts": linked_accounts_col.count_documents({"user_id": uid}),
+                    "portfolio": portfolio.count_documents({"user_id": uid}),
+                    "liabilities": liabilities_col.count_documents({"user_id": uid}),
+                    "learned_facts": user_learned_facts.count_documents({"user_id": uid}),
+                    "goals": planning_goals.count_documents({"user_id": uid}),
+                },
+            }
+        )
+    return {
+        "items": rows,
+        "total_users": len(rows),
+        "signup_code_required": bool((os.getenv("SIGNUP_CODE") or "").strip()),
+    }
+
+
+@app.patch("/admin/users/{user_id}")
+def admin_patch_user(user_id: str, payload: AdminUserPatch, request: Request):
+    admin = _require_admin(request)
+    try:
+        oid = ObjectId(user_id)
+    except InvalidId as exc:
+        raise HTTPException(status_code=400, detail="Invalid user id") from exc
+    target = users_col.find_one({"_id": oid})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["_id"] == admin["_id"] and payload.disabled:
+        raise HTTPException(status_code=400, detail="You cannot disable your own admin account")
+    patch: dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    if payload.disabled is not None:
+        patch["disabled"] = payload.disabled
+    users_col.update_one({"_id": oid}, {"$set": patch})
+    refreshed = users_col.find_one({"_id": oid})
+    return serialize_user(refreshed or target)
+
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(user_id: str, request: Request):
+    """Cascade-delete a user and their scoped data. Cannot delete yourself."""
+    admin = _require_admin(request)
+    try:
+        oid = ObjectId(user_id)
+    except InvalidId as exc:
+        raise HTTPException(status_code=400, detail="Invalid user id") from exc
+    if oid == admin["_id"]:
+        raise HTTPException(status_code=400, detail="You cannot delete your own admin account")
+    target = users_col.find_one({"_id": oid})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    deleted: dict[str, int] = {}
+    for name in (
+        "transactions",
+        "webhook_events",
+        "linked_accounts",
+        "portfolio",
+        "networth_snapshots",
+        "liabilities",
+        "credit_cards",
+        "budgets",
+        "user_learned_facts",
+        "planning_goals",
+        "monthly_reports",
+        "sip_overrides",
+        "category_memory",
+        "advisor_memories",
+        "advisor_chat_sessions",
+        "import_events",
+        "transfer_suggestions",
+        "learn_question_events",
+    ):
+        try:
+            deleted[name] = int(db[name].delete_many({"user_id": oid}).deleted_count)
+        except Exception as exc:  # noqa: BLE001
+            deleted[name] = 0
+            print(f"Warning: admin delete skipped {name}: {exc}")
+    users_col.delete_one({"_id": oid})
+    return {"ok": True, "email": target.get("email"), "deleted": deleted}
 
 
 @app.get("/linked-accounts")
@@ -1283,12 +1467,17 @@ async def _ingest_sms_request(
                 sender=payload.sender,
                 body=payload.body,
                 received_at=datetime.now(timezone.utc),
+                user_id=linked_account.get("user_id"),
             )
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: credit card upsert skipped: {exc}")
         if card_snapshot:
             try:
-                sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+                sync_credit_cards_to_liabilities(
+                    credit_cards_col,
+                    liabilities_col,
+                    user_id=linked_account.get("user_id"),
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"Warning: credit card→liability sync skipped: {exc}")
         _log_webhook_event(
@@ -1298,6 +1487,7 @@ async def _ingest_sms_request(
                 "sender": payload.sender,
                 "body": payload.body[:240],
                 "credit_card_updated": bool(card_snapshot),
+                "user_id": linked_account.get("user_id"),
             }
         )
         return {
@@ -1368,12 +1558,17 @@ async def _ingest_sms_request(
             sender=payload.sender,
             body=payload.body,
             received_at=received_at,
+            user_id=linked_account.get("user_id"),
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: credit card upsert skipped: {exc}")
     if card_snapshot:
         try:
-            sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+            sync_credit_cards_to_liabilities(
+                credit_cards_col,
+                liabilities_col,
+                user_id=linked_account.get("user_id"),
+            )
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: credit card→liability sync skipped: {exc}")
 
@@ -1387,6 +1582,7 @@ async def _ingest_sms_request(
             "category": doc.get("category"),
             "body": payload.body[:240],
             "credit_card_updated": bool(card_snapshot),
+            "user_id": linked_account.get("user_id"),
         }
     )
 
@@ -1738,6 +1934,7 @@ async def paste_bank_email(payload: EmailPastePayload, request: Request):
 
 @app.post("/statements/upload")
 async def upload_statement(
+    request: Request,
     file: UploadFile = File(...),
     bank: str | None = Form(default=None),
     format: str = Form(default="auto"),
@@ -1763,7 +1960,12 @@ async def upload_statement(
         raise HTTPException(status_code=400, detail="File too large (max 5–8MB)")
 
     try:
-        return _run_statement_langgraph(raw, file.filename or name, bank=bank_s)
+        return _run_statement_langgraph(
+            raw,
+            file.filename or name,
+            bank=bank_s,
+            user_id=_require_user_id(request),
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=422,
@@ -2196,10 +2398,12 @@ async def indmoney_validate(
 
 @app.post("/indmoney/commit")
 async def indmoney_commit(
+    request: Request,
     file: UploadFile = File(...),
     mapping_json: str = Form(...),
 ):
     """Parse file with user mapping and upsert holdings (source=csv_import)."""
+    uid = _require_user_id(request)
     try:
         mapping = json.loads(mapping_json)
     except json.JSONDecodeError as exc:
@@ -2222,7 +2426,9 @@ async def indmoney_commit(
             detail=f"No valid rows to import ({preview['summary']['errors']} errors)",
         )
 
-    result = upsert_holdings(portfolio, preview["valid"], source="csv_import")
+    result = upsert_holdings(
+        portfolio, preview["valid"], source="csv_import", user_id=uid
+    )
     try:
         sig = "|".join(h.strip().lower() for h in headers)
         feedback_document_format(
@@ -2240,15 +2446,16 @@ async def indmoney_commit(
         "import": result,
         "summary": preview["summary"],
         "errors": preview["errors"][:20],
-        "holdings": get_portfolio(),
+        "holdings": get_portfolio(request),
     }
 
 
 # ── Credit cards (SMS-derived, read-focused) ─────────────────────────────────
 
 @app.get("/credit-cards")
-def api_list_credit_cards():
-    return {"items": list_credit_cards(credit_cards_col)}
+def api_list_credit_cards(request: Request):
+    uid = _require_user_id(request)
+    return {"items": list_credit_cards(credit_cards_col, user_id=uid)}
 
 
 @app.get("/credit-cards/{last4}")
@@ -2334,9 +2541,13 @@ def _serialize_liability(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/liabilities")
-def get_liabilities():
-    sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
-    rows = [_serialize_liability(d) for d in liabilities_col.find().sort("outstanding", DESCENDING)]
+def get_liabilities(request: Request):
+    uid = _require_user_id(request)
+    sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col, user_id=uid)
+    rows = [
+        _serialize_liability(d)
+        for d in liabilities_col.find({"user_id": uid}).sort("outstanding", DESCENDING)
+    ]
     return {
         "items": rows,
         "total": round(sum(r["outstanding"] for r in rows), 2),
@@ -2344,10 +2555,11 @@ def get_liabilities():
 
 
 @app.put("/liabilities")
-def put_liabilities(payload: LiabilitiesPayload):
+def put_liabilities(request: Request, payload: LiabilitiesPayload):
     """Replace manual liabilities only; auto credit-card rows stay synced from credit_cards."""
+    uid = _require_user_id(request)
     now = datetime.now(timezone.utc)
-    liabilities_col.delete_many({"source": {"$ne": "credit_cards"}})
+    liabilities_col.delete_many({"user_id": uid, "source": {"$ne": "credit_cards"}})
     docs = []
     for item in payload.items:
         updated = now
@@ -2362,22 +2574,30 @@ def put_liabilities(payload: LiabilitiesPayload):
                 "outstanding": float(item.outstanding),
                 "updated_at": updated,
                 "source": "manual",
+                "user_id": uid,
             }
         )
     if docs:
         liabilities_col.insert_many(docs)
-    sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
-    return get_liabilities()
+    sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col, user_id=uid)
+    return get_liabilities(request)
 
 
 # ── Export ───────────────────────────────────────────────────────────────────
 
 @app.get("/export")
-def export_data(format: str = Query(default="json", pattern="^(json|csv)$")):
-    """Download transactions, investments, and liabilities."""
-    txns = [_serialize(d) for d in transactions.find().sort("received_at", DESCENDING).limit(20000)]
-    holdings = [_serialize_holding(d) for d in portfolio.find()]
-    liabs = [_serialize_liability(d) for d in liabilities_col.find()]
+def export_data(
+    request: Request,
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+):
+    """Download this user's transactions, investments, and liabilities."""
+    uid = _require_user_id(request)
+    txns = [
+        _serialize(d)
+        for d in transactions.find({"user_id": uid}).sort("received_at", DESCENDING).limit(20000)
+    ]
+    holdings = [_serialize_holding(d) for d in portfolio.find({"user_id": uid})]
+    liabs = [_serialize_liability(d) for d in liabilities_col.find({"user_id": uid})]
     payload = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "transactions": txns,
@@ -2492,12 +2712,14 @@ def _with_learned_context(analytics_data: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/learn/facts")
-def learn_facts_list():
-    return {"facts": list_facts(user_learned_facts)}
+def learn_facts_list(request: Request):
+    uid = _require_user_id(request)
+    return {"facts": list_facts(user_learned_facts, user_id=uid)}
 
 
 @app.post("/learn/facts")
-def learn_facts_create(payload: LearnedFactCreate):
+def learn_facts_create(request: Request, payload: LearnedFactCreate):
+    uid = _require_user_id(request)
     try:
         fact = upsert_fact(
             user_learned_facts,
@@ -2507,6 +2729,7 @@ def learn_facts_create(payload: LearnedFactCreate):
             source="user_answered",
             plain_language=payload.plain_language,
             meta=payload.meta,
+            user_id=uid,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2516,11 +2739,12 @@ def learn_facts_create(payload: LearnedFactCreate):
             amt = float(payload.value)
             if amt > 0:
                 budgets_col.update_one(
-                    {"category": payload.key},
+                    {"user_id": uid, "category": payload.key},
                     {
                         "$set": {
                             "category": payload.key,
                             "amount": amt,
+                            "user_id": uid,
                             "updated_at": datetime.now(timezone.utc),
                             "source": "learned",
                         }
@@ -2534,12 +2758,13 @@ def learn_facts_create(payload: LearnedFactCreate):
         if cat in CATEGORIES:
             mk = payload.key.lower()
             category_memory.update_one(
-                {"merchant_key": mk},
+                {"user_id": uid, "merchant_key": mk},
                 {
                     "$set": {
                         "merchant_key": mk,
                         "merchant": payload.key,
                         "category": cat,
+                        "user_id": uid,
                         "updated_at": datetime.now(timezone.utc),
                         "source": "learned",
                     }

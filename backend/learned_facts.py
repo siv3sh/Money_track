@@ -166,15 +166,21 @@ def _plain_language(doc: dict[str, Any]) -> str:
     return f"{ft}: {key} = {value}"
 
 
-def list_facts(facts: Collection) -> list[dict[str, Any]]:
-    rows = [serialize_fact(d) for d in facts.find().sort("last_confirmed_at", -1)]
+def list_facts(facts: Collection, *, user_id: Any = None) -> list[dict[str, Any]]:
+    q: dict[str, Any] = {}
+    if user_id is not None:
+        q["user_id"] = user_id
+    rows = [serialize_fact(d) for d in facts.find(q).sort("last_confirmed_at", -1)]
     rows.sort(key=lambda r: (r.get("group") or "", r.get("key") or ""))
     return rows
 
 
-def get_fact_map(facts: Collection) -> dict[str, dict[str, Any]]:
+def get_fact_map(facts: Collection, *, user_id: Any = None) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    for d in facts.find():
+    q: dict[str, Any] = {}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         ft = str(d.get("fact_type") or "")
         key = str(d.get("key") or "")
         if ft and key:
@@ -182,9 +188,12 @@ def get_fact_map(facts: Collection) -> dict[str, dict[str, Any]]:
     return out
 
 
-def merchant_category_overrides(facts: Collection) -> dict[str, str]:
+def merchant_category_overrides(facts: Collection, *, user_id: Any = None) -> dict[str, str]:
     memory: dict[str, str] = {}
-    for d in facts.find({"fact_type": {"$in": ["category_intent", "merchant_correction"]}}):
+    q: dict[str, Any] = {"fact_type": {"$in": ["category_intent", "merchant_correction"]}}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         key = str(d.get("key") or "").strip().lower()
         val = str(d.get("value") or "").strip()
         if key and val in CATEGORIES:
@@ -192,10 +201,13 @@ def merchant_category_overrides(facts: Collection) -> dict[str, str]:
     return memory
 
 
-def income_profile_from_facts(facts: Collection) -> dict[str, Any]:
+def income_profile_from_facts(facts: Collection, *, user_id: Any = None) -> dict[str, Any]:
     """Structured salary profile from income_profile facts."""
     out: dict[str, Any] = {}
-    for d in facts.find({"fact_type": "income_profile"}):
+    q: dict[str, Any] = {"fact_type": "income_profile"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         key = str(d.get("key") or "").strip().lower()
         if not key:
             continue
@@ -244,19 +256,26 @@ def salary_needles_from_profile(profile: dict[str, Any] | None) -> list[str]:
     return out
 
 
-def salary_needles_from_facts(facts: Collection | None) -> list[str]:
+def salary_needles_from_facts(facts: Collection | None, *, user_id: Any = None) -> list[str]:
     if facts is None:
         return []
-    return salary_needles_from_profile(income_profile_from_facts(facts))
+    return salary_needles_from_profile(income_profile_from_facts(facts, user_id=user_id))
 
 
-def people_patterns_from_facts(facts: Collection | None) -> list[tuple[str, str]]:
+def people_patterns_from_facts(
+    facts: Collection | None,
+    *,
+    user_id: Any = None,
+) -> list[tuple[str, str]]:
     """(match_needle, display_name) from people_relation facts — family/friends transfers."""
     if facts is None:
         return []
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for d in facts.find({"fact_type": "people_relation"}):
+    q: dict[str, Any] = {"fact_type": "people_relation"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         key = str(d.get("key") or "").strip()
         val = str(d.get("value") or "").strip()
         if not key:
@@ -472,6 +491,7 @@ def upsert_fact(
     source: str = "user_answered",
     plain_language: str | None = None,
     meta: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     if fact_type not in FACT_TYPES:
         raise ValueError(f"Invalid fact_type: {fact_type}")
@@ -479,7 +499,7 @@ def upsert_fact(
     if not key_s:
         raise ValueError("key is required")
     now = _now()
-    doc = {
+    doc: dict[str, Any] = {
         "fact_type": fact_type,
         "key": key_s,
         "key_norm": key_s.lower(),
@@ -490,7 +510,12 @@ def upsert_fact(
         "plain_language": plain_language,
         "last_confirmed_at": now,
     }
-    existing = facts.find_one({"fact_type": fact_type, "key_norm": key_s.lower()})
+    if user_id is not None:
+        doc["user_id"] = user_id
+    lookup: dict[str, Any] = {"fact_type": fact_type, "key_norm": key_s.lower()}
+    if user_id is not None:
+        lookup["user_id"] = user_id
+    existing = facts.find_one(lookup)
     if existing:
         facts.update_one(
             {"_id": existing["_id"]},

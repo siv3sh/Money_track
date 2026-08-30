@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, LogOut, Moon, Settings2, Sun, UserRound } from 'lucide-react'
+import { BookOpen, LogOut, Moon, Settings2, Shield, Sun, UserRound } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../hooks/useTheme'
 import { NavCustomizeDialog } from './NavCustomizeDialog'
@@ -80,6 +80,20 @@ export function AccountMenu() {
               <BookOpen size={14} />
               Help & guide
             </button>
+            {user?.is_admin ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-[var(--surface)]"
+                onClick={() => {
+                  setOpen(false)
+                  navigate('/admin')
+                }}
+              >
+                <Shield size={14} />
+                Database & users
+              </button>
+            ) : null}
             <button
               type="button"
               role="menuitem"

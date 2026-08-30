@@ -366,6 +366,7 @@ def upsert_holdings(
     holdings: list[dict[str, Any]],
     *,
     source: str = "csv_import",
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Upsert by instrument_key (name + as_of_date). Tags source + import_date."""
     now = datetime.now(timezone.utc)
@@ -374,7 +375,7 @@ def upsert_holdings(
 
     for h in holdings:
         key = h.get("instrument_key") or _instrument_key(h["name"], h.get("as_of_date"))
-        doc = {
+        doc: dict[str, Any] = {
             "name": h["name"],
             "asset_class": h.get("asset_class") or "Other Investments",
             "invested": float(h["invested"]),
@@ -389,15 +390,21 @@ def upsert_holdings(
             "external_id": h.get("external_id"),
             "provider": h.get("provider") or "indmoney",
         }
-        existing = portfolio_collection.find_one({"instrument_key": key})
+        if user_id is not None:
+            doc["user_id"] = user_id
+        lookup: dict[str, Any] = {"instrument_key": key}
+        if user_id is not None:
+            lookup["user_id"] = user_id
+        existing = portfolio_collection.find_one(lookup)
         if existing:
             portfolio_collection.update_one({"_id": existing["_id"]}, {"$set": doc})
             updated += 1
         else:
             # Also match legacy docs that only have name (no instrument_key)
-            legacy = portfolio_collection.find_one(
-                {"name": h["name"], "instrument_key": {"$exists": False}}
-            )
+            legacy_q: dict[str, Any] = {"name": h["name"], "instrument_key": {"$exists": False}}
+            if user_id is not None:
+                legacy_q["user_id"] = user_id
+            legacy = portfolio_collection.find_one(legacy_q)
             if legacy and not h.get("as_of_date"):
                 portfolio_collection.update_one({"_id": legacy["_id"]}, {"$set": doc})
                 updated += 1

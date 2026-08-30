@@ -86,6 +86,15 @@ def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def is_admin_user(doc: dict[str, Any] | None) -> bool:
+    if not doc:
+        return False
+    admin = normalize_email(os.getenv("ADMIN_EMAIL") or os.getenv("SEED_USER_EMAIL") or "")
+    if not admin:
+        return False
+    return normalize_email(str(doc.get("email") or "")) == admin
+
+
 def create_access_token(*, user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
@@ -121,6 +130,8 @@ def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
         "setup_completed": bool(doc.get("setup_completed")),
         "setup_platform": doc.get("setup_platform"),
         "onboarding_completed": onboarding_completed,
+        "disabled": bool(doc.get("disabled")),
+        "is_admin": is_admin_user(doc),
     }
 
 
@@ -275,6 +286,8 @@ def authenticate_user(users: Collection, email: str, password: str) -> dict[str,
     doc = users.find_one({"email": email_n})
     if not doc or not verify_password(str(doc.get("password_hash") or ""), password):
         raise HTTPException(status_code=401, detail="Wrong email or password")
+    if doc.get("disabled"):
+        raise HTTPException(status_code=403, detail="This account has been disabled")
     return doc
 
 

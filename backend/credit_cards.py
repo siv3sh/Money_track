@@ -43,6 +43,7 @@ def upsert_credit_card_from_sms(
     sender: str,
     body: str,
     received_at: datetime | None = None,
+    user_id: Any = None,
 ) -> Optional[dict[str, Any]]:
     """
     Upsert a credit_cards row from an SMS body.
@@ -69,7 +70,9 @@ def upsert_credit_card_from_sms(
 
     as_of = _as_utc(received_at)
     now = datetime.now(timezone.utc)
-    key = {"bank": bank, "last4": last4}
+    key: dict[str, Any] = {"bank": bank, "last4": last4}
+    if user_id is not None:
+        key["user_id"] = user_id
 
     existing = credit_cards.find_one(key) or {}
     patch: dict[str, Any] = {
@@ -80,6 +83,8 @@ def upsert_credit_card_from_sms(
         "updated_at": now,
         "last_sms_kind": kind,
     }
+    if user_id is not None:
+        patch["user_id"] = user_id
     if not existing:
         patch["created_at"] = now
 
@@ -114,8 +119,15 @@ def upsert_credit_card_from_sms(
     return _serialize(doc) if doc else None
 
 
-def list_credit_cards(credit_cards: Collection) -> list[dict[str, Any]]:
-    rows = list(credit_cards.find().sort([("bank", 1), ("last4", 1)]))
+def list_credit_cards(
+    credit_cards: Collection,
+    *,
+    user_id: Any = None,
+) -> list[dict[str, Any]]:
+    q: dict[str, Any] = {}
+    if user_id is not None:
+        q["user_id"] = user_id
+    rows = list(credit_cards.find(q).sort([("bank", 1), ("last4", 1)]))
     return [_serialize(r) for r in rows]
 
 
@@ -146,6 +158,8 @@ def get_credit_card_by_last4(
 def sync_credit_cards_to_liabilities(
     credit_cards: Collection,
     liabilities: Collection,
+    *,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """
     Upsert auto liability rows from credit_cards (statement_total → outstanding).
@@ -154,7 +168,7 @@ def sync_credit_cards_to_liabilities(
     Cards without a known statement_total are not written; stale auto rows removed.
     """
     now = datetime.now(timezone.utc)
-    cards = list_credit_cards(credit_cards)
+    cards = list_credit_cards(credit_cards, user_id=user_id)
     synced: list[dict[str, Any]] = []
     keep_keys: set[tuple[str, str]] = set()
 
@@ -167,7 +181,9 @@ def sync_credit_cards_to_liabilities(
             continue
         bank = str(card.get("bank") or "Credit card").strip() or "Credit card"
         keep_keys.add((bank, last4))
-        key = {"source": "credit_cards", "bank": bank, "last4": last4}
+        key: dict[str, Any] = {"source": "credit_cards", "bank": bank, "last4": last4}
+        if user_id is not None:
+            key["user_id"] = user_id
         patch: dict[str, Any] = {
             "name": f"{bank} Card XX{last4}",
             "type": "credit_card",
@@ -180,6 +196,8 @@ def sync_credit_cards_to_liabilities(
             "updated_at": now,
             "as_of": card.get("as_of"),
         }
+        if user_id is not None:
+            patch["user_id"] = user_id
         liabilities.update_one(key, {"$set": patch, "$setOnInsert": {"created_at": now}}, upsert=True)
         doc = liabilities.find_one(key)
         if doc:
@@ -195,7 +213,10 @@ def sync_credit_cards_to_liabilities(
             )
 
     removed = 0
-    for doc in liabilities.find({"source": "credit_cards"}):
+    stale_q: dict[str, Any] = {"source": "credit_cards"}
+    if user_id is not None:
+        stale_q["user_id"] = user_id
+    for doc in liabilities.find(stale_q):
         pair = (str(doc.get("bank") or ""), str(doc.get("last4") or ""))
         if pair not in keep_keys:
             liabilities.delete_one({"_id": doc["_id"]})
