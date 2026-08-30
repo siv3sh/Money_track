@@ -19,17 +19,27 @@ ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4, hash_len=32, 
 _bearer = HTTPBearer(auto_error=False)
 
 _raw_jwt = os.getenv("JWT_SECRET", "").strip()
+_api_key = os.getenv("API_KEY", "").strip()
 _env_name = (os.getenv("ENV") or os.getenv("APP_ENV") or "production").strip().lower()
-if not _raw_jwt or _raw_jwt == "dev-insecure-change-me":
-    if _env_name in {"development", "dev", "local", "test"}:
-        JWT_SECRET = _raw_jwt or "dev-insecure-change-me"
-    else:
-        raise RuntimeError(
-            "JWT_SECRET must be set to a long random value "
-            "(do not reuse API_KEY; refuse the hardcoded default in production)."
-        )
-else:
+_INSECURE = "dev-insecure-change-me"
+
+if _raw_jwt and _raw_jwt not in {_INSECURE, "change-me-to-a-long-random-string"}:
     JWT_SECRET = _raw_jwt
+elif _api_key:
+    # Temporary fallback so deploys that only set API_KEY still boot.
+    # Prefer a dedicated JWT_SECRET in Render (do not share webhook/cron secrets long-term).
+    print(
+        "WARNING: JWT_SECRET unset — falling back to API_KEY for token signing. "
+        "Set JWT_SECRET to a long random value in Render env."
+    )
+    JWT_SECRET = _api_key
+elif _env_name in {"development", "dev", "local", "test"}:
+    JWT_SECRET = _INSECURE
+    print("WARNING: using insecure JWT_SECRET for local development only.")
+else:
+    raise RuntimeError(
+        "JWT_SECRET (or API_KEY fallback) must be set to a long random value in production."
+    )
 JWT_ALG = "HS256"
 JWT_DAYS = int(os.getenv("JWT_EXPIRE_DAYS", "14"))
 
