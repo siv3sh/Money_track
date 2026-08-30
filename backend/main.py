@@ -71,6 +71,7 @@ from auth_users import (
     get_current_user,
     get_primary_user,
     migrate_assign_user_id,
+    register_user,
     seed_user_from_env,
     serialize_linked_account,
     serialize_user,
@@ -188,7 +189,7 @@ app.state.linked_accounts = linked_accounts_col
 
 def _is_public_path(path: str) -> bool:
     """Explicit public allowlist — never expose /sms-webhook/debug or docs-by-prefix alone."""
-    if path == "/health" or path == "/auth/login":
+    if path == "/health" or path == "/auth/login" or path == "/auth/register":
         return True
     if path.startswith("/jobs/"):
         return True
@@ -846,9 +847,19 @@ class LoginPayload(BaseModel):
     password: str = Field(..., min_length=1, max_length=200)
 
 
+class RegisterPayload(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+    password: str = Field(..., min_length=8, max_length=200)
+    signup_code: str | None = Field(default=None, max_length=120)
+
+
 class SetupPayload(BaseModel):
     platform: str = Field(..., pattern="^(ios|android)$")
     setup_completed: bool = True
+
+
+class OnboardingPayload(BaseModel):
+    onboarding_completed: bool = True
 
 
 class LinkedAccountCreate(BaseModel):
@@ -861,6 +872,23 @@ class LinkedAccountCreate(BaseModel):
 @app.post("/auth/login")
 def auth_login(payload: LoginPayload):
     user = authenticate_user(users_col, payload.email, payload.password)
+    token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": serialize_user(user),
+    }
+
+
+@app.post("/auth/register")
+def auth_register(payload: RegisterPayload):
+    required_code = (os.getenv("SIGNUP_CODE") or "").strip()
+    if required_code:
+        given = (payload.signup_code or "").strip()
+        if not given or given != required_code:
+            raise HTTPException(status_code=403, detail="Invite code required or incorrect")
+    user = register_user(users_col, payload.email, payload.password)
+    ensure_default_linked_account(linked_accounts_col, user_id=user["_id"])
     token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
     return {
         "access_token": token,
@@ -888,6 +916,24 @@ def auth_setup(payload: SetupPayload, request: Request):
             "$set": {
                 "setup_platform": payload.platform,
                 "setup_completed": payload.setup_completed,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+    refreshed = users_col.find_one({"_id": user["_id"]})
+    return serialize_user(refreshed or user)
+
+
+@app.patch("/auth/onboarding")
+def auth_onboarding(payload: OnboardingPayload, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    users_col.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "onboarding_completed": payload.onboarding_completed,
                 "updated_at": datetime.now(timezone.utc),
             }
         },

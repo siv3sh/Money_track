@@ -28,6 +28,7 @@ export type AuthUser = {
   email: string
   setup_completed?: boolean
   setup_platform?: 'ios' | 'android' | string | null
+  onboarding_completed?: boolean
   created_at?: string | null
 }
 
@@ -103,7 +104,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
     )
   }
-  if (res.status === 401 && !path.startsWith('/auth/login')) {
+  if (res.status === 401 && !path.startsWith('/auth/login') && !path.startsWith('/auth/register')) {
     logoutLocal()
   }
   if (!res.ok) {
@@ -131,6 +132,22 @@ export function loginRequest(
   })
 }
 
+export function registerRequest(payload: {
+  email: string
+  password: string
+  signup_code?: string
+}): Promise<{ access_token: string; token_type: string; user: AuthUser }> {
+  return request('/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: payload.email,
+      password: payload.password,
+      signup_code: payload.signup_code || undefined,
+    }),
+  })
+}
+
 export function fetchMe(): Promise<AuthUser> {
   return request('/auth/me')
 }
@@ -143,6 +160,16 @@ export function saveSetup(payload: {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ setup_completed: true, ...payload }),
+  })
+}
+
+export function saveOnboarding(payload: {
+  onboarding_completed?: boolean
+} = {}): Promise<AuthUser> {
+  return request('/auth/onboarding', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ onboarding_completed: true, ...payload }),
   })
 }
 

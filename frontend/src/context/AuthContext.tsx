@@ -13,6 +13,7 @@ import {
   getStoredToken,
   loginRequest,
   logoutLocal,
+  registerRequest,
   setStoredToken,
   type AuthUser,
 } from '../api'
@@ -21,6 +22,11 @@ type AuthState = {
   user: AuthUser | null
   loading: boolean
   login: (email: string, password: string) => Promise<AuthUser>
+  register: (payload: {
+    email: string
+    password: string
+    signup_code?: string
+  }) => Promise<AuthUser>
   logout: () => void
   refreshUser: () => Promise<void>
   setUser: (u: AuthUser | null) => void
@@ -80,14 +86,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.user
   }, [])
 
+  const register = useCallback(
+    async (payload: { email: string; password: string; signup_code?: string }) => {
+      const res = await registerRequest(payload)
+      setStoredToken(res.access_token)
+      setUser(res.user)
+      return res.user
+    },
+    [],
+  )
+
   const logout = useCallback(() => {
     logoutLocal()
     setUser(null)
   }, [])
 
   const value = useMemo(
-    () => ({ user, loading, login, logout, refreshUser, setUser }),
-    [user, loading, login, logout, refreshUser],
+    () => ({ user, loading, login, register, logout, refreshUser, setUser }),
+    [user, loading, login, register, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

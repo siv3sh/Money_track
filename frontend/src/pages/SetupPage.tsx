@@ -50,7 +50,11 @@ export function SetupPage() {
     )
   }
   if (!user) return <Navigate to="/login" replace />
-  if (user.setup_completed) return <Navigate to="/" replace />
+  if (user.setup_completed) {
+    return (
+      <Navigate to={user.onboarding_completed ? '/' : '/getting-started'} replace />
+    )
+  }
 
   const webhookUrl = account?.webhook_url || ''
 
@@ -109,7 +113,7 @@ export function SetupPage() {
       const next = await saveSetup({ platform, setup_completed: true })
       setUser(next)
       await refreshUser()
-      navigate('/accounts', { replace: true })
+      navigate('/getting-started', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save setup')
     } finally {

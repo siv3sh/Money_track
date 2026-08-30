@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogOut, Moon, Settings2, Sun, UserRound } from 'lucide-react'
+import { BookOpen, LogOut, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../hooks/useTheme'
 import { NavCustomizeDialog } from './NavCustomizeDialog'
@@ -67,6 +67,18 @@ export function AccountMenu() {
             >
               <UserRound size={14} />
               Profile
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-[var(--surface)]"
+              onClick={() => {
+                setOpen(false)
+                navigate('/getting-started')
+              }}
+            >
+              <BookOpen size={14} />
+              Help & guide
             </button>
             <button
               type="button"

@@ -1176,7 +1176,9 @@ def _build_alerts(
                     "title": "Unusual spend",
                     "message": f"{merch}: ₹{amt:,.0f} (avg debit ₹{avg_debit:,.0f})",
                     "amount": amt,
+                    "avg": round(avg_debit, 2),
                     "merchant": merch,
+                    "category": u.get("category"),
                 }
             )
             if sum(1 for a in alerts if a.get("type") == "anomaly") >= 5:

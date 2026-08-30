@@ -9,6 +9,7 @@ import { AiInsightsPage } from './pages/AiInsightsPage'
 import { AccountsPage } from './pages/AccountsPage'
 import { CashFlowPage } from './pages/CashFlowPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { GettingStartedPage } from './pages/GettingStartedPage'
 import { ImportPage } from './pages/ImportPage'
 import { IndmoneyImportPage } from './pages/IndmoneyImportPage'
 import { LoginPage } from './pages/LoginPage'
@@ -46,6 +47,16 @@ function RequireSetupDone() {
   return <Outlet />
 }
 
+/** First visit home → Getting Started until they finish the guide. */
+function RequireOnboardingForHome() {
+  const { user, loading } = useAuth()
+  if (loading) return <FullScreenLoading />
+  if (!user) return <Navigate to="/login" replace />
+  if (!user.setup_completed) return <Navigate to="/setup" replace />
+  if (!user.onboarding_completed) return <Navigate to="/getting-started" replace />
+  return <Outlet />
+}
+
 function RequireAdvisorEnabled() {
   const { enabled } = useAdvisorSettings()
   if (!enabled) return <Navigate to="/profile" replace />
@@ -72,8 +83,11 @@ export default function App() {
                     <Route path="/setup" element={<SetupPage />} />
                     <Route element={<RequireSetupDone />}>
                       <Route element={<AppShell />}>
-                        <Route index element={<DashboardPage />} />
-                        <Route path="dashboard" element={<DashboardPage />} />
+                        <Route path="getting-started" element={<GettingStartedPage />} />
+                        <Route element={<RequireOnboardingForHome />}>
+                          <Route index element={<DashboardPage />} />
+                          <Route path="dashboard" element={<DashboardPage />} />
+                        </Route>
                         <Route element={<RequireWealthEnabled />}>
                           <Route path="wealth" element={<WealthPage />} />
                           <Route path="investments/indmoney" element={<IndmoneyImportPage />} />

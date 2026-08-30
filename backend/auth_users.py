@@ -106,6 +106,12 @@ def decode_token(token: str) -> dict[str, Any]:
 
 
 def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
+    # Users who finished SMS setup before onboarding existed should not be forced
+    # through Getting Started again.
+    if "onboarding_completed" in doc:
+        onboarding_completed = bool(doc.get("onboarding_completed"))
+    else:
+        onboarding_completed = bool(doc.get("setup_completed"))
     return {
         "id": str(doc["_id"]),
         "email": doc.get("email"),
@@ -114,6 +120,7 @@ def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
         else doc.get("created_at"),
         "setup_completed": bool(doc.get("setup_completed")),
         "setup_platform": doc.get("setup_platform"),
+        "onboarding_completed": onboarding_completed,
     }
 
 
@@ -141,10 +148,35 @@ def seed_user_from_env(users: Collection) -> dict[str, Any] | None:
         "updated_at": now,
         "setup_completed": False,
         "setup_platform": None,
+        "onboarding_completed": False,
     }
     res = users.insert_one(doc)
     doc["_id"] = res.inserted_id
     print(f"Seeded user account for {email}")
+    return doc
+
+
+def register_user(users: Collection, email: str, password: str) -> dict[str, Any]:
+    """Create a self-service account. Raises HTTPException on conflict / validation."""
+    email_n = normalize_email(email)
+    if not email_n or "@" not in email_n:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if users.find_one({"email": email_n}):
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    now = _now()
+    doc = {
+        "email": email_n,
+        "password_hash": hash_password(password),
+        "created_at": now,
+        "updated_at": now,
+        "setup_completed": False,
+        "setup_platform": None,
+        "onboarding_completed": False,
+    }
+    res = users.insert_one(doc)
+    doc["_id"] = res.inserted_id
     return doc
 
 

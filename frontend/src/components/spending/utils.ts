@@ -120,64 +120,119 @@ export type AnomalyItem = {
   message: string
   severity: 'info' | 'warning' | 'alert'
   kind: 'alert' | 'category' | 'merchant'
+  /** Prefill Find-transactions when the row is clicked. */
+  merchant?: string
+  category?: string
+  amount?: number
+  avg?: number
+  /** How many × the baseline (e.g. 3.2× avg). */
+  multiple?: number
 }
 
 const ANOMALY_MULTIPLIER = 1.5
 const TRAIL_MONTHS = 3
 
 /**
- * Prefer alerts with type === 'anomaly'. Else flag categories (and merchants when
- * monthly history exists) whose current spend > 1.5× trailing 3-month average.
+ * Combine transaction-level anomaly alerts with category spikes
+ * (>1.5× trailing 3-month average). Both are tracked so users can
+ * click through into Find transactions.
  */
 export function resolveAnomalies(args: {
   alerts: AnalyticsAlert[] | undefined
   categoryMonthly: Array<Record<string, string | number>> | undefined
   lifestyleCats: BreakdownRow[]
 }): AnomalyItem[] {
-  const fromAlerts = (args.alerts || [])
-    .filter((a) => a.type === 'anomaly')
-    .map((a, i) => ({
-      id: `alert-${i}-${a.title}`,
-      title: a.title,
-      message: a.message,
+  const out: AnomalyItem[] = []
+
+  for (const [i, a] of (args.alerts || []).entries()) {
+    if (a.type !== 'anomaly') continue
+    const amount = a.amount != null ? Number(a.amount) : undefined
+    const avg = a.avg != null ? Number(a.avg) : parseAvgFromMessage(a.message)
+    const merchant = (a.merchant || parseMerchantFromMessage(a.message) || '').trim() || undefined
+    const multiple =
+      amount != null && avg != null && avg > 0 ? Math.round((amount / avg) * 10) / 10 : undefined
+    out.push({
+      id: `alert-${i}-${merchant || a.title}`,
+      title: merchant || a.title || 'Unusual spend',
+      message: buildTxnMessage(amount, avg, multiple, a.message),
       severity: a.severity,
-      kind: 'alert' as const,
-    }))
-  if (fromAlerts.length) return fromAlerts
+      kind: 'alert',
+      merchant,
+      category: a.category,
+      amount,
+      avg,
+      multiple,
+    })
+  }
 
   const rows = args.categoryMonthly || []
-  if (rows.length < 2) return []
-
-  const months = rows.map((r) => String(r.month)).sort()
-  const currentMonth = months[months.length - 1]
-  const trailKeys = months.slice(-(TRAIL_MONTHS + 1), -1)
-  if (!trailKeys.length || !currentMonth) return []
-
-  const out: AnomalyItem[] = []
-  const catNames = new Set(args.lifestyleCats.map((c) => c.name))
-
-  for (const cat of catNames) {
-    const current = args.lifestyleCats.find((c) => c.name === cat)?.debit ?? 0
-    if (current <= 0) continue
-    const trailVals: number[] = []
-    for (const m of trailKeys) {
-      const row = rows.find((r) => String(r.month) === m)
-      trailVals.push(Number(row?.[cat] ?? 0))
-    }
-    const avg = trailVals.reduce((s, v) => s + v, 0) / trailVals.length
-    if (avg > 0 && current > avg * ANOMALY_MULTIPLIER) {
-      const pct = Math.round((current / avg - 1) * 100)
-      out.push({
-        id: `cat-${cat}`,
-        title: `${cat} is elevated`,
-        message: `${formatPct(pct)} above the trailing ${trailVals.length}-month average (threshold 1.5×).`,
-        severity: current > avg * 2 ? 'alert' : 'warning',
-        kind: 'category',
-      })
+  if (rows.length >= 2) {
+    const months = rows.map((r) => String(r.month)).sort()
+    const currentMonth = months[months.length - 1]
+    const trailKeys = months.slice(-(TRAIL_MONTHS + 1), -1)
+    if (trailKeys.length && currentMonth) {
+      const catNames = new Set(args.lifestyleCats.map((c) => c.name))
+      for (const cat of catNames) {
+        const current = args.lifestyleCats.find((c) => c.name === cat)?.debit ?? 0
+        if (current <= 0) continue
+        const trailVals: number[] = []
+        for (const m of trailKeys) {
+          const row = rows.find((r) => String(r.month) === m)
+          trailVals.push(Number(row?.[cat] ?? 0))
+        }
+        const avg = trailVals.reduce((s, v) => s + v, 0) / trailVals.length
+        if (avg > 0 && current > avg * ANOMALY_MULTIPLIER) {
+          const multiple = Math.round((current / avg) * 10) / 10
+          const pct = Math.round((current / avg - 1) * 100)
+          out.push({
+            id: `cat-${cat}`,
+            title: cat,
+            message: `${formatPct(pct)} vs trailing ${trailVals.length}-mo avg · ${multiple}× (threshold 1.5×)`,
+            severity: current > avg * 2 ? 'alert' : 'warning',
+            kind: 'category',
+            category: cat,
+            amount: current,
+            avg,
+            multiple,
+          })
+        }
+      }
     }
   }
 
-  return out.slice(0, 8)
+  // Prefer larger multiples first; cap list
+  out.sort((a, b) => (b.multiple ?? 0) - (a.multiple ?? 0))
+  return out.slice(0, 10)
+}
+
+function parseAvgFromMessage(message: string): number | undefined {
+  const m = message.match(/avg(?:\s+debit)?\s*₹\s*([\d,]+(?:\.\d+)?)/i)
+  if (!m) return undefined
+  const n = Number(m[1].replace(/,/g, ''))
+  return Number.isFinite(n) ? n : undefined
+}
+
+function parseMerchantFromMessage(message: string): string | undefined {
+  // "Merchant: ₹1,234 (avg debit ₹…)"
+  const m = message.match(/^(.+?):\s*₹/)
+  return m?.[1]?.trim() || undefined
+}
+
+function buildTxnMessage(
+  amount: number | undefined,
+  avg: number | undefined,
+  multiple: number | undefined,
+  fallback: string,
+): string {
+  if (amount == null) return fallback
+  const parts = [`₹${Math.round(amount).toLocaleString('en-IN')}`]
+  if (avg != null && avg > 0) {
+    parts.push(`avg ₹${Math.round(avg).toLocaleString('en-IN')}`)
+  }
+  if (multiple != null) {
+    parts.push(`${multiple}× usual`)
+  }
+  return parts.join(' · ')
 }
 
 function formatPct(n: number): string {

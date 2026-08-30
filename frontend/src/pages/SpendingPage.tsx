@@ -76,6 +76,22 @@ export function SpendingPage() {
     [pushToSearch],
   )
 
+  const onAnomalyClick = useCallback(
+    (item: { merchant?: string; category?: string; amount?: number }) => {
+      const amountMin =
+        item.amount != null && item.amount > 0
+          ? String(Math.floor(item.amount * 0.95))
+          : ''
+      pushToSearch({
+        merchant: item.merchant || '',
+        category: item.category || '',
+        amountMin,
+        amountMax: '',
+      })
+    },
+    [pushToSearch],
+  )
+
   return (
     <div className="fade-in">
       <PageHeader
@@ -100,7 +116,7 @@ export function SpendingPage() {
           <TopMerchants merchants={data.merchants || []} onMerchantClick={onMerchantClick} />
           <BudgetVsActual budgets={data.budgets} categories={cats} />
           <SubscriptionsCard merchants={data.recurring?.merchants || []} />
-          <AnomalyFlags items={anomalies} />
+          <AnomalyFlags items={anomalies} onAnomalyClick={onAnomalyClick} />
           <TxnSearchPanel
             filters={searchFilters}
             onFiltersChange={setSearchFilters}
