@@ -22,9 +22,9 @@ export function AdvisorChatWidget() {
   const [unread, setUnread] = useState(0)
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { light?: boolean }) => {
     try {
-      const p = await fetchAdvisorPresence()
+      const p = await fetchAdvisorPresence(opts?.light ? { light: true } : undefined)
       setPresence(p)
       setMessages(p.session?.messages || [])
       setNudges(p.nudges || [])
@@ -48,11 +48,21 @@ export function AdvisorChatWidget() {
     }
   }, [open])
 
+  // Defer heavy presence until chat opens (was blocking every page ~1 min).
   useEffect(() => {
-    void load()
-    const t = window.setInterval(() => void load(), 120_000)
+    if (!open) return
+    void load({ light: false })
+    const t = window.setInterval(() => void load({ light: false }), 120_000)
     return () => window.clearInterval(t)
-  }, [load])
+  }, [open, load])
+
+  // Soft background ping once after idle so FAB can show unread without blocking dashboard.
+  useEffect(() => {
+    const idle = window.setTimeout(() => {
+      if (!open) void load({ light: true })
+    }, 8_000)
+    return () => window.clearTimeout(idle)
+  }, [open, load])
 
   useEffect(() => {
     if (open) {

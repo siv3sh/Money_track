@@ -81,8 +81,8 @@ function apiErrorMessage(detail: unknown, fallback: string): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   const token = getStoredToken()
-  try {
-    res = await fetch(`${API_BASE}${path}`, {
+  const doFetch = () =>
+    fetch(`${API_BASE}${path}`, {
       ...init,
       headers: {
         Accept: 'application/json',
@@ -90,6 +90,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...(init?.headers || {}),
       },
     })
+  try {
+    try {
+      res = await doFetch()
+    } catch {
+      // One retry helps Render free-tier cold starts / brief network blips.
+      await new Promise((r) => setTimeout(r, 1200))
+      res = await doFetch()
+    }
   } catch {
     throw new Error(
       `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
@@ -1429,8 +1437,9 @@ export interface AdvisorPresence {
   }
 }
 
-export function fetchAdvisorPresence(): Promise<AdvisorPresence> {
-  return request('/advisor/presence')
+export function fetchAdvisorPresence(opts?: { light?: boolean }): Promise<AdvisorPresence> {
+  const q = opts?.light ? '?light=true' : ''
+  return request(`/advisor/presence${q}`)
 }
 
 export function sendAdvisorChat(

@@ -68,14 +68,21 @@ interface FilterState {
 
 const FilterContext = createContext<FilterState | null>(null)
 
-export function FilterProvider({ children }: { children: ReactNode }) {
-  const initial = presetRange('year')
-  const [preset, setPresetState] = useState<DatePreset | 'custom'>('year')
+export function FilterProvider({
+  children,
+  autoLoad = true,
+}: {
+  children: ReactNode
+  /** When false, skip the heavy /analytics fetch (Dashboard loads its own data). */
+  autoLoad?: boolean
+}) {
+  const initial = presetRange('month')
+  const [preset, setPresetState] = useState<DatePreset | 'custom'>('month')
   const [dateFrom, setDateFromState] = useState(initial.from)
   const [dateTo, setDateToState] = useState(initial.to)
   const [banks, setBanks] = useState<string[]>([])
   const [data, setData] = useState<AnalyticsPayload | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(autoLoad)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -96,8 +103,12 @@ export function FilterProvider({ children }: { children: ReactNode }) {
   }, [banks, dateFrom, dateTo])
 
   useEffect(() => {
+    if (!autoLoad) {
+      setLoading(false)
+      return
+    }
     void load()
-  }, [load])
+  }, [autoLoad, load])
 
   const value = useMemo<FilterState>(
     () => ({

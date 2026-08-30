@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
@@ -7,13 +7,25 @@ import { APP_NAV } from '../lib/navConfig'
 import { AccountMenu } from './AccountMenu'
 import { AdvisorChatWidget } from './AdvisorChatWidget'
 
+/** Pages that need shared FilterContext analytics on mount. Dashboard has its own loader. */
+const FILTER_ANALYTICS_PATHS = new Set([
+  '/wealth',
+  '/cash-flow',
+  '/spending',
+  '/transactions',
+  '/ai',
+  '/investments/indmoney',
+])
+
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { isVisible } = useNavVisibility()
   const shownNav = APP_NAV.filter((item) => isVisible(item.id))
+  const location = useLocation()
+  const loadSharedAnalytics = FILTER_ANALYTICS_PATHS.has(location.pathname)
 
   return (
-    <FilterProvider>
+    <FilterProvider autoLoad={loadSharedAnalytics}>
       <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
         {mobileOpen ? (
           <button

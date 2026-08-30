@@ -1435,19 +1435,21 @@ def presence_bootstrap(
     learned_facts: Collection | None = None,
     goals_col: Collection | None = None,
     learn_questions: list[dict[str, Any]] | None = None,
+    analytics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     session = get_or_create_session(sessions, period="week")
-    analytics = _load_analytics_bundle(
-        transactions=transactions,
-        portfolio=portfolio,
-        networth_snapshots=networth_snapshots,
-        liabilities=liabilities,
-        budgets=budgets,
-        sip_overrides=sip_overrides,
-        settings=settings,
-        learned_facts=learned_facts,
-        goals_col=goals_col,
-    )
+    if analytics is None:
+        analytics = _load_analytics_bundle(
+            transactions=transactions,
+            portfolio=portfolio,
+            networth_snapshots=networth_snapshots,
+            liabilities=liabilities,
+            budgets=budgets,
+            sip_overrides=sip_overrides,
+            settings=settings,
+            learned_facts=learned_facts,
+            goals_col=goals_col,
+        )
     profile = advisor_profile_from_facts(learned_facts)
     severity = analytics.get("advisor_severity") or {}
     maybe_append_from_severity(memories, severity=severity, profile=profile)

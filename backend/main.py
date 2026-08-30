@@ -238,6 +238,7 @@ async def require_login_middleware(request: Request, call_next):
 # Useful indexes for the dashboard queries below
 try:
     transactions.create_index([("received_at", DESCENDING)])
+    transactions.create_index([("user_id", 1), ("received_at", DESCENDING)])
     transactions.create_index("card_type")
     transactions.create_index("bank")
     transactions.create_index("type")
@@ -1921,11 +1922,9 @@ def analytics(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
-    try:
-        sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
-    except Exception as exc:  # noqa: BLE001
-        print(f"Warning: credit card→liability sync skipped: {exc}")
     uid = getattr(request.state, "user_id", None)
+    # Skip credit-card→liability sync on every analytics hit (was adding seconds per load).
+    # Sync still runs on SMS ingest and explicit CC endpoints.
     payload = build_analytics(
         transactions,
         date_from=start,
@@ -3359,8 +3358,14 @@ class AdvisorDecisionPayload(BaseModel):
 
 
 @app.get("/advisor/presence")
-def advisor_presence_get():
-    """Bootstrap floating chat: session, nudges, memories, briefing."""
+def advisor_presence_get(light: bool = Query(default=False)):
+    """Bootstrap floating chat: session, nudges, memories, briefing.
+
+    light=true skips learn-question generation (faster first paint for the FAB).
+    Analytics is built once and reused (previously built twice → ~1 min).
+    """
+    analytics_stub = None
+    questions: list = []
     try:
         analytics_stub = attach_smart_insights(
             build_analytics(
@@ -3377,15 +3382,17 @@ def advisor_presence_get():
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
         )
-        questions = generate_questions(
-            facts=user_learned_facts,
-            events=learn_question_events,
-            transactions=transactions,
-            analytics=analytics_stub,
-            category_memory=category_memory,
-        )
+        if not light:
+            questions = generate_questions(
+                facts=user_learned_facts,
+                events=learn_question_events,
+                transactions=transactions,
+                analytics=analytics_stub,
+                category_memory=category_memory,
+            )
     except Exception:  # noqa: BLE001
         questions = []
+        analytics_stub = None
     try:
         return _jsonable(
             presence_bootstrap(
@@ -3401,6 +3408,7 @@ def advisor_presence_get():
                 learned_facts=user_learned_facts,
                 goals_col=planning_goals,
                 learn_questions=questions,
+                analytics=analytics_stub,
             )
         )
     except Exception as exc:  # noqa: BLE001
