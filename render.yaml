@@ -16,6 +16,8 @@ services:
         sync: false
       - key: APP_BASE_URL
         sync: false
+      - key: WEBHOOK_PUBLIC_BASE
+        value: https://money-track-epnn.onrender.com
       - key: PYTHON_VERSION
         value: "3.12.0"
       - key: LLM_PROVIDER
@@ -29,8 +31,6 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM_EMAIL
-        sync: false
-      - key: APP_BASE_URL
         sync: false
 
   # Runs on the 1st of each month (UTC) — generates prior-month report + email
