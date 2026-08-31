@@ -217,8 +217,11 @@ def answer_lifecycle_nudge(
     answer: str,
     free_text: str | None = None,
     sessions: Collection | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Persist a credit/spend explanation so future chats remember it like a human would."""
+    if user_id is None:
+        raise ValueError("user_id is required for nudge answers")
     profile = advisor_profile_from_facts(learned_facts)
     name = profile.get("preferred_name") or "you"
     kind_n = (kind or "").strip().lower()
@@ -228,7 +231,7 @@ def answer_lifecycle_nudge(
     if not nudge_id:
         raise ValueError("nudge_id is required")
 
-    ask = memories.find_one({"dedupe_key": nudge_id}) or {}
+    ask = memories.find_one({"user_id": user_id, "dedupe_key": nudge_id}) or {}
     meta = dict(ask.get("meta") or {})
     merchant = str(meta.get("merchant") or "that source")
     amount = meta.get("amount")
@@ -340,6 +343,7 @@ def answer_lifecycle_nudge(
         append_session_message(
             sessions,
             session["session_key"],
+            user_id=user_id,
             role="user",
             content=text,
             meta={"nudge_answer": True, "nudge_id": nudge_id, "kind": kind_n},
@@ -347,6 +351,7 @@ def answer_lifecycle_nudge(
         session = append_session_message(
             sessions,
             session["session_key"],
+            user_id=user_id,
             role="advisor",
             content=ack,
             meta={"nudge_ack": True, "kind": kind_n, "remembered": True, "exclude_from_llm": True},
@@ -417,6 +422,12 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _owner_q(user_id: Any, **extra: Any) -> dict[str, Any]:
+    if user_id is None:
+        raise ValueError("user_id is required for tenant-scoped advisor queries")
+    return {"user_id": user_id, **extra}
+
+
 def _week_key(dt: datetime | None = None) -> str:
     d = dt or _now()
     iso = d.isocalendar()
@@ -432,15 +443,20 @@ def get_or_create_session(
     sessions: Collection,
     *,
     period: str = "week",
+    user_id: Any = None,
 ) -> dict[str, Any]:
-    key = _week_key() if period == "week" else _day_key()
-    doc = sessions.find_one({"session_key": key})
+    if user_id is None:
+        raise ValueError("user_id is required for advisor sessions")
+    base = _week_key() if period == "week" else _day_key()
+    key = f"{user_id}:{base}"
+    doc = sessions.find_one({"user_id": user_id, "session_key": key})
     if doc:
         return _ser_session(doc)
     now = _now()
     fresh = {
         "session_key": key,
         "period": period,
+        "user_id": user_id,
         "messages": [],
         "created_at": now,
         "updated_at": now,
@@ -474,6 +490,7 @@ def append_session_message(
     role: str,
     content: str,
     meta: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     msg = {
         "role": role,
@@ -481,14 +498,17 @@ def append_session_message(
         "at": _now(),
         "meta": meta or {},
     }
+    q: dict[str, Any] = {"session_key": session_key}
+    if user_id is not None:
+        q["user_id"] = user_id
     sessions.update_one(
-        {"session_key": session_key},
+        q,
         {
             "$push": {"messages": {"$each": [msg], "$slice": -80}},
             "$set": {"updated_at": _now()},
         },
     )
-    doc = sessions.find_one({"session_key": session_key})
+    doc = sessions.find_one(q)
     return _ser_session(doc or {"_id": session_key, "session_key": session_key, "messages": [msg]})
 
 
@@ -503,10 +523,13 @@ def _load_analytics_bundle(
     settings: Collection | None,
     learned_facts: Collection | None,
     goals_col: Collection | None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     from analytics import build_analytics
     from smart_insights import attach_smart_insights
 
+    if user_id is None:
+        raise ValueError("user_id is required for advisor analytics")
     analytics = build_analytics(
         transactions,
         portfolio=portfolio,
@@ -514,6 +537,7 @@ def _load_analytics_bundle(
         liabilities=liabilities,
         budgets=budgets,
         learned_facts=learned_facts,
+        user_id=user_id,
     )
     return attach_smart_insights(
         analytics,
@@ -522,6 +546,7 @@ def _load_analytics_bundle(
         settings=settings,
         learned_facts=learned_facts,
         goals_col=goals_col,
+        user_id=user_id,
     )
 
 
@@ -541,9 +566,12 @@ def chat(
     goals_col: Collection | None = None,
     provider_name: str | None = None,
     period: str = "week",
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Full-context advisor chat — same grounding as reports."""
-    session = get_or_create_session(sessions, period=period)
+    if user_id is None:
+        raise ValueError("user_id is required for advisor chat")
+    session = get_or_create_session(sessions, period=period, user_id=user_id)
     analytics = _load_analytics_bundle(
         transactions=transactions,
         portfolio=portfolio,
@@ -554,12 +582,13 @@ def chat(
         settings=settings,
         learned_facts=learned_facts,
         goals_col=goals_col,
+        user_id=user_id,
     )
     severity = analytics.get("advisor_severity") or severity_from_analytics_bundle(
         analytics, settings=settings, learned_facts=learned_facts, goals_col=goals_col
     )
     profile = advisor_profile_from_facts(learned_facts)
-    maybe_append_from_severity(memories, severity=severity, profile=profile)
+    maybe_append_from_severity(memories, severity=severity, profile=profile, user_id=user_id)
 
     # If they're answering an open "where from?" / "why spend?" in free text — remember it
     captured = capture_open_nudge_from_chat(
@@ -570,7 +599,7 @@ def chat(
 
     # Goal milestones → memory
     if goals_col is not None:
-        for g in goals_col.find({"status": "active"}).limit(10):
+        for g in goals_col.find(_owner_q(user_id, status="active")).limit(10):
             funding = g.get("funding") or {}
             pct = float(funding.get("progress_pct") or 0)
             # progress may live on goal after enrich; compute rough from saved/target
@@ -585,7 +614,7 @@ def chat(
                 profile=profile,
             )
 
-    mem_lines = memories_for_prompt(memories, limit=8)
+    mem_lines = memories_for_prompt(memories, user_id=user_id, limit=8)
     system = build_chat_system_prompt(
         learned_facts=learned_facts,
         severity=severity,
@@ -595,7 +624,7 @@ def chat(
     hist_txt = "\n".join(_llm_history_lines(history, limit=6))
     goals_slim = []
     if goals_col is not None:
-        for g in goals_col.find({"status": "active"}).sort("priority", 1).limit(3):
+        for g in goals_col.find(_owner_q(user_id, status="active")).sort("priority", 1).limit(3):
             target = float(g.get("manual_price") or g.get("target_price") or 0)
             saved = float(g.get("saved_amount") or 0)
             goals_slim.append(
@@ -629,7 +658,7 @@ def chat(
         f"{CHAT_USER_SUFFIX}"
     )
 
-    append_session_message(sessions, session["session_key"], role="user", content=question.strip())
+    append_session_message(sessions, session["session_key"], user_id=user_id, role="user", content=question.strip())
     provider = get_chat_provider(provider_name)
     answer = provider.complete(system, user, temperature=0.3)
     session = append_session_message(
@@ -664,6 +693,7 @@ def decision_comment(
     learned_facts: Collection | None = None,
     goals_col: Collection | None = None,
     analytics: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """One-line advisor interjection for a user action — deterministic, grounded."""
     profile = advisor_profile_from_facts(learned_facts)
@@ -683,7 +713,7 @@ def decision_comment(
     progress = None
     status_line = None
     if goals_col is not None:
-        g = goals_col.find_one({"status": "active"}, sort=[("priority", 1)])
+        g = goals_col.find_one(_owner_q(user_id, status="active"), sort=[("priority", 1)])
         if g:
             goal_name = str(g.get("name") or motivation)
             target = float(g.get("manual_price") or g.get("target_price") or 0)
@@ -791,6 +821,7 @@ def goal_impact_for_spend(
     goals_col: Collection | None,
     learned_facts: Collection | None = None,
     settings: Collection | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Recompute rough time-to-goal if this discretionary spend instead went to the goal."""
     profile = advisor_profile_from_facts(learned_facts)
@@ -798,7 +829,7 @@ def goal_impact_for_spend(
     if goals_col is None or amount <= 0:
         return {"comment": None, "impact": None}
 
-    g = goals_col.find_one({"status": "active"}, sort=[("priority", 1)])
+    g = goals_col.find_one(_owner_q(user_id, status="active"), sort=[("priority", 1)])
     if not g:
         return {"comment": None, "impact": None}
 
@@ -887,7 +918,7 @@ def detect_money_mood(
 
     goal_name = motivation
     if goals_col is not None:
-        g = goals_col.find_one({"status": "active"}, sort=[("priority", 1)])
+        g = goals_col.find_one(_owner_q(user_id, status="active"), sort=[("priority", 1)])
         if g and g.get("name"):
             goal_name = str(g["name"])
 
@@ -911,7 +942,7 @@ def detect_money_mood(
     if transactions is not None:
         since = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         for doc in transactions.find(
-            {"type": "credit", "received_at": {"$gte": since}},
+            {"user_id": user_id, "type": "credit", "received_at": {"$gte": since}},
             {"amount": 1, "merchant": 1, "raw_text": 1, "received_at": 1, "category": 1},
         ).sort("received_at", -1).limit(40):
             if is_salary_source(
@@ -1039,6 +1070,7 @@ def build_lifecycle_nudges(
         }
         for doc in transactions.find(
             {
+                "user_id": user_id,
                 "type": "debit",
                 "received_at": {"$gte": since},
                 "category": {"$in": list(lifestyle_cats)},
@@ -1084,7 +1116,7 @@ def build_lifecycle_nudges(
         # Unexplained credits — ask where money came from
         for doc in transactions.find(
             {
-                "type": "credit",
+                "user_id": user_id, "type": "credit",
                 "received_at": {"$gte": since},
             },
             {"amount": 1, "merchant": 1, "raw_text": 1, "category": 1, "received_at": 1},
@@ -1182,11 +1214,14 @@ def on_new_transaction(
     transactions: Collection | None = None,
 ) -> dict[str, Any] | None:
     """Realtime advisor reaction when an SMS/txn is stored."""
+    user_id = txn.get("user_id")
+    if user_id is None:
+        return None
     profile = advisor_profile_from_facts(learned_facts)
     name = profile.get("preferred_name") or "you"
     motivation = profile.get("motivation") or "your goal"
     if goals_col is not None:
-        g = goals_col.find_one({"status": "active"}, sort=[("priority", 1)])
+        g = goals_col.find_one(_owner_q(user_id, status="active"), sort=[("priority", 1)])
         if g and g.get("name"):
             motivation = str(g["name"])
 
@@ -1303,6 +1338,7 @@ def on_new_transaction(
         append_session_message(
             sessions,
             session["session_key"],
+            user_id=user_id,
             role="advisor",
             content=message,
             meta={"kind": kind, "nudge": True, "exclude_from_llm": True},
@@ -1318,6 +1354,7 @@ def collect_nudges(
     transactions: Collection | None = None,
     learned_facts: Collection | None = None,
     goals_col: Collection | None = None,
+    user_id: Any = None,
     learn_questions: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Event-style nudges for the chat widget inbox."""
@@ -1328,7 +1365,7 @@ def collect_nudges(
     severity = analytics.get("advisor_severity") or {}
     level = severity.get("level") or "informational"
 
-    maybe_append_from_severity(memories, severity=severity, profile=profile)
+    maybe_append_from_severity(memories, severity=severity, profile=profile, user_id=user_id)
 
     nudges.extend(
         build_lifecycle_nudges(
@@ -1367,7 +1404,7 @@ def collect_nudges(
             )
 
     # Goal milestones from memory (recent)
-    for m in list_memories(memories, limit=8, kind="goal_milestone"):
+    for m in list_memories(memories, user_id=user_id, limit=8, kind="goal_milestone"):
         nudges.append(
             {
                 "id": f"mem-{m.get('id')}",
@@ -1436,8 +1473,11 @@ def presence_bootstrap(
     goals_col: Collection | None = None,
     learn_questions: list[dict[str, Any]] | None = None,
     analytics: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
-    session = get_or_create_session(sessions, period="week")
+    if user_id is None:
+        raise ValueError("user_id is required for advisor presence")
+    session = get_or_create_session(sessions, period="week", user_id=user_id)
     if analytics is None:
         analytics = _load_analytics_bundle(
             transactions=transactions,
@@ -1449,10 +1489,11 @@ def presence_bootstrap(
             settings=settings,
             learned_facts=learned_facts,
             goals_col=goals_col,
+            user_id=user_id,
         )
-    profile = advisor_profile_from_facts(learned_facts)
+    profile = advisor_profile_from_facts(learned_facts, user_id=user_id)
     severity = analytics.get("advisor_severity") or {}
-    maybe_append_from_severity(memories, severity=severity, profile=profile)
+    maybe_append_from_severity(memories, severity=severity, profile=profile, user_id=user_id)
 
     mood = detect_money_mood(
         analytics=analytics,
@@ -1482,6 +1523,7 @@ def presence_bootstrap(
         learned_facts=learned_facts,
         goals_col=goals_col,
         learn_questions=learn_questions,
+        user_id=user_id,
     )
     return {
         "session": session,
@@ -1489,7 +1531,7 @@ def presence_bootstrap(
         "advisor_severity": severity,
         "mood": mood,
         "nudges": nudges,
-        "memories": list_memories(memories, limit=15),
+        "memories": list_memories(memories, limit=15, user_id=user_id),
         "profile": {
             "preferred_name": profile.get("preferred_name"),
             "completeness": profile.get("completeness"),

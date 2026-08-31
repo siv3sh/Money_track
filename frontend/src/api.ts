@@ -430,6 +430,24 @@ export interface StatementImportResult {
   }>
 }
 
+export class PdfPasswordNeededError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PdfPasswordNeededError'
+  }
+}
+
+function looksLikePdfPasswordError(detail: string, status: number): boolean {
+  if (status !== 400 && status !== 422) return false
+  const t = detail.toLowerCase()
+  return (
+    t.includes('password-protected') ||
+    t.includes('password protected') ||
+    t.includes('statement password') ||
+    (t.includes('password') && (t.includes('pdf') || t.includes('protected')))
+  )
+}
+
 export async function uploadStatementFile(
   file: File,
   bank?: string,
@@ -460,13 +478,24 @@ export async function uploadStatementFile(
     } catch {
       /* ignore */
     }
-    throw new Error(detail || fallback)
+    const msg = detail || fallback
+    if (looksLikePdfPasswordError(msg, res.status)) {
+      throw new PdfPasswordNeededError(msg)
+    }
+    throw new Error(msg)
   }
   return res.json() as Promise<StatementImportResult>
 }
 
 async function postForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: form })
+  const token = getStoredToken()
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: form,
+  })
   if (!res.ok) {
     const fallback = `Request failed (${res.status})`
     let detail = res.statusText || fallback

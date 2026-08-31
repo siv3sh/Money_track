@@ -505,9 +505,9 @@ def _run_statement_langgraph(
 
 def _load_merchant_memory(*, user_id: ObjectId | None = None) -> dict[str, str]:
     memory: dict[str, str] = {}
-    q: dict[str, Any] = {}
-    if user_id is not None:
-        q["user_id"] = user_id
+    if user_id is None:
+        return memory
+    q: dict[str, Any] = {"user_id": user_id}
     try:
         for row in category_memory.find(q, {"merchant_key": 1, "category": 1}):
             key = (row.get("merchant_key") or "").strip().lower()
@@ -624,8 +624,9 @@ def _find_duplicate_transaction(doc: dict[str, Any]) -> dict[str, Any] | None:
         "amount": doc["amount"],
         "received_at": {"$gte": day_start, "$lt": day_end},
     }
-    if doc.get("user_id") is not None:
-        q["user_id"] = doc["user_id"]
+    if doc.get("user_id") is None:
+        return None  # never cross-tenant dedupe without owner
+    q["user_id"] = doc["user_id"]
     if doc.get("account_last4"):
         q["account_last4"] = doc["account_last4"]
     soft = _soft_fingerprint(doc)
@@ -645,6 +646,11 @@ def _require_user_id(request: Request) -> ObjectId:
     return uid
 
 
+def _settings_id(kind: str, user_id: ObjectId) -> str:
+    """Per-tenant app_settings document id (allocation, monthly_report, …)."""
+    return f"{kind}:{user_id}"
+
+
 def _import_statement_docs(
     docs: list[dict[str, Any]],
     *,
@@ -653,6 +659,8 @@ def _import_statement_docs(
     agent_meta: dict[str, Any] | None = None,
     user_id: ObjectId | None = None,
 ) -> dict[str, Any]:
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Please log in")
     if not docs:
         return {
             "imported": 0,
@@ -669,7 +677,7 @@ def _import_statement_docs(
     exact: set[str] = set()
     soft: set[str] = set()
     soft_examples: dict[str, dict[str, Any]] = {}
-    existing_q: dict[str, Any] = {"user_id": user_id} if user_id is not None else {}
+    existing_q: dict[str, Any] = {"user_id": user_id}
     for doc in transactions.find(
         existing_q,
         {"type": 1, "amount": 1, "received_at": 1, "raw_text": 1, "merchant": 1, "source": 1},
@@ -1521,12 +1529,13 @@ async def _ingest_sms_request(
             )
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: linked account last_seen update skipped: {exc}")
+    _sms_uid = linked_account.get("user_id") if linked_account else doc.get("user_id")
     apply_category(
         doc,
-        _load_merchant_memory(),
-        credit_card_accounts=list_credit_cards(credit_cards_col),
-        salary_needles=_load_salary_needles(),
-        people_patterns=_load_people_patterns(),
+        _load_merchant_memory(user_id=_sms_uid),
+        credit_card_accounts=list_credit_cards(credit_cards_col, user_id=_sms_uid),
+        salary_needles=_load_salary_needles(user_id=_sms_uid),
+        people_patterns=_load_people_patterns(user_id=_sms_uid),
     )
 
     dup = _find_duplicate_transaction(doc)
@@ -1671,9 +1680,6 @@ def sms_webhook_debug(request: Request, limit: int = Query(default=20, ge=1, le=
     rows = list(
         webhook_events.find({"user_id": uid}).sort("received_at", DESCENDING).limit(limit)
     )
-    # Fallback: events logged before user_id stamping
-    if not rows:
-        rows = list(webhook_events.find().sort("received_at", DESCENDING).limit(limit))
     out = []
     for row in rows:
         item = {k: v for k, v in row.items() if k not in {"_id", "body", "token_preview", "key_preview"}}
@@ -1817,12 +1823,13 @@ async def _ingest_email_request(
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: linked account last_seen update skipped: {exc}")
 
+    _sms_uid = linked_account.get("user_id") if linked_account else doc.get("user_id")
     apply_category(
         doc,
-        _load_merchant_memory(),
-        credit_card_accounts=list_credit_cards(credit_cards_col),
-        salary_needles=_load_salary_needles(),
-        people_patterns=_load_people_patterns(),
+        _load_merchant_memory(user_id=_sms_uid),
+        credit_card_accounts=list_credit_cards(credit_cards_col, user_id=_sms_uid),
+        salary_needles=_load_salary_needles(user_id=_sms_uid),
+        people_patterns=_load_people_patterns(user_id=_sms_uid),
     )
 
     # Soft dedupe across SMS/statement/email (subject no longer poisons raw_text)
@@ -2096,12 +2103,13 @@ def update_transaction_category(request: Request, txn_id: str, payload: Category
             keys.add(cleaned)
         for key in keys:
             category_memory.update_one(
-                {"merchant_key": key},
+                {"user_id": uid, "merchant_key": key},
                 {
                     "$set": {
                         "merchant_key": key,
                         "merchant": merchant,
                         "category": payload.category,
+                        "user_id": uid,
                         "updated_at": now,
                     }
                 },
@@ -2117,7 +2125,7 @@ def update_transaction_category(request: Request, txn_id: str, payload: Category
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: MerchantKnowledge feedback failed: {exc}")
 
-    updated = transactions.find_one({"_id": oid})
+    updated = transactions.find_one({"_id": oid, "user_id": uid})
     out_txn = _serialize(updated or doc)
     comment = decision_comment(
         action="category_change",
@@ -2131,6 +2139,7 @@ def update_transaction_category(request: Request, txn_id: str, payload: Category
         settings=app_settings,
         learned_facts=user_learned_facts,
         goals_col=planning_goals,
+        user_id=uid,
     )
     impact = goal_impact_for_spend(
         amount=float(out_txn.get("amount") or 0),
@@ -2138,6 +2147,7 @@ def update_transaction_category(request: Request, txn_id: str, payload: Category
         goals_col=planning_goals,
         learned_facts=user_learned_facts,
         settings=app_settings,
+        user_id=uid,
     )
     return {
         "ok": True,
@@ -2216,7 +2226,7 @@ def analytics(
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     banks = [b.strip() for b in bank.split(",") if b.strip()] if bank else None
-    uid = getattr(request.state, "user_id", None)
+    uid = _require_user_id(request)
     cache_key = f"{uid}|{date_from}|{date_to}|{bank}|{int(lite)}"
     cached = _analytics_cache_get(cache_key)
     if cached is not None:
@@ -2242,6 +2252,7 @@ def analytics(
             settings=app_settings,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
+            user_id=uid,
         )
     _analytics_cache_set(cache_key, payload)
     return payload
@@ -2478,25 +2489,29 @@ def api_list_credit_cards(request: Request):
 
 @app.get("/credit-cards/{last4}")
 def api_get_credit_card(
+    request: Request,
     last4: str,
     bank: str | None = Query(default=None),
 ):
-    row = get_credit_card_by_last4(credit_cards_col, last4, bank=bank)
+    uid = _require_user_id(request)
+    row = get_credit_card_by_last4(credit_cards_col, last4, bank=bank, user_id=uid)
     if not row:
         raise HTTPException(status_code=404, detail="Credit card not found")
     return row
 
 
 @app.post("/credit-cards/backfill-from-transactions")
-def api_backfill_credit_cards():
+def api_backfill_credit_cards(request: Request):
     """Rebuild credit_cards snapshots from existing SMS transactions (idempotent)."""
-    result = backfill_credit_cards_from_transactions(credit_cards_col, transactions)
-    sync = sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col)
+    uid = _require_user_id(request)
+    result = backfill_credit_cards_from_transactions(credit_cards_col, transactions, user_id=uid)
+    sync = sync_credit_cards_to_liabilities(credit_cards_col, liabilities_col, user_id=uid)
     return {**result, "liabilities_sync": sync}
 
 
 @app.post("/credit-cards/scan-payoffs")
 def api_scan_cc_payoffs(
+    request: Request,
     execute: bool = Query(
         default=False,
         description="If true, write cc_payoff tags. Default dry-run.",
@@ -2508,11 +2523,13 @@ def api_scan_cc_payoffs(
     Paired → Transfers + cc_payoff=True (excluded from lifestyle).
     Ambiguous → flagged only; category unchanged.
     """
+    uid = _require_user_id(request)
     return scan_and_tag_payoffs(
         transactions,
         credit_cards_col,
         execute=execute,
         limit=limit,
+        user_id=uid,
     )
 
 
@@ -2720,9 +2737,9 @@ class LearnSkipPayload(BaseModel):
     key: str | None = None
 
 
-def _with_learned_context(analytics_data: dict[str, Any]) -> dict[str, Any]:
+def _with_learned_context(analytics_data: dict[str, Any], *, user_id: ObjectId) -> dict[str, Any]:
     try:
-        analytics_data["learned_about_you"] = facts_for_ai_context(user_learned_facts)
+        analytics_data["learned_about_you"] = facts_for_ai_context(user_learned_facts, user_id=user_id)
     except Exception as exc:  # noqa: BLE001
         print(f"Warning: could not load learned facts for AI: {exc}")
         analytics_data["learned_about_you"] = []
@@ -2793,12 +2810,14 @@ def learn_facts_create(request: Request, payload: LearnedFactCreate):
 
 
 @app.patch("/learn/facts/{fact_id}")
-def learn_facts_patch(fact_id: str, payload: LearnedFactUpdate):
+def learn_facts_patch(request: Request, fact_id: str, payload: LearnedFactUpdate):
+    uid = _require_user_id(request)
     updated = update_fact(
         user_learned_facts,
         fact_id,
         value=payload.value,
         plain_language=payload.plain_language,
+        user_id=uid,
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Fact not found")
@@ -2806,17 +2825,20 @@ def learn_facts_patch(fact_id: str, payload: LearnedFactUpdate):
 
 
 @app.delete("/learn/facts/{fact_id}")
-def learn_facts_delete(fact_id: str):
-    if not delete_fact(user_learned_facts, fact_id):
+def learn_facts_delete(request: Request, fact_id: str):
+    uid = _require_user_id(request)
+    if not delete_fact(user_learned_facts, fact_id, user_id=uid):
         raise HTTPException(status_code=404, detail="Fact not found")
     return {"ok": True}
 
 
 @app.get("/learn/questions")
 def learn_questions(
+    request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
+    uid = _require_user_id(request)
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = attach_smart_insights(
@@ -2829,12 +2851,14 @@ def learn_questions(
             liabilities=liabilities_col,
             budgets=budgets_col,
             learned_facts=user_learned_facts,
+            user_id=uid,
         ),
         transactions,
         sip_overrides=sip_overrides,
         settings=app_settings,
         learned_facts=user_learned_facts,
         goals_col=planning_goals,
+        user_id=uid,
     )
     questions = generate_questions(
         facts=user_learned_facts,
@@ -2842,12 +2866,14 @@ def learn_questions(
         transactions=transactions,
         analytics=analytics_data,
         category_memory=category_memory,
+        user_id=uid,
     )
     return {"questions": questions, "weekly_limit": 2}
 
 
 @app.post("/learn/questions/answer")
-def learn_questions_answer(payload: LearnAnswerPayload):
+def learn_questions_answer(request: Request, payload: LearnAnswerPayload):
+    uid = _require_user_id(request)
     question = reconstruct_question_from_answer_payload(payload.model_dump())
     try:
         fact = apply_answer(
@@ -2858,6 +2884,7 @@ def learn_questions_answer(payload: LearnAnswerPayload):
             question=question,
             choice_id=payload.choice_id,
             free_text=payload.free_text,
+            user_id=uid,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2876,7 +2903,8 @@ def learn_questions_answer(payload: LearnAnswerPayload):
 
 
 @app.post("/learn/questions/skip")
-def learn_questions_skip(payload: LearnSkipPayload):
+def learn_questions_skip(request: Request, payload: LearnSkipPayload):
+    uid = _require_user_id(request)
     skip_question(
         learn_question_events,
         {
@@ -2884,6 +2912,7 @@ def learn_questions_skip(payload: LearnSkipPayload):
             "fact_type": payload.fact_type,
             "key": payload.key,
         },
+        user_id=uid,
     )
     return {"ok": True}
 
@@ -2903,7 +2932,8 @@ def ai_status():
 
 
 @app.post("/ai/ask")
-def ai_ask(payload: AiAskPayload):
+def ai_ask(request: Request, payload: AiAskPayload):
+    uid = _require_user_id(request)
     start = _parse_optional_date(payload.date_from)
     end = _parse_optional_date(payload.date_to, end_of_day=True)
     analytics_data = _with_learned_context(
@@ -2917,13 +2947,16 @@ def ai_ask(payload: AiAskPayload):
                 liabilities=liabilities_col,
                 budgets=budgets_col,
                 learned_facts=user_learned_facts,
+                user_id=uid,
             ),
             transactions,
             sip_overrides=sip_overrides,
             settings=app_settings,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
-        )
+            user_id=uid,
+        ),
+        user_id=uid,
     )
     try:
         return ask(
@@ -2940,10 +2973,12 @@ def ai_ask(payload: AiAskPayload):
 
 @app.post("/ai/monthly-summary")
 def ai_monthly_summary(
+    request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
     provider: str | None = None,
 ):
+    uid = _require_user_id(request)
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = _with_learned_context(
@@ -2957,13 +2992,16 @@ def ai_monthly_summary(
                 liabilities=liabilities_col,
                 budgets=budgets_col,
                 learned_facts=user_learned_facts,
+                user_id=uid,
             ),
             transactions,
             sip_overrides=sip_overrides,
             settings=app_settings,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
-        )
+            user_id=uid,
+        ),
+        user_id=uid,
     )
     try:
         return monthly_summary(
@@ -2979,10 +3017,12 @@ def ai_monthly_summary(
 
 @app.post("/ai/anomalies")
 def ai_anomalies(
+    request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
     provider: str | None = None,
 ):
+    uid = _require_user_id(request)
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
     analytics_data = _with_learned_context(
@@ -2996,13 +3036,16 @@ def ai_anomalies(
                 liabilities=liabilities_col,
                 budgets=budgets_col,
                 learned_facts=user_learned_facts,
+                user_id=uid,
             ),
             transactions,
             sip_overrides=sip_overrides,
             settings=app_settings,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
-        )
+            user_id=uid,
+        ),
+        user_id=uid,
     )
     try:
         return explain_anomalies(
@@ -3018,15 +3061,17 @@ def ai_anomalies(
 
 @app.post("/ai/tally")
 def ai_tally(
+    request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
     provider: str | None = None,
     use_llm: bool = Query(default=True),
 ):
     """Sense-check: does income, spend, investments, and transfers tell a coherent story?"""
+    uid = _require_user_id(request)
     start = _parse_optional_date(date_from)
     end = _parse_optional_date(date_to, end_of_day=True)
-    pack = compute_tally(transactions, date_from=start, date_to=end)
+    pack = compute_tally(transactions, date_from=start, date_to=end, user_id=uid)
     analytics_data = _with_learned_context(
         attach_smart_insights(
             build_analytics(
@@ -3038,13 +3083,16 @@ def ai_tally(
                 liabilities=liabilities_col,
                 budgets=budgets_col,
                 learned_facts=user_learned_facts,
+                user_id=uid,
             ),
             transactions,
             sip_overrides=sip_overrides,
             settings=app_settings,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
-        )
+            user_id=uid,
+        ),
+        user_id=uid,
     )
     explanation: dict[str, Any] | None = None
     if use_llm:
@@ -3068,18 +3116,21 @@ def ai_tally(
 
 @app.post("/ai/categorize")
 def ai_categorize(
+    request: Request,
     limit: int = Query(default=40, ge=1, le=100),
     use_llm: bool = Query(default=True),
     provider: str | None = None,
 ):
+    uid = _require_user_id(request)
     return categorize_batch(
         transactions,
         limit=limit,
         use_llm=use_llm,
         provider_name=provider,
-        merchant_memory=_load_merchant_memory(),
+        merchant_memory=_load_merchant_memory(user_id=uid),
         settings=app_settings,
         learned_facts=user_learned_facts,
+        user_id=uid,
     )
 
 
@@ -3089,13 +3140,15 @@ class SipMarkPayload(BaseModel):
 
 
 @app.post("/smart/sip/mark-invested")
-def mark_sip_invested(payload: SipMarkPayload):
+def mark_sip_invested(request: Request, payload: SipMarkPayload):
+    uid = _require_user_id(request)
     month = payload.month or datetime.now(timezone.utc).strftime("%Y-%m")
     name = payload.instrument.strip()
     sip_overrides.update_one(
-        {"instrument": name, "month": month},
+        {"user_id": uid, "instrument": name, "month": month},
         {
             "$set": {
+                "user_id": uid,
                 "instrument": name,
                 "month": month,
                 "marked_at": datetime.now(timezone.utc),
@@ -3110,6 +3163,7 @@ def mark_sip_invested(payload: SipMarkPayload):
         settings=app_settings,
         learned_facts=user_learned_facts,
         goals_col=planning_goals,
+        user_id=uid,
     )
     return {"ok": True, "instrument": name, "month": month, "advisor_comment": comment}
 
@@ -3121,14 +3175,22 @@ class DriftSettingsPayload(BaseModel):
 
 
 @app.put("/smart/drift-settings")
-def put_drift_settings(payload: DriftSettingsPayload):
+def put_drift_settings(request: Request, payload: DriftSettingsPayload):
+    uid = _require_user_id(request)
     now = datetime.now(timezone.utc)
-    update: dict[str, Any] = {"threshold_pp": payload.threshold_pp, "updated_at": now}
+    update: dict[str, Any] = {
+        "threshold_pp": payload.threshold_pp,
+        "updated_at": now,
+        "user_id": uid,
+    }
     if payload.targets is not None:
         update["targets"] = {str(k): float(v) for k, v in payload.targets.items() if float(v) > 0}
     if payload.use_current_as_baseline:
         analytics_data = build_analytics(
-            transactions, portfolio=portfolio, networth_snapshots=networth_snapshots
+            transactions,
+            portfolio=portfolio,
+            networth_snapshots=networth_snapshots,
+            user_id=uid,
         )
         holdings = (analytics_data.get("investments") or {}).get("holdings") or []
         total = sum(float(h.get("current_value") or 0) for h in holdings) or 1.0
@@ -3138,12 +3200,13 @@ def put_drift_settings(payload: DriftSettingsPayload):
             baseline[cls] = baseline.get(cls, 0) + float(h.get("current_value") or 0)
         update["baseline"] = {k: round(v / total * 100, 1) for k, v in baseline.items()}
         update["baseline_saved_at"] = now
+    sid = _settings_id("allocation", uid)
     app_settings.update_one(
-        {"_id": "allocation"},
-        {"$set": update, "$setOnInsert": {"_id": "allocation"}},
+        {"_id": sid},
+        {"$set": update, "$setOnInsert": {"_id": sid}},
         upsert=True,
     )
-    doc = app_settings.find_one({"_id": "allocation"}) or {}
+    doc = app_settings.find_one({"_id": sid}) or {}
     return {
         "targets": doc.get("targets") or {},
         "baseline": doc.get("baseline") or {},
@@ -3155,8 +3218,13 @@ def put_drift_settings(payload: DriftSettingsPayload):
 
 
 @app.get("/ai/transfer-suggestions")
-def list_transfer_suggestions():
-    rows = list(transfer_suggestions.find({"status": "pending"}).sort("created_at", DESCENDING).limit(50))
+def list_transfer_suggestions(request: Request):
+    uid = _require_user_id(request)
+    rows = list(
+        transfer_suggestions.find({"user_id": uid, "status": "pending"})
+        .sort("created_at", DESCENDING)
+        .limit(50)
+    )
     out = []
     for row in rows:
         out.append(
@@ -3178,21 +3246,27 @@ def list_transfer_suggestions():
 
 @app.post("/ai/disambiguate-transfers")
 def ai_disambiguate_transfers(
+    request: Request,
     limit: int = Query(default=25, ge=1, le=40),
     provider: str | None = None,
 ):
+    uid = _require_user_id(request)
     banks = sorted(
         {
             str(doc.get("bank") or "")
-            for doc in transactions.find({}, {"bank": 1})
+            for doc in transactions.find({"user_id": uid}, {"bank": 1})
             if doc.get("bank")
         }
     )
-    candidates = find_ambiguous_transfers(transactions, known_banks=banks, limit=limit)
+    candidates = find_ambiguous_transfers(
+        transactions, known_banks=banks, limit=limit, user_id=uid
+    )
     # Skip ones already pending
     pending_ids = {
         str(r["txn_id"])
-        for r in transfer_suggestions.find({"status": "pending"}, {"txn_id": 1})
+        for r in transfer_suggestions.find(
+            {"user_id": uid, "status": "pending"}, {"txn_id": 1}
+        )
     }
     candidates = [c for c in candidates if c["id"] not in pending_ids]
     try:
@@ -3210,10 +3284,11 @@ def ai_disambiguate_transfers(
     stored = 0
     for s in result.get("suggestions") or []:
         transfer_suggestions.update_one(
-            {"txn_id": s["id"]},
+            {"user_id": uid, "txn_id": s["id"]},
             {
                 "$set": {
                     "txn_id": s["id"],
+                    "user_id": uid,
                     "amount": s.get("amount"),
                     "merchant": s.get("merchant"),
                     "bank": s.get("bank"),
@@ -3243,28 +3318,31 @@ class TransferReviewPayload(BaseModel):
 
 
 @app.post("/ai/transfer-suggestions/{txn_id}/review")
-def review_transfer_suggestion(txn_id: str, payload: TransferReviewPayload):
+def review_transfer_suggestion(request: Request, txn_id: str, payload: TransferReviewPayload):
+    uid = _require_user_id(request)
     try:
         oid = ObjectId(txn_id)
     except InvalidId as exc:
         raise HTTPException(status_code=400, detail="Invalid transaction id") from exc
 
-    suggestion = transfer_suggestions.find_one({"txn_id": txn_id, "status": "pending"})
+    suggestion = transfer_suggestions.find_one(
+        {"user_id": uid, "txn_id": txn_id, "status": "pending"}
+    )
     if not suggestion:
         raise HTTPException(status_code=404, detail="No pending suggestion")
 
-    doc = transactions.find_one({"_id": oid})
+    doc = transactions.find_one({"_id": oid, "user_id": uid})
     if not doc:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     now = datetime.now(timezone.utc)
     if payload.action == "reject":
         transfer_suggestions.update_one(
-            {"txn_id": txn_id},
+            {"user_id": uid, "txn_id": txn_id},
             {"$set": {"status": "rejected", "reviewed_at": now}},
         )
         transactions.update_one(
-            {"_id": oid},
+            {"_id": oid, "user_id": uid},
             {"$set": {"transfer_review": "rejected"}},
         )
         return {"ok": True, "action": "reject"}
@@ -3300,12 +3378,13 @@ def review_transfer_suggestion(txn_id: str, payload: TransferReviewPayload):
             if not key:
                 continue
             category_memory.update_one(
-                {"merchant_key": key},
+                {"user_id": uid, "merchant_key": key},
                 {
                     "$set": {
                         "merchant_key": key,
                         "merchant": merchant,
                         "category": "Transfers",
+                        "user_id": uid,
                         "updated_at": now,
                     }
                 },
@@ -3322,8 +3401,13 @@ def review_transfer_suggestion(txn_id: str, payload: TransferReviewPayload):
 # ── Monthly AI reports + email ───────────────────────────────────────────────
 
 
-def _report_settings() -> dict[str, Any]:
-    doc = app_settings.find_one({"_id": "monthly_report"}) or {}
+def _report_settings(user_id: ObjectId | None = None) -> dict[str, Any]:
+    if user_id is not None:
+        doc = app_settings.find_one({"_id": _settings_id("monthly_report", user_id)}) or {}
+        if not doc:
+            doc = app_settings.find_one({"_id": "monthly_report"}) or {}
+    else:
+        doc = app_settings.find_one({"_id": "monthly_report"}) or {}
     return {
         "email_enabled": bool(doc.get("email_enabled", True)),
         "recipient_email": str(doc.get("recipient_email") or "").strip(),
@@ -3345,47 +3429,56 @@ class GenerateReportPayload(BaseModel):
 
 
 @app.get("/reports/monthly")
-def reports_monthly_list(limit: int = Query(default=24, ge=1, le=60)):
-    return {"reports": list_reports(monthly_reports, limit=limit), "settings": _report_settings()}
+def reports_monthly_list(request: Request, limit: int = Query(default=24, ge=1, le=60)):
+    uid = _require_user_id(request)
+    return {
+        "reports": list_reports(monthly_reports, limit=limit, user_id=uid),
+        "settings": _report_settings(uid),
+    }
 
 
 @app.get("/reports/monthly/{month}")
-def reports_monthly_get(month: str):
+def reports_monthly_get(request: Request, month: str):
+    uid = _require_user_id(request)
     if not re.match(r"^\d{4}-\d{2}$", month):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    doc = get_report(monthly_reports, month)
+    doc = get_report(monthly_reports, month, user_id=uid)
     if not doc:
         raise HTTPException(status_code=404, detail="Report not found")
     return doc
 
 
 @app.get("/reports/monthly-settings")
-def get_monthly_report_settings():
-    return _report_settings()
+def get_monthly_report_settings(request: Request):
+    return _report_settings(_require_user_id(request))
 
 
 @app.put("/reports/monthly-settings")
-def put_monthly_report_settings(payload: MonthlyReportSettingsPayload):
+def put_monthly_report_settings(request: Request, payload: MonthlyReportSettingsPayload):
+    uid = _require_user_id(request)
     email = payload.recipient_email.strip()
     if email and "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email")
+    sid = _settings_id("monthly_report", uid)
     app_settings.update_one(
-        {"_id": "monthly_report"},
+        {"_id": sid},
         {
             "$set": {
                 "email_enabled": payload.email_enabled,
                 "recipient_email": email,
                 "updated_at": datetime.now(timezone.utc),
+                "user_id": uid,
             },
-            "$setOnInsert": {"_id": "monthly_report"},
+            "$setOnInsert": {"_id": sid},
         },
         upsert=True,
     )
-    return _report_settings()
+    return _report_settings(uid)
 
 
 @app.post("/reports/monthly/generate")
-def reports_monthly_generate(payload: GenerateReportPayload):
+def reports_monthly_generate(request: Request, payload: GenerateReportPayload):
+    uid = _require_user_id(request)
     try:
         report = generate_monthly_report(
             transactions,
@@ -3403,6 +3496,7 @@ def reports_monthly_generate(payload: GenerateReportPayload):
             goals_col=planning_goals,
             provider_name=payload.provider,
             force=payload.force,
+            user_id=uid,
         )
     except LLMError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -3411,7 +3505,7 @@ def reports_monthly_generate(payload: GenerateReportPayload):
 
     email_result = None
     if payload.send_email:
-        settings = _report_settings()
+        settings = _report_settings(uid)
         to = settings.get("recipient_email") or ""
         if not settings.get("email_enabled"):
             email_result = {"ok": False, "reason": "email disabled in settings"}
@@ -3422,10 +3516,10 @@ def reports_monthly_generate(payload: GenerateReportPayload):
                 email_result = send_report_email(
                     report,
                     to_email=to,
-                    advisor_profile=__import__('learned_facts', fromlist=['advisor_profile_from_facts']).advisor_profile_from_facts(user_learned_facts),
+                    advisor_profile=__import__('learned_facts', fromlist=['advisor_profile_from_facts']).advisor_profile_from_facts(user_learned_facts, user_id=uid),
                 )
                 monthly_reports.update_one(
-                    {"month": report["month"]},
+                    {"user_id": uid, "month": report["month"]},
                     {"$set": {"emailed_at": datetime.now(timezone.utc)}},
                 )
                 report["emailed_at"] = email_result.get("sent_at")
@@ -3441,86 +3535,102 @@ def job_monthly_report(
     force: bool = Query(default=False),
     send_email: bool = Query(default=True),
 ):
-    """Cron entrypoint — protected by API_KEY. Generates prior-month report + optional email."""
+    """Cron entrypoint — protected by API_KEY. Generates prior-month report per user."""
     if not API_KEY or not x_api_key or not secrets.compare_digest(x_api_key, API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
-    try:
-        report = generate_monthly_report(
-            transactions,
-            monthly_reports,
-            portfolio=portfolio,
-            networth_snapshots=networth_snapshots,
-            liabilities=liabilities_col,
-            budgets=budgets_col,
-            sip_overrides=sip_overrides,
-            settings=app_settings,
-            news_cache=news_cache,
-            learned_facts=user_learned_facts,
-            goals_col=planning_goals,
-            force=force,
-        )
-    except LLMError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    results = []
+    for user in users_col.find({"disabled": {"$ne": True}}):
+        uid = user["_id"]
+        try:
+            report = generate_monthly_report(
+                transactions,
+                monthly_reports,
+                portfolio=portfolio,
+                networth_snapshots=networth_snapshots,
+                liabilities=liabilities_col,
+                budgets=budgets_col,
+                sip_overrides=sip_overrides,
+                settings=app_settings,
+                news_cache=news_cache,
+                learned_facts=user_learned_facts,
+                goals_col=planning_goals,
+                force=force,
+                user_id=uid,
+            )
+        except LLMError as exc:
+            results.append({"user_id": str(uid), "ok": False, "error": str(exc)})
+            continue
+        except Exception as exc:  # noqa: BLE001
+            results.append({"user_id": str(uid), "ok": False, "error": str(exc)})
+            continue
 
-    email_result = None
-    settings = _report_settings()
-    if send_email and settings.get("email_enabled"):
-        to = settings.get("recipient_email") or ""
-        if to and email_configured():
-            try:
-                email_result = send_report_email(
-                    report,
-                    to_email=to,
-                    advisor_profile=__import__('learned_facts', fromlist=['advisor_profile_from_facts']).advisor_profile_from_facts(user_learned_facts),
-                )
-                monthly_reports.update_one(
-                    {"month": report["month"]},
-                    {"$set": {"emailed_at": datetime.now(timezone.utc)}},
-                )
-            except Exception as exc:  # noqa: BLE001
-                email_result = {"ok": False, "reason": str(exc)}
-        else:
-            email_result = {
-                "ok": False,
-                "reason": "missing recipient_email or RESEND_API_KEY",
+        email_result = None
+        settings = _report_settings(uid)
+        if send_email and settings.get("email_enabled"):
+            to = settings.get("recipient_email") or ""
+            if to and email_configured():
+                try:
+                    email_result = send_report_email(
+                        report,
+                        to_email=to,
+                        advisor_profile=__import__(
+                            "learned_facts", fromlist=["advisor_profile_from_facts"]
+                        ).advisor_profile_from_facts(user_learned_facts, user_id=uid),
+                    )
+                    monthly_reports.update_one(
+                        {"user_id": uid, "month": report["month"]},
+                        {"$set": {"emailed_at": datetime.now(timezone.utc)}},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    email_result = {"ok": False, "reason": str(exc)}
+            else:
+                email_result = {
+                    "ok": False,
+                    "reason": "missing recipient_email or RESEND_API_KEY",
+                }
+        results.append(
+            {
+                "user_id": str(uid),
+                "ok": True,
+                "month": report.get("month"),
+                "report_id": report.get("id"),
+                "email": email_result,
             }
+        )
 
-    return {
-        "ok": True,
-        "month": report.get("month"),
-        "report_id": report.get("id"),
-        "email": email_result,
-    }
+    return {"ok": True, "results": results}
 
 
 @app.get("/reports/monthly/{month}/preview-html")
-def reports_monthly_preview_html(month: str):
+def reports_monthly_preview_html(request: Request, month: str):
     """Debug/preview the email HTML body."""
+    uid = _require_user_id(request)
     if not re.match(r"^\d{4}-\d{2}$", month):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    doc = get_report(monthly_reports, month)
+    doc = get_report(monthly_reports, month, user_id=uid)
     if not doc:
         raise HTTPException(status_code=404, detail="Report not found")
     return HTMLResponse(
         render_report_html(
             doc,
-            advisor_profile=__import__('learned_facts', fromlist=['advisor_profile_from_facts']).advisor_profile_from_facts(user_learned_facts),
+            advisor_profile=__import__('learned_facts', fromlist=['advisor_profile_from_facts']).advisor_profile_from_facts(user_learned_facts, user_id=uid),
         )
     )
 
 
 @app.get("/reports/monthly/{month}/pdf")
-def reports_monthly_pdf(month: str):
+def reports_monthly_pdf(request: Request, month: str):
     """Download the month-end report as PDF (same payload as email attachment)."""
+    uid = _require_user_id(request)
     if not re.match(r"^\d{4}-\d{2}$", month):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    doc = get_report(monthly_reports, month)
+    doc = get_report(monthly_reports, month, user_id=uid)
     if not doc:
         raise HTTPException(status_code=404, detail="Report not found")
     profile = __import__(
         "learned_facts", fromlist=["advisor_profile_from_facts"]
-    ).advisor_profile_from_facts(user_learned_facts)
+    ).advisor_profile_from_facts(user_learned_facts, user_id=uid)
     pdf_bytes = render_report_pdf(doc, advisor_profile=profile)
     return Response(
         content=pdf_bytes,
@@ -3590,19 +3700,22 @@ def _planning_month_args(month: str | None) -> tuple[int | None, int | None]:
     return int(y), int(m)
 
 
-def _get_goal_or_404(goal_id: str) -> dict[str, Any]:
+def _get_goal_or_404(goal_id: str, user_id: ObjectId) -> dict[str, Any]:
     try:
         oid = ObjectId(goal_id)
     except InvalidId as exc:
         raise HTTPException(status_code=400, detail="Invalid goal id") from exc
-    doc = planning_goals.find_one({"_id": oid, "status": {"$ne": "deleted"}})
+    doc = planning_goals.find_one(
+        {"_id": oid, "user_id": user_id, "status": {"$ne": "deleted"}}
+    )
     if not doc:
         raise HTTPException(status_code=404, detail="Goal not found")
     return doc
 
 
 @app.get("/planning/summary")
-def planning_summary(month: str | None = Query(default=None)):
+def planning_summary(request: Request, month: str | None = Query(default=None)):
+    uid = _require_user_id(request)
     year, month_num = _planning_month_args(month)
     try:
         return build_planning_summary(
@@ -3617,14 +3730,15 @@ def planning_summary(month: str | None = Query(default=None)):
             persona_settings=app_settings,
             year=year,
             month=month_num,
+            user_id=uid,
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Planning summary failed: {exc}") from exc
 
 
 @app.get("/planning/settings")
-def planning_get_settings():
-    return get_planning_settings(app_settings)
+def planning_get_settings(request: Request):
+    return get_planning_settings(app_settings, user_id=_require_user_id(request))
 
 
 class AdvisorPersonaPayload(BaseModel):
@@ -3634,28 +3748,32 @@ class AdvisorPersonaPayload(BaseModel):
 
 
 @app.get("/advisor/persona")
-def advisor_persona_get():
-    cfg = get_advisor_persona_settings(app_settings)
+def advisor_persona_get(request: Request):
+    uid = _require_user_id(request)
+    cfg = get_advisor_persona_settings(app_settings, user_id=uid)
     return {
         **cfg,
         "default_persona_text": default_persona_text(),
-        "preview": preview_samples(app_settings, user_learned_facts),
+        "preview": preview_samples(app_settings, user_learned_facts, user_id=uid),
     }
 
 
 @app.put("/advisor/persona")
-def advisor_persona_put(payload: AdvisorPersonaPayload):
+def advisor_persona_put(request: Request, payload: AdvisorPersonaPayload):
+    uid = _require_user_id(request)
     return save_advisor_persona_settings(
         app_settings,
         persona_text=payload.persona_text,
         strictness_sensitivity=payload.strictness_sensitivity,
         reset_persona_to_default=payload.reset_persona_to_default,
+        user_id=uid,
     )
 
 
 @app.get("/advisor/persona/preview")
-def advisor_persona_preview():
-    return preview_samples(app_settings, user_learned_facts)
+def advisor_persona_preview(request: Request):
+    uid = _require_user_id(request)
+    return preview_samples(app_settings, user_learned_facts, user_id=uid)
 
 
 class AdvisorChatPayload(BaseModel):
@@ -3682,12 +3800,13 @@ class AdvisorDecisionPayload(BaseModel):
 
 
 @app.get("/advisor/presence")
-def advisor_presence_get(light: bool = Query(default=False)):
+def advisor_presence_get(request: Request, light: bool = Query(default=False)):
     """Bootstrap floating chat: session, nudges, memories, briefing.
 
     light=true skips learn-question generation (faster first paint for the FAB).
     Analytics is built once and reused (previously built twice → ~1 min).
     """
+    uid = _require_user_id(request)
     analytics_stub = None
     questions: list = []
     try:
@@ -3699,12 +3818,14 @@ def advisor_presence_get(light: bool = Query(default=False)):
                 liabilities=liabilities_col,
                 budgets=budgets_col,
                 learned_facts=user_learned_facts,
+                user_id=uid,
             ),
             transactions,
             sip_overrides=sip_overrides,
             settings=app_settings,
             learned_facts=user_learned_facts,
             goals_col=planning_goals,
+            user_id=uid,
         )
         if not light:
             questions = generate_questions(
@@ -3713,6 +3834,7 @@ def advisor_presence_get(light: bool = Query(default=False)):
                 transactions=transactions,
                 analytics=analytics_stub,
                 category_memory=category_memory,
+                user_id=uid,
             )
     except Exception:  # noqa: BLE001
         questions = []
@@ -3733,6 +3855,7 @@ def advisor_presence_get(light: bool = Query(default=False)):
                 goals_col=planning_goals,
                 learn_questions=questions,
                 analytics=analytics_stub,
+                user_id=uid,
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -3740,7 +3863,8 @@ def advisor_presence_get(light: bool = Query(default=False)):
 
 
 @app.post("/advisor/chat")
-def advisor_chat_post(payload: AdvisorChatPayload):
+def advisor_chat_post(request: Request, payload: AdvisorChatPayload):
+    uid = _require_user_id(request)
     try:
         return _jsonable(
             advisor_chat(
@@ -3757,6 +3881,7 @@ def advisor_chat_post(payload: AdvisorChatPayload):
                 learned_facts=user_learned_facts,
                 goals_col=planning_goals,
                 provider_name=payload.provider,
+                user_id=uid,
             )
         )
     except LLMError as exc:
@@ -3766,8 +3891,9 @@ def advisor_chat_post(payload: AdvisorChatPayload):
 
 
 @app.post("/advisor/nudge/answer")
-def advisor_nudge_answer(payload: AdvisorNudgeAnswerPayload):
+def advisor_nudge_answer(request: Request, payload: AdvisorNudgeAnswerPayload):
     """Remember credit/spend explanations for future chats."""
+    uid = _require_user_id(request)
     kind = payload.kind.strip().lower()
     if kind not in {"credit_source", "spend_probe"}:
         raise HTTPException(status_code=400, detail="kind must be credit_source or spend_probe")
@@ -3780,6 +3906,7 @@ def advisor_nudge_answer(payload: AdvisorNudgeAnswerPayload):
             answer=payload.answer,
             free_text=payload.free_text,
             sessions=advisor_chat_sessions,
+            user_id=uid,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3788,7 +3915,8 @@ def advisor_nudge_answer(payload: AdvisorNudgeAnswerPayload):
 
 
 @app.post("/advisor/decision-comment")
-def advisor_decision_comment(payload: AdvisorDecisionPayload):
+def advisor_decision_comment(request: Request, payload: AdvisorDecisionPayload):
+    uid = _require_user_id(request)
     action = payload.action.strip()
     allowed = {
         "liability_txn",
@@ -3808,6 +3936,7 @@ def advisor_decision_comment(payload: AdvisorDecisionPayload):
         settings=app_settings,
         learned_facts=user_learned_facts,
         goals_col=planning_goals,
+        user_id=uid,
     )
     impact = None
     if action in {"liability_txn", "category_change"} and payload.amount:
@@ -3817,6 +3946,7 @@ def advisor_decision_comment(payload: AdvisorDecisionPayload):
             goals_col=planning_goals,
             learned_facts=user_learned_facts,
             settings=app_settings,
+            user_id=uid,
         )
     return {**comment, "goal_impact": impact}
 
@@ -3831,12 +3961,13 @@ class AdvisorTrainPayload(BaseModel):
 
 
 @app.get("/planning/advisor/training")
-def planning_advisor_training():
-    return advisor_training_status(user_learned_facts)
+def planning_advisor_training(request: Request):
+    return advisor_training_status(user_learned_facts, user_id=_require_user_id(request))
 
 
 @app.put("/planning/advisor/training")
-def planning_advisor_train(payload: AdvisorTrainPayload):
+def planning_advisor_train(request: Request, payload: AdvisorTrainPayload):
+    uid = _require_user_id(request)
     saved = []
     for ans in payload.answers:
         key = ans.key.strip().lower()
@@ -3848,16 +3979,18 @@ def planning_advisor_train(payload: AdvisorTrainPayload):
             key=key,
             value=ans.value.strip(),
             source="user_answered",
+            user_id=uid,
         )
         saved.append(fact)
     return {
         "saved": len(saved),
-        "training": advisor_training_status(user_learned_facts),
+        "training": advisor_training_status(user_learned_facts, user_id=uid),
     }
 
 
 @app.put("/planning/settings")
-def planning_put_settings(payload: PlanningSettingsPayload):
+def planning_put_settings(request: Request, payload: PlanningSettingsPayload):
+    uid = _require_user_id(request)
     if payload.bucket_pcts:
         unknown = set(payload.bucket_pcts) - set(BUCKETS)
         if unknown:
@@ -3875,25 +4008,27 @@ def planning_put_settings(payload: PlanningSettingsPayload):
         emi_annual_rate=payload.emi_annual_rate,
         emi_tenure_months=payload.emi_tenure_months,
         liquid_buffer_override=payload.liquid_buffer_override,
+        user_id=uid,
     )
     if payload.bucket_pcts is not None:
         app_settings.update_one(
             {"_id": "planning"},
             {"$set": {"personal_plan_locked": True}},
         )
-    return get_planning_settings(app_settings)
+    return get_planning_settings(app_settings, user_id=uid)
 
 
 @app.get("/planning/goals")
-def planning_list_goals(month: str | None = Query(default=None)):
-    return planning_summary(month=month)
+def planning_list_goals(request: Request, month: str | None = Query(default=None)):
+    return planning_summary(request, month=month)
 
 
 @app.post("/planning/goals")
-def planning_create_goal(payload: GoalCreatePayload):
+def planning_create_goal(request: Request, payload: GoalCreatePayload):
+    uid = _require_user_id(request)
     now = datetime.now(timezone.utc)
     max_pri = planning_goals.find_one(
-        {"status": "active"},
+        {"user_id": uid, "status": "active"},
         sort=[("priority", DESCENDING)],
     )
     next_pri = int((max_pri or {}).get("priority") or 0) + 1
@@ -3916,6 +4051,7 @@ def planning_create_goal(payload: GoalCreatePayload):
             }
 
     doc = {
+        "user_id": uid,
         "name": payload.name.strip(),
         "target_price": target_price,
         "manual_price": float(payload.manual_price) if payload.manual_price is not None else None,
@@ -3937,7 +4073,8 @@ def planning_create_goal(payload: GoalCreatePayload):
 
 
 @app.put("/planning/goals/reorder")
-def planning_goals_reorder(payload: GoalReorderPayload):
+def planning_goals_reorder(request: Request, payload: GoalReorderPayload):
+    uid = _require_user_id(request)
     now = datetime.now(timezone.utc)
     for idx, gid in enumerate(payload.ordered_ids, start=1):
         try:
@@ -3952,8 +4089,9 @@ def planning_goals_reorder(payload: GoalReorderPayload):
 
 
 @app.patch("/planning/goals/{goal_id}")
-def planning_update_goal(goal_id: str, payload: GoalUpdatePayload):
-    doc = _get_goal_or_404(goal_id)
+def planning_update_goal(request: Request, goal_id: str, payload: GoalUpdatePayload):
+    uid = _require_user_id(request)
+    doc = _get_goal_or_404(goal_id, uid)
     patch: dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
     if payload.name is not None:
         patch["name"] = payload.name.strip()
@@ -3988,8 +4126,9 @@ def planning_update_goal(goal_id: str, payload: GoalUpdatePayload):
 
 
 @app.post("/planning/goals/{goal_id}/lookup-price")
-def planning_goal_lookup_price(goal_id: str, payload: GoalPriceLookupPayload | None = None):
-    doc = _get_goal_or_404(goal_id)
+def planning_goal_lookup_price(request: Request, goal_id: str, payload: GoalPriceLookupPayload | None = None):
+    uid = _require_user_id(request)
+    doc = _get_goal_or_404(goal_id, uid)
     name = (payload.name if payload and payload.name else None) or doc.get("name") or ""
     provider = payload.provider if payload else None
     try:
@@ -4015,8 +4154,9 @@ def planning_goal_lookup_price(goal_id: str, payload: GoalPriceLookupPayload | N
 
 
 @app.post("/planning/goals/{goal_id}/contribute")
-def planning_goal_contribute(goal_id: str, payload: GoalContributePayload):
-    doc = _get_goal_or_404(goal_id)
+def planning_goal_contribute(request: Request, goal_id: str, payload: GoalContributePayload):
+    uid = _require_user_id(request)
+    doc = _get_goal_or_404(goal_id, uid)
     patch = record_contribution_month(doc, payload.amount)
     planning_goals.update_one({"_id": doc["_id"]}, {"$set": patch})
     updated = planning_goals.find_one({"_id": doc["_id"]})
@@ -4040,8 +4180,9 @@ def planning_goal_contribute(goal_id: str, payload: GoalContributePayload):
 
 
 @app.post("/planning/goals/{goal_id}/complete")
-def planning_goal_complete(goal_id: str, payload: GoalCompletePayload | None = None):
-    doc = _get_goal_or_404(goal_id)
+def planning_goal_complete(request: Request, goal_id: str, payload: GoalCompletePayload | None = None):
+    uid = _require_user_id(request)
+    doc = _get_goal_or_404(goal_id, uid)
     amount = payload.amount if payload else None
     txn = complete_goal_as_liability_txn(transactions=transactions, goal=doc, amount=amount)
     now = datetime.now(timezone.utc)
@@ -4075,8 +4216,9 @@ def planning_goal_complete(goal_id: str, payload: GoalCompletePayload | None = N
 
 
 @app.delete("/planning/goals/{goal_id}")
-def planning_goal_delete(goal_id: str):
-    doc = _get_goal_or_404(goal_id)
+def planning_goal_delete(request: Request, goal_id: str):
+    uid = _require_user_id(request)
+    doc = _get_goal_or_404(goal_id, uid)
     planning_goals.update_one(
         {"_id": doc["_id"]},
         {"$set": {"status": "deleted", "updated_at": datetime.now(timezone.utc)}},

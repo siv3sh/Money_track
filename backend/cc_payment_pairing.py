@@ -205,14 +205,18 @@ def scan_and_tag_payoffs(
     *,
     execute: bool = False,
     limit: int = 5000,
+    user_id=None,
 ) -> dict[str, Any]:
     """Scan bank debits; optionally write payoff tags. Default dry-run."""
     from credit_cards import list_credit_cards
 
-    cards = list_credit_cards(credit_cards)
+    if user_id is None:
+        raise ValueError("user_id is required for payoff scan")
+    cards = list_credit_cards(credit_cards, user_id=user_id)
     cursor = (
         transactions.find(
             {
+                "user_id": user_id,
                 "type": "debit",
                 "card_type": {"$ne": "credit_card"},
             }

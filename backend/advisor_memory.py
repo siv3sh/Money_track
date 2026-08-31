@@ -51,8 +51,11 @@ def append_memory(
     meta: dict[str, Any] | None = None,
     dedupe_key: str | None = None,
     occurred_at: datetime | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any] | None:
     """Insert a memory; skip if dedupe_key already exists (same week)."""
+    if user_id is None:
+        raise ValueError("user_id is required for advisor memories")
     kind_n = (kind or "note").strip().lower()
     if kind_n not in MEMORY_KINDS:
         kind_n = "note"
@@ -61,7 +64,7 @@ def append_memory(
         return None
 
     if dedupe_key:
-        existing = memories.find_one({"dedupe_key": dedupe_key})
+        existing = memories.find_one({"user_id": user_id, "dedupe_key": dedupe_key})
         if existing:
             return _serialize(existing)
 
@@ -72,6 +75,7 @@ def append_memory(
         "dedupe_key": dedupe_key,
         "occurred_at": occurred_at or _now(),
         "created_at": _now(),
+        "user_id": user_id,
     }
     res = memories.insert_one(doc)
     doc["_id"] = res.inserted_id
@@ -83,19 +87,22 @@ def list_memories(
     *,
     limit: int = 40,
     kind: str | None = None,
+    user_id: Any = None,
 ) -> list[dict[str, Any]]:
-    q: dict[str, Any] = {}
+    if user_id is None:
+        raise ValueError("user_id is required to list advisor memories")
+    q: dict[str, Any] = {"user_id": user_id}
     if kind:
         q["kind"] = kind
     rows = list(memories.find(q).sort("occurred_at", -1).limit(limit))
     return [_serialize(r) for r in rows]
 
 
-def memories_for_prompt(memories: Collection | None, *, limit: int = 12) -> list[str]:
+def memories_for_prompt(memories: Collection | None, *, limit: int = 12, user_id: Any = None) -> list[str]:
     if memories is None:
         return []
     lines = []
-    for row in list_memories(memories, limit=limit):
+    for row in list_memories(memories, limit=limit, user_id=user_id):
         when = (row.get("occurred_at") or "")[:10]
         lines.append(f"- [{when}] ({row.get('kind')}) {row.get('summary')}")
     return lines
@@ -106,6 +113,7 @@ def maybe_append_from_severity(
     *,
     severity: dict[str, Any],
     profile: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Create memories from deterministic severity signals (no separate detector)."""
     created: list[dict[str, Any]] = []
@@ -119,6 +127,7 @@ def maybe_append_from_severity(
     if signals.get("sip_stopped"):
         m = append_memory(
             memories,
+            user_id=user_id,
             kind="sip_lapse",
             summary=f"{name}: SIP appears stopped/lapsed — investing-first rule under pressure.",
             meta={"signals": {"sip_stopped": True}},
@@ -130,6 +139,7 @@ def maybe_append_from_severity(
     if signals.get("lifestyle_pace_over") or signals.get("mom_debit_spike"):
         m = append_memory(
             memories,
+            user_id=user_id,
             kind="spend_pattern",
             summary=(
                 f"{name}: spend pressure flagged — {reasons[0] if reasons else 'pace/MoM spike'}."
@@ -144,6 +154,7 @@ def maybe_append_from_severity(
     if level == "strict" and reasons:
         m = append_memory(
             memories,
+            user_id=user_id,
             kind="severity_shift",
             summary=f"{name}: advisor tone moved to strict — {reasons[0]}.",
             meta={"level": level, "reasons": reasons[:3]},
@@ -161,6 +172,7 @@ def maybe_append_goal_milestone(
     goal_name: str,
     progress_pct: float,
     profile: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any] | None:
     """Celebrate 25/50/75/100 crossings once each."""
     milestones = [25, 50, 75, 100]
@@ -184,6 +196,7 @@ def maybe_append_goal_milestone(
     key = f"goal_ms:{goal_name.strip().lower()}:{hit}"
     return append_memory(
         memories,
+        user_id=user_id,
         kind="goal_milestone",
         summary=f"{name} hit ~{hit}% on goal '{goal_name}' (progress {progress_pct:.0f}%).",
         meta={"goal": goal_name, "milestone": hit, "progress_pct": progress_pct},
@@ -196,11 +209,13 @@ def maybe_append_commitment(
     *,
     text: str,
     profile: dict[str, Any] | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any] | None:
     name = (profile or {}).get("preferred_name") or "User"
     day = _now().strftime("%Y-%m-%d")
     return append_memory(
         memories,
+        user_id=user_id,
         kind="commitment",
         summary=f"{name} committed: {text.strip()[:300]}",
         meta={"source": "chat_or_action"},
@@ -250,6 +265,7 @@ def mark_nudge_answered(
         )
     return append_memory(
         memories,
+        user_id=user_id,
         kind="user_told",
         summary=summary[:500],
         meta={"answer": answer_n[:200], "ask_key": dedupe_key, **(meta or {})},

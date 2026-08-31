@@ -119,8 +119,16 @@ def normalize_category_map(raw: dict[str, Any] | None) -> dict[str, str]:
     return out
 
 
-def get_planning_settings(settings: Collection) -> dict[str, Any]:
-    doc = settings.find_one({"_id": SETTINGS_ID}) or {}
+def _planning_settings_id(user_id: Any | None = None) -> str:
+    if user_id is None:
+        return SETTINGS_ID
+    return f"{SETTINGS_ID}:{user_id}"
+
+
+def get_planning_settings(settings: Collection, *, user_id: Any = None) -> dict[str, Any]:
+    doc = settings.find_one({"_id": _planning_settings_id(user_id)}) or {}
+    if not doc and user_id is not None:
+        doc = settings.find_one({"_id": SETTINGS_ID}) or {}
     pcts = normalize_bucket_pcts(doc.get("bucket_pcts"))
     cat_map = normalize_category_map(doc.get("category_buckets"))
     return {
@@ -146,8 +154,9 @@ def save_planning_settings(
     emi_annual_rate: float | None = None,
     emi_tenure_months: int | None = None,
     liquid_buffer_override: float | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
-    current = get_planning_settings(settings)
+    current = get_planning_settings(settings, user_id=user_id)
     patch: dict[str, Any] = {"updated_at": _now()}
     if bucket_pcts is not None:
         patch["bucket_pcts"] = normalize_bucket_pcts(bucket_pcts)
@@ -170,12 +179,15 @@ def save_planning_settings(
     elif current.get("liquid_buffer_override") is not None:
         patch["liquid_buffer_override"] = current["liquid_buffer_override"]
 
+    sid = _planning_settings_id(user_id)
+    if user_id is not None:
+        patch["user_id"] = user_id
     settings.update_one(
-        {"_id": SETTINGS_ID},
-        {"$set": patch, "$setOnInsert": {"_id": SETTINGS_ID}},
+        {"_id": sid},
+        {"$set": patch, "$setOnInsert": {"_id": sid}},
         upsert=True,
     )
-    return get_planning_settings(settings)
+    return get_planning_settings(settings, user_id=user_id)
 
 
 def wealth_class_for_bucket(bucket: str) -> str:
@@ -571,15 +583,19 @@ def load_discretionary_merchants(
     *,
     category_map: dict[str, str],
     limit: int = 12,
+    user_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Top Discretionary-bucket merchants this month (for cut coaching)."""
     from collections import defaultdict
 
+    if user_id is None:
+        raise ValueError("user_id is required for discretionary merchants")
     totals: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"amount": 0.0, "count": 0.0, "category": "Shopping"}
     )
     disc_cats = {c for c, b in category_map.items() if b == "Discretionary"}
     match = {
+        "user_id": user_id,
         "type": "debit",
         "card_type": {"$ne": "wallet"},
         "received_at": {"$gte": start, "$lte": end},
@@ -1594,10 +1610,17 @@ def list_goals_enriched(
     personalization_note: str | None = None,
     learned_facts: Collection | None = None,
     persona_settings: Collection | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
+    if user_id is None:
+        raise ValueError("user_id is required for goals list")
     framework = build_budget_framework(analytics, settings)
     liquid = estimate_liquid_buffer(analytics, settings)
-    docs = list(goals_col.find({"status": {"$ne": "deleted"}}).sort([("priority", 1), ("created_at", 1)]))
+    docs = list(
+        goals_col.find({"user_id": user_id, "status": {"$ne": "deleted"}}).sort(
+            [("priority", 1), ("created_at", 1)]
+        )
+    )
     active_docs = [d for d in docs if (d.get("status") or "active") == "active"]
     allocations = allocate_surplus_by_priority(active_docs, framework["available_surplus"])
 
@@ -1712,6 +1735,7 @@ def complete_goal_as_liability_txn(
     amount: float | None = None,
 ) -> dict[str, Any]:
     """Log purchase as liability-classified Shopping spend in the main ledger."""
+    # user_id stamped onto inserted txn from goal ownership
     now = _now()
     price = float(
         amount
@@ -1741,6 +1765,8 @@ def complete_goal_as_liability_txn(
         "received_at": now,
         "created_at": now,
     }
+    if goal.get("user_id") is not None:
+        doc["user_id"] = goal["user_id"]
     res = transactions.insert_one(doc)
     doc["_id"] = res.inserted_id
     return {
@@ -1766,13 +1792,16 @@ def build_planning_summary(
     year: int | None = None,
     month: int | None = None,
     apply_personal_calibration: bool = True,
+    user_id: Any = None,
 ) -> dict[str, Any]:
+    if user_id is None:
+        raise ValueError("user_id is required for planning summary")
     if year is None or month is None:
         start, end, year, month = _current_month_bounds()
     else:
         start, end = _month_bounds(year, month)
 
-    settings = get_planning_settings(settings_col)
+    settings = get_planning_settings(settings_col, user_id=user_id)
     analytics = build_analytics(
         transactions,
         date_from=start,
@@ -1782,6 +1811,7 @@ def build_planning_summary(
         liabilities=liabilities,
         budgets=budgets,
         learned_facts=learned_facts,
+        user_id=user_id,
     )
 
     # First pass framework (for calibration)
@@ -1793,23 +1823,27 @@ def build_planning_summary(
         start,
         end,
         category_map=settings["category_buckets"],
+        user_id=user_id,
     )
 
     if apply_personal_calibration and not settings.get("personal_plan_locked"):
-        doc = settings_col.find_one({"_id": SETTINGS_ID}) or {}
+        sid = _planning_settings_id(user_id)
+        doc = settings_col.find_one({"_id": sid}) or settings_col.find_one({"_id": SETTINGS_ID}) or {}
         # Calibrate once from live spend unless user locked percentages
         if not doc.get("calibrated_at"):
             calibrated = calibrate_bucket_pcts_for_spend(base_framework)
             settings = save_planning_settings(
                 settings_col,
                 bucket_pcts=calibrated,
+                user_id=user_id,
             )
             note = build_calibration_personalization_note(merchants)
             settings_col.update_one(
-                {"_id": SETTINGS_ID},
-                {"$set": {"personalization_note": note, "calibrated_at": _now()}},
+                {"_id": sid},
+                {"$set": {"personalization_note": note, "calibrated_at": _now(), "user_id": user_id}},
+                upsert=True,
             )
-            settings = get_planning_settings(settings_col)
+            settings = get_planning_settings(settings_col, user_id=user_id)
             personalization_note = note
             settings = {**settings, "personalization_note": note}
         elif not personalization_note:
@@ -1824,6 +1858,7 @@ def build_planning_summary(
         or build_merchant_personalization_note(merchants),
         learned_facts=learned_facts,
         persona_settings=persona_settings if persona_settings is not None else settings_col,
+        user_id=user_id,
     )
     return {
         "month": f"{year:04d}-{month:02d}",

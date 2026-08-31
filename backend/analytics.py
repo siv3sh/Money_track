@@ -61,9 +61,13 @@ def _match_range(
     # already debited at recharge time, counting the wallet spend double-counts.
     # CC statement / payment-received SMS mis-ingested as spend are also excluded
     # until an approved backfill removes them.
-    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}, **credit_card_noise_mongo_clause()}
-    if user_id is not None:
-        match["user_id"] = user_id
+    if user_id is None:
+        raise ValueError("user_id is required for tenant-scoped analytics queries")
+    match: dict[str, Any] = {
+        "user_id": user_id,
+        "card_type": {"$ne": "wallet"},
+        **credit_card_noise_mongo_clause(),
+    }
     if date_from or date_to:
         received: dict[str, Any] = {}
         if date_from:
@@ -498,8 +502,7 @@ def build_analytics(
     if portfolio is not None:
         try:
             pq: dict[str, Any] = {}
-            if user_id is not None:
-                pq["user_id"] = user_id
+            pq["user_id"] = user_id
             manual = list(portfolio.find(pq))
         except Exception as exc:  # noqa: BLE001
             print(f"Warning: could not load portfolio: {exc}")
@@ -784,9 +787,7 @@ def build_analytics(
 
     active_days = len(daily_rows)
     # Bank filter list — distinct is far cheaper than scanning every doc
-    bank_q: dict[str, Any] = {}
-    if user_id is not None:
-        bank_q["user_id"] = user_id
+    bank_q: dict[str, Any] = {"user_id": user_id}
     try:
         banks_list = sorted(
             str(b) for b in transactions.distinct("bank", bank_q) if b
@@ -805,8 +806,7 @@ def build_analytics(
     if liabilities is not None:
         try:
             lq: dict[str, Any] = {}
-            if user_id is not None:
-                lq["user_id"] = user_id
+            lq["user_id"] = user_id
             for doc in liabilities.find(lq).sort("outstanding", -1):
                 amt = float(doc.get("outstanding") or 0)
                 liabilities_total += amt
@@ -836,7 +836,7 @@ def build_analytics(
     indmoney_snapshot = None
     if networth_snapshots is not None:
         try:
-            snap = networth_snapshots.find_one(sort=[("captured_at", -1)])
+            snap = networth_snapshots.find_one({"user_id": user_id}, sort=[("captured_at", -1)])
             if snap:
                 indmoney_snapshot = {
                     "total_networth": float(snap.get("total_networth") or 0),
@@ -882,8 +882,7 @@ def build_analytics(
     if budgets is not None:
         try:
             bq: dict[str, Any] = {}
-            if user_id is not None:
-                bq["user_id"] = user_id
+            bq["user_id"] = user_id
             for doc in budgets.find(bq):
                 cat = str(doc.get("category") or "").strip()
                 amt = float(doc.get("amount") or 0)
@@ -940,6 +939,7 @@ def build_analytics(
                 freshness["last_statement_at"] = stmt_doc["received_at"].isoformat()
             if portfolio is not None:
                 port_doc = portfolio.find_one(
+                    {"user_id": user_id},
                     sort=[("updated_at", -1)],
                     projection={"updated_at": 1, "import_date": 1},
                 )

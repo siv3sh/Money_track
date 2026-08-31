@@ -369,7 +369,7 @@ ADVISOR_TRAINING_QUESTIONS: list[dict[str, Any]] = [
 ]
 
 
-def advisor_profile_from_facts(facts: Collection | None) -> dict[str, Any]:
+def advisor_profile_from_facts(facts: Collection | None, *, user_id: Any = None) -> dict[str, Any]:
     """Persona + training answers for the Money Advisor voice."""
     out: dict[str, Any] = {
         "preferred_name": None,
@@ -386,7 +386,10 @@ def advisor_profile_from_facts(facts: Collection | None) -> dict[str, Any]:
     if facts is None:
         return out
     trained: list[str] = []
-    for d in facts.find({"fact_type": "advisor_profile"}):
+    q: dict[str, Any] = {"fact_type": "advisor_profile"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         key = str(d.get("key") or "").strip().lower()
         if not key:
             continue
@@ -415,8 +418,8 @@ def persona_is_trained(profile: dict[str, Any], *, min_keys: int = 1) -> bool:
     return len(profile.get("trained_keys") or []) >= min_keys
 
 
-def advisor_training_status(facts: Collection | None) -> dict[str, Any]:
-    profile = advisor_profile_from_facts(facts)
+def advisor_training_status(facts: Collection | None, *, user_id: Any = None) -> dict[str, Any]:
+    profile = advisor_profile_from_facts(facts, user_id=user_id)
     answered = set(profile.get("trained_keys") or [])
     pending = []
     for q in ADVISOR_TRAINING_QUESTIONS:
@@ -432,9 +435,12 @@ def advisor_training_status(facts: Collection | None) -> dict[str, Any]:
     }
 
 
-def budget_targets_from_facts(facts: Collection) -> dict[str, float]:
+def budget_targets_from_facts(facts: Collection, *, user_id: Any = None) -> dict[str, float]:
     out: dict[str, float] = {}
-    for d in facts.find({"fact_type": "budget_target"}):
+    q: dict[str, Any] = {"fact_type": "budget_target"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         key = str(d.get("key") or "").strip()
         try:
             amt = float(d.get("value") or 0)
@@ -445,9 +451,12 @@ def budget_targets_from_facts(facts: Collection) -> dict[str, float]:
     return out
 
 
-def drift_thresholds_from_facts(facts: Collection) -> dict[str, float]:
+def drift_thresholds_from_facts(facts: Collection, *, user_id: Any = None) -> dict[str, float]:
     out: dict[str, float] = {}
-    for d in facts.find({"fact_type": "risk_tolerance"}):
+    q: dict[str, Any] = {"fact_type": "risk_tolerance"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         key = str(d.get("key") or "").strip()
         try:
             pp = float(d.get("value") or 0)
@@ -458,9 +467,12 @@ def drift_thresholds_from_facts(facts: Collection) -> dict[str, float]:
     return out
 
 
-def one_off_fingerprints(facts: Collection) -> set[str]:
+def one_off_fingerprints(facts: Collection, *, user_id: Any = None) -> set[str]:
     ids: set[str] = set()
-    for d in facts.find({"fact_type": "one_off_context"}):
+    q: dict[str, Any] = {"fact_type": "one_off_context"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         meta = d.get("meta") or {}
         tid = meta.get("txn_id") or d.get("key")
         if tid:
@@ -474,9 +486,12 @@ def one_off_fingerprints(facts: Collection) -> set[str]:
     return ids
 
 
-def planned_spend_keys(facts: Collection) -> set[str]:
+def planned_spend_keys(facts: Collection, *, user_id: Any = None) -> set[str]:
     keys: set[str] = set()
-    for d in facts.find({"fact_type": "spending_intent"}):
+    q: dict[str, Any] = {"fact_type": "spending_intent"}
+    if user_id is not None:
+        q["user_id"] = user_id
+    for d in facts.find(q):
         if str(d.get("value") or "").lower() in {"planned", "trip", "event"}:
             keys.add(str(d.get("key") or ""))
     return keys
@@ -535,7 +550,7 @@ def upsert_fact(
     return serialize_fact(doc)
 
 
-def delete_fact(facts: Collection, fact_id: str) -> bool:
+def delete_fact(facts: Collection, fact_id: str, *, user_id: Any = None) -> bool:
     from bson import ObjectId
     from bson.errors import InvalidId
 
@@ -543,7 +558,10 @@ def delete_fact(facts: Collection, fact_id: str) -> bool:
         oid = ObjectId(fact_id)
     except InvalidId:
         return False
-    return facts.delete_one({"_id": oid}).deleted_count > 0
+    q: dict[str, Any] = {"_id": oid}
+    if user_id is not None:
+        q["user_id"] = user_id
+    return facts.delete_one(q).deleted_count > 0
 
 
 def update_fact(
@@ -552,6 +570,7 @@ def update_fact(
     *,
     value: Any | None = None,
     plain_language: str | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any] | None:
     from bson import ObjectId
     from bson.errors import InvalidId
@@ -560,7 +579,10 @@ def update_fact(
         oid = ObjectId(fact_id)
     except InvalidId:
         return None
-    doc = facts.find_one({"_id": oid})
+    q: dict[str, Any] = {"_id": oid}
+    if user_id is not None:
+        q["user_id"] = user_id
+    doc = facts.find_one(q)
     if not doc:
         return None
     patch: dict[str, Any] = {"last_confirmed_at": _now()}
@@ -572,32 +594,33 @@ def update_fact(
     return serialize_fact(facts.find_one({"_id": oid}) or merged)
 
 
-def _events_this_week(events: Collection) -> int:
+def _events_this_week(events: Collection, *, user_id: Any = None) -> int:
     """Count distinct questions interacted with this week (shown or answered)."""
     since = _now() - timedelta(days=7)
-    ids = events.distinct(
-        "question_id",
-        {"at": {"$gte": since}, "action": {"$in": ["shown", "answered"]}},
-    )
+    q: dict[str, Any] = {"at": {"$gte": since}, "action": {"$in": ["shown", "answered"]}}
+    if user_id is not None:
+        q["user_id"] = user_id
+    ids = events.distinct("question_id", q)
     return len(ids)
 
 
-def _already_shown_this_week(events: Collection, qid: str) -> bool:
+def _already_shown_this_week(events: Collection, qid: str, *, user_id: Any = None) -> bool:
     since = _now() - timedelta(days=7)
+    q: dict[str, Any] = {"question_id": qid, "action": "shown", "at": {"$gte": since}}
+    if user_id is not None:
+        q["user_id"] = user_id
     return (
-        events.count_documents(
-            {"question_id": qid, "action": "shown", "at": {"$gte": since}}
-        )
+        events.count_documents(q)
         > 0
     )
 
 
-def _recently_skipped(events: Collection, qid: str) -> bool:
+def _recently_skipped(events: Collection, qid: str, *, user_id: Any = None) -> bool:
     since = _now() - timedelta(days=SKIP_COOLDOWN_DAYS)
-    return (
-        events.count_documents({"question_id": qid, "action": "skipped", "at": {"$gte": since}})
-        > 0
-    )
+    q: dict[str, Any] = {"question_id": qid, "action": "skipped", "at": {"$gte": since}}
+    if user_id is not None:
+        q["user_id"] = user_id
+    return events.count_documents(q) > 0
 
 
 def log_event(
@@ -607,16 +630,18 @@ def log_event(
     action: str,
     fact_type: str | None = None,
     key: str | None = None,
+    user_id: Any = None,
 ) -> None:
-    events.insert_one(
-        {
-            "question_id": question_id,
-            "action": action,
-            "fact_type": fact_type,
-            "key": key,
-            "at": _now(),
-        }
-    )
+    doc: dict[str, Any] = {
+        "question_id": question_id,
+        "action": action,
+        "fact_type": fact_type,
+        "key": key,
+        "at": _now(),
+    }
+    if user_id is not None:
+        doc["user_id"] = user_id
+    events.insert_one(doc)
 
 
 def _alt_categories(merchant: str, raw: str) -> list[str]:
@@ -668,10 +693,13 @@ def generate_questions(
     transactions: Collection,
     analytics: dict[str, Any] | None = None,
     category_memory: Collection | None = None,
+    user_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Build up to MAX_QUESTIONS_PER_WEEK clarifying questions under guardrails."""
-    fact_map = get_fact_map(facts)
-    used = _events_this_week(events)
+    if user_id is None:
+        raise ValueError("user_id is required for learn questions")
+    fact_map = get_fact_map(facts, user_id=user_id)
+    used = _events_this_week(events, user_id=user_id)
     remaining = max(0, MAX_QUESTIONS_PER_WEEK - used)
     # Still allow re-display of questions already shown this week (until answered/skipped)
 
@@ -680,16 +708,17 @@ def generate_questions(
 
     memory_keys: set[str] = set()
     if category_memory is not None:
-        for row in category_memory.find({}, {"merchant_key": 1}):
+        for row in category_memory.find({"user_id": user_id}, {"merchant_key": 1}):
             k = (row.get("merchant_key") or "").strip().lower()
             if k:
                 memory_keys.add(k)
-    memory_keys.update(merchant_category_overrides(facts).keys())
+    memory_keys.update(merchant_category_overrides(facts, user_id=user_id).keys())
 
     # a) Categorization confidence — Other / low-confidence merchants
     for doc in (
         transactions.find(
             {
+                "user_id": user_id,
                 "type": "debit",
                 "$or": [
                     {"category": "Other"},
@@ -709,7 +738,7 @@ def generate_questions(
             continue
         opts = _alt_categories(merchant, doc.get("raw_text") or "")
         qid = question_id("category_intent", key)
-        if _recently_skipped(events, qid):
+        if _recently_skipped(events, qid, user_id=user_id):
             continue
         top = opts[:2]
         candidates.append(
@@ -773,7 +802,7 @@ def generate_questions(
             if avg <= 0 or cur_amt < avg * (1 + SPEND_DEVIATION_PCT / 100):
                 continue
             qid = question_id("spending_intent", intent_key)
-            if _recently_skipped(events, qid):
+            if _recently_skipped(events, qid, user_id=user_id):
                 continue
             candidates.append(
                 {
@@ -831,7 +860,7 @@ def generate_questions(
             if fact_key("budget_target", cat) in fact_map:
                 continue
             qid = question_id("budget_target", cat)
-            if _recently_skipped(events, qid):
+            if _recently_skipped(events, qid, user_id=user_id):
                 continue
             rounded = round(avg / 100) * 100
             lower = round(rounded * 0.8 / 100) * 100
@@ -860,7 +889,7 @@ def generate_questions(
         if not asset or fact_key("risk_tolerance", asset) in fact_map:
             return
         qid = question_id("risk_tolerance", asset)
-        if _recently_skipped(events, qid):
+        if _recently_skipped(events, qid, user_id=user_id):
             return
         if any(c["id"] == qid for c in candidates):
             return
@@ -892,7 +921,7 @@ def generate_questions(
         _add_drift_q(str(d.get("asset_class") or ""), d.get("delta_pp"))
 
     # e) One-off context for unusual spends
-    one_offs = one_off_fingerprints(facts)
+    one_offs = one_off_fingerprints(facts, user_id=user_id)
     for alert in alerts:
         if alert.get("type") != "anomaly":
             continue
@@ -902,7 +931,7 @@ def generate_questions(
         if fp in one_offs or fact_key("one_off_context", fp) in fact_map:
             continue
         qid = question_id("one_off_context", fp)
-        if _recently_skipped(events, qid):
+        if _recently_skipped(events, qid, user_id=user_id):
             continue
         candidates.append(
             {
@@ -933,12 +962,12 @@ def generate_questions(
 
     chosen = unique[:remaining]
     # Prefer re-surfacing already-shown unanswered questions from this week first
-    already = [c for c in unique if _already_shown_this_week(events, c["id"])]
-    fresh = [c for c in unique if not _already_shown_this_week(events, c["id"])]
+    already = [c for c in unique if _already_shown_this_week(events, c["id"], user_id=user_id)]
+    fresh = [c for c in unique if not _already_shown_this_week(events, c["id"], user_id=user_id)]
     slots = max(0, MAX_QUESTIONS_PER_WEEK - len(already))
     chosen = (already + fresh[:slots])[:MAX_QUESTIONS_PER_WEEK]
     for c in chosen:
-        if not _already_shown_this_week(events, c["id"]):
+        if not _already_shown_this_week(events, c["id"], user_id=user_id):
             log_event(
                 events,
                 question_id=c["id"],
@@ -959,7 +988,10 @@ def apply_answer(
     question: dict[str, Any],
     choice_id: str | None,
     free_text: str | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
+    if user_id is None:
+        raise ValueError("user_id is required to apply learn answers")
     fact_type = question["fact_type"]
     key = question["key"]
     meta = dict(question.get("meta") or {})
@@ -974,11 +1006,12 @@ def apply_answer(
         value = float(m.group(1).replace(",", ""))
         if budgets_col is not None and value > 0:
             budgets_col.update_one(
-                {"category": key},
+                {"user_id": user_id, "category": key},
                 {
                     "$set": {
                         "category": key,
                         "amount": value,
+                        "user_id": user_id,
                         "updated_at": _now(),
                         "source": "learned",
                     }
@@ -1003,12 +1036,13 @@ def apply_answer(
             now = _now()
             for mk in {key.lower(), key.strip().lower()}:
                 category_memory.update_one(
-                    {"merchant_key": mk},
+                    {"user_id": user_id, "merchant_key": mk},
                     {
                         "$set": {
                             "merchant_key": mk,
                             "merchant": key,
                             "category": cat,
+                            "user_id": user_id,
                             "updated_at": now,
                             "source": "learned",
                         }
@@ -1023,6 +1057,7 @@ def apply_answer(
         value=value,
         source="user_answered",
         meta=meta,
+        user_id=user_id,
     )
     log_event(
         events,
@@ -1030,27 +1065,32 @@ def apply_answer(
         action="answered",
         fact_type=fact_type,
         key=key,
+        user_id=user_id,
     )
     return fact
 
 
-def skip_question(events: Collection, question: dict[str, Any]) -> None:
+def skip_question(events: Collection, question: dict[str, Any], *, user_id: Any = None) -> None:
     log_event(
         events,
         question_id=question["id"],
         action="skipped",
         fact_type=question.get("fact_type"),
         key=question.get("key"),
+        user_id=user_id,
     )
 
 
-def facts_for_ai_context(facts: Collection) -> list[dict[str, str]]:
+def facts_for_ai_context(facts: Collection, *, user_id: Any = None) -> list[dict[str, str]]:
+    q: dict[str, Any] = {}
+    if user_id is not None:
+        q["user_id"] = user_id
     return [
         {
             "type": str(d.get("fact_type")),
             "summary": str(d.get("plain_language") or _plain_language(d)),
         }
-        for d in facts.find().sort("last_confirmed_at", -1).limit(40)
+        for d in facts.find(q).sort("last_confirmed_at", -1).limit(40)
     ]
 
 

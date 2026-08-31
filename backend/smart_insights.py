@@ -56,15 +56,18 @@ def build_sip_tracker(
     *,
     overrides: Collection | None = None,
     now: datetime | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Infer monthly SIPs from Investments debits and flag misses / amount drift."""
+    if user_id is None:
+        raise ValueError("user_id is required for SIP tracker")
     now = now or datetime.now(timezone.utc)
     current_month = _month_key(now)
 
     # Collect per-instrument debit history
     by_inst: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for doc in transactions.find(
-        {"category": "Investments", "type": "debit"},
+        {"user_id": user_id, "category": "Investments", "type": "debit"},
         {"merchant": 1, "raw_text": 1, "amount": 1, "received_at": 1},
     ):
         ts = doc.get("received_at")
@@ -85,7 +88,7 @@ def build_sip_tracker(
     override_keys: set[str] = set()
     if overrides is not None:
         try:
-            for row in overrides.find({"month": current_month}):
+            for row in overrides.find({"user_id": user_id, "month": current_month}):
                 key = str(row.get("instrument") or "").strip()
                 if key:
                     override_keys.add(key)
@@ -311,13 +314,17 @@ def build_subscription_creep(
     transactions: Collection,
     *,
     now: datetime | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Detect price hikes and missing recurring charges."""
+    if user_id is None:
+        raise ValueError("user_id is required for subscription creep")
     now = now or datetime.now(timezone.utc)
     by_merchant: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for doc in transactions.find(
         {
+            "user_id": user_id,
             "type": "debit",
             "category": {"$in": ["Subscriptions", "Entertainment", "Bills & Utilities"]},
         },
@@ -406,8 +413,11 @@ def build_spend_forecast(
     transactions: Collection,
     *,
     now: datetime | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Mid-month lifestyle spend pace vs historical monthly average."""
+    if user_id is None:
+        raise ValueError("user_id is required for spend forecast")
     now = now or datetime.now(timezone.utc)
     ym = _month_key(now)
     days_in = _days_in_month(ym)
@@ -416,7 +426,7 @@ def build_spend_forecast(
     def lifestyle_amount(match: dict[str, Any]) -> float:
         total = 0.0
         for doc in transactions.find(
-            {**match, "type": "debit"},
+            {**match, "user_id": user_id, "type": "debit"},
             {"amount": 1, "category": 1},
         ):
             cat = doc.get("category") or "Other"
@@ -471,11 +481,15 @@ def find_ambiguous_transfers(
     *,
     known_banks: list[str] | None = None,
     limit: int = 40,
+    user_id: Any = None,
 ) -> list[dict[str, Any]]:
     """Heuristic shortlist of debits that may be self-transfers."""
+    if user_id is None:
+        raise ValueError("user_id is required for transfer disambiguation")
     banks = {b.lower() for b in (known_banks or [])}
     out: list[dict[str, Any]] = []
     query = {
+        "user_id": user_id,
         "type": "debit",
         "$and": [
             {
@@ -539,17 +553,21 @@ def attach_smart_insights(
     settings: Collection | None = None,
     learned_facts: Collection | None = None,
     goals_col: Collection | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Mutate analytics payload with SIP / drift / creep / forecast blocks + alerts."""
+    if user_id is None:
+        raise ValueError("user_id is required for smart insights")
     holdings = (analytics.get("investments") or {}).get("holdings") or []
 
     targets: dict[str, float] | None = None
     baseline: dict[str, float] | None = None
     threshold_pp = 10.0
     thresholds_by_asset: dict[str, float] = {}
+    allocation_id = f"allocation:{user_id}"
     if settings is not None:
         try:
-            doc = settings.find_one({"_id": "allocation"}) or {}
+            doc = settings.find_one({"_id": allocation_id}) or settings.find_one({"_id": "allocation"}) or {}
             raw_targets = doc.get("targets")
             if isinstance(raw_targets, dict) and raw_targets:
                 targets = {str(k): float(v) for k, v in raw_targets.items()}
@@ -565,11 +583,11 @@ def attach_smart_insights(
         try:
             from learned_facts import drift_thresholds_from_facts
 
-            thresholds_by_asset = drift_thresholds_from_facts(learned_facts)
+            thresholds_by_asset = drift_thresholds_from_facts(learned_facts, user_id=user_id)
         except Exception:  # noqa: BLE001
             pass
 
-    sip = build_sip_tracker(transactions, overrides=sip_overrides)
+    sip = build_sip_tracker(transactions, overrides=sip_overrides, user_id=user_id)
     drift = build_portfolio_drift(
         holdings,
         targets=targets,
@@ -586,14 +604,15 @@ def attach_smart_insights(
     ):
         try:
             settings.update_one(
-                {"_id": "allocation"},
+                {"_id": allocation_id},
                 {
                     "$set": {
                         "baseline": drift["suggested_baseline"],
                         "baseline_saved_at": datetime.now(timezone.utc),
                         "threshold_pp": threshold_pp,
+                        "user_id": user_id,
                     },
-                    "$setOnInsert": {"_id": "allocation"},
+                    "$setOnInsert": {"_id": allocation_id},
                 },
                 upsert=True,
             )
@@ -607,8 +626,8 @@ def attach_smart_insights(
         except Exception:  # noqa: BLE001
             pass
 
-    creep = build_subscription_creep(transactions)
-    forecast = build_spend_forecast(transactions)
+    creep = build_subscription_creep(transactions, user_id=user_id)
+    forecast = build_spend_forecast(transactions, user_id=user_id)
 
     analytics["smart"] = {
         "sip": sip,

@@ -35,8 +35,16 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 def _match(
     date_from: datetime | None,
     date_to: datetime | None,
+    *,
+    user_id: Any = None,
 ) -> dict[str, Any]:
-    match: dict[str, Any] = {"card_type": {"$ne": "wallet"}, **credit_card_noise_mongo_clause()}
+    if user_id is None:
+        raise ValueError("user_id is required for tally")
+    match: dict[str, Any] = {
+        "user_id": user_id,
+        "card_type": {"$ne": "wallet"},
+        **credit_card_noise_mongo_clause(),
+    }
     if date_from or date_to:
         rng: dict[str, Any] = {}
         if date_from:
@@ -90,9 +98,10 @@ def compute_tally(
     *,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Build a sense-check pack: totals, mix, outliers, and story flags."""
-    match = _match(date_from, date_to)
+    match = _match(date_from, date_to, user_id=user_id)
     docs = list(
         transactions.find(
             match,

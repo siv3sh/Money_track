@@ -136,11 +136,14 @@ def get_credit_card_by_last4(
     last4: str,
     *,
     bank: str | None = None,
+    user_id: Any = None,
 ) -> Optional[dict[str, Any]]:
     cleaned = "".join(c for c in str(last4) if c.isdigit())[-4:]
     if len(cleaned) != 4:
         return None
     query: dict[str, Any] = {"last4": cleaned}
+    if user_id is not None:
+        query["user_id"] = user_id
     if bank:
         query["bank"] = bank
     docs = list(credit_cards.find(query).sort("updated_at", -1).limit(2))
@@ -232,15 +235,20 @@ def sync_credit_cards_to_liabilities(
 def backfill_credit_cards_from_transactions(
     credit_cards: Collection,
     transactions: Collection,
+    *,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """
     One-shot populate from existing SMS transactions (including reclassified rows).
     Safe to re-run; upserts by bank+last4.
     """
+    if user_id is None:
+        raise ValueError("user_id is required for credit card backfill")
     updated = 0
     skipped = 0
     cursor = transactions.find(
         {
+            "user_id": user_id,
             "$or": [
                 {"card_type": "credit_card"},
                 {"cc_sms_kind": {"$exists": True}},
@@ -266,6 +274,7 @@ def backfill_credit_cards_from_transactions(
             sender=sender,
             body=body,
             received_at=doc.get("received_at") if isinstance(doc.get("received_at"), datetime) else None,
+            user_id=user_id,
         )
         if res:
             updated += 1
@@ -275,5 +284,5 @@ def backfill_credit_cards_from_transactions(
     return {
         "upserts_attempted": updated,
         "skipped": skipped,
-        "cards": list_credit_cards(credit_cards),
+        "cards": list_credit_cards(credit_cards, user_id=user_id),
     }

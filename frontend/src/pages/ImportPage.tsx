@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { Check, FileUp, FileSpreadsheet, Sparkles, Bot } from 'lucide-react'
-import { uploadStatementFile, type StatementImportResult } from '../api'
+import { Check, Eye, EyeOff, FileUp, FileSpreadsheet, Lock, Sparkles, Bot } from 'lucide-react'
+import {
+  PdfPasswordNeededError,
+  uploadStatementFile,
+  type StatementImportResult,
+} from '../api'
 import { LedgerAmount } from '../components/LedgerAmount'
 import { PageHeader } from '../components/ui'
 import { formatINR } from '../lib/format'
@@ -52,49 +56,78 @@ export function ImportPage() {
   const [err, setErr] = useState<string | null>(null)
   const [result, setResult] = useState<StatementImportResult | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [needPassword, setNeedPassword] = useState(false)
   const [pdfPassword, setPdfPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const passwordInputRef = useRef<HTMLInputElement>(null)
 
-  const saveFile = async (file: File | null) => {
+  const applyResult = (res: StatementImportResult) => {
+    setResult(res)
+    const detected = res.detected
+    const bankLabel = detected?.bank
+      ? `${detected.bank}${detected.is_credit_card_statement ? ' credit card' : ''}`
+      : 'auto'
+    const ragNote =
+      res.agent?.rag_categorized && res.agent.rag_categorized > 0
+        ? ` · RAG categorized ${res.agent.rag_categorized}`
+        : ''
+    if (res.imported === 0) {
+      setErr(
+        res.parsed === 0
+          ? 'No transactions found in that file'
+          : `Nothing new imported · exact dups ${res.skipped_duplicates}` +
+              (res.skipped_likely_duplicates
+                ? ` · cross-source likely dups ${res.skipped_likely_duplicates}`
+                : ''),
+      )
+    } else {
+      setOk(
+        `Detected ${bankLabel} · imported ${res.imported} of ${res.parsed} rows` +
+          (res.skipped_duplicates ? ` · skipped ${res.skipped_duplicates} exact duplicates` : '') +
+          (res.skipped_likely_duplicates
+            ? ` · skipped ${res.skipped_likely_duplicates} likely SMS duplicates`
+            : '') +
+          ragNote,
+      )
+    }
+  }
+
+  const saveFile = async (file: File | null, password?: string) => {
     if (!file) return
     setBusy(true)
     setOk(null)
     setErr(null)
     setResult(null)
     try {
-      const res = await uploadStatementFile(file, undefined, 'auto', pdfPassword)
-      setResult(res)
-      const detected = res.detected
-      const bankLabel = detected?.bank
-        ? `${detected.bank}${detected.is_credit_card_statement ? ' credit card' : ''}`
-        : 'auto'
-      const ragNote =
-        res.agent?.rag_categorized && res.agent.rag_categorized > 0
-          ? ` · RAG categorized ${res.agent.rag_categorized}`
-          : ''
-      if (res.imported === 0) {
-        setErr(
-          res.parsed === 0
-            ? 'No transactions found in that file'
-            : `Nothing new imported · exact dups ${res.skipped_duplicates}` +
-                (res.skipped_likely_duplicates
-                  ? ` · cross-source likely dups ${res.skipped_likely_duplicates}`
-                  : ''),
-        )
-      } else {
-        setOk(
-          `Detected ${bankLabel} · imported ${res.imported} of ${res.parsed} rows` +
-            (res.skipped_duplicates ? ` · skipped ${res.skipped_duplicates} exact duplicates` : '') +
-            (res.skipped_likely_duplicates
-              ? ` · skipped ${res.skipped_likely_duplicates} likely SMS duplicates`
-              : '') +
-            ragNote,
-        )
-      }
+      const res = await uploadStatementFile(file, undefined, 'auto', password)
+      setPendingFile(null)
+      setNeedPassword(false)
+      setPdfPassword('')
+      applyResult(res)
     } catch (e) {
+      if (e instanceof PdfPasswordNeededError) {
+        setPendingFile(file)
+        setNeedPassword(true)
+        setErr(null)
+        requestAnimationFrame(() => passwordInputRef.current?.focus())
+        return
+      }
       setErr(e instanceof Error && e.message.trim() ? e.message : 'Import failed')
     } finally {
       setBusy(false)
     }
+  }
+
+  const unlockAndImport = (e: FormEvent) => {
+    e.preventDefault()
+    if (!pendingFile) return
+    const pwd = pdfPassword.trim()
+    if (!pwd) {
+      setErr('Enter the PDF password to unlock this statement')
+      return
+    }
+    void saveFile(pendingFile, pwd)
   }
 
   const analysis = result?.analysis
@@ -124,59 +157,103 @@ export function ImportPage() {
           PDF, Excel, or CSV. Cross-source dedup against SMS + past imports.
         </p>
 
-        <label className="mt-4 block text-sm">
-          <span className="font-medium text-[var(--text)]">PDF password (if locked)</span>
-          <input
-            type="password"
-            autoComplete="off"
-            value={pdfPassword}
-            onChange={(e) => setPdfPassword(e.target.value)}
-            disabled={busy}
-            placeholder="Optional — leave blank if unlocked"
-            className="mt-1.5 w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--muted)]"
-          />
-          <span className="mt-1 block text-xs text-[var(--muted)]">
-            Indian banks often use DOB (DDMMYYYY), PAN, or last 4–6 digits of account/card. Password
-            is used only to unlock this upload — not stored.
-          </span>
-        </label>
-
         {stages.length ? (
           <PipelineTicks stages={stages} current={currentStage} />
         ) : null}
 
-        <label
-          className={`mt-5 flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed px-4 py-10 text-sm transition-colors ${
-            dragOver
-              ? 'border-[var(--sapphire)] bg-[var(--accent-soft)]'
-              : 'border-[var(--border-strong)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
-          }`}
-          onDragOver={(e) => {
-            e.preventDefault()
-            setDragOver(true)
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault()
-            setDragOver(false)
-            void saveFile(e.dataTransfer.files?.[0] || null)
-          }}
-        >
-          <FileUp size={18} className="text-[var(--muted)]" />
-          <span className="font-medium text-[var(--text)]">
-            {busy ? 'Importing…' : 'Drop statement or click to browse'}
-          </span>
-          <span className="text-xs text-[var(--muted)]">.pdf · .xlsx · .csv</span>
-          <input
-            type="file"
-            accept=".csv,.tsv,.txt,.xlsx,.xls,.pdf"
-            className="sr-only"
-            disabled={busy}
-            onChange={(e) => void saveFile(e.target.files?.[0] || null)}
-          />
-        </label>
+        {needPassword && pendingFile ? (
+          <form
+            className="mt-5 rounded-xl border border-[var(--sapphire)]/30 bg-[var(--accent-soft)]/40 p-4"
+            onSubmit={unlockAndImport}
+          >
+            <div className="mb-3 flex items-start gap-2">
+              <Lock size={16} className="mt-0.5 shrink-0 text-[var(--sapphire)]" />
+              <div>
+                <p className="text-sm font-semibold text-[var(--text)]">Password required</p>
+                <p className="mt-0.5 text-xs text-[var(--muted)]">
+                  <span className="font-medium text-[var(--text)]">{pendingFile.name}</span> is
+                  locked. Enter the statement password, then we unlock it and import the rows.
+                  Banks often use DOB (DDMMYYYY), PAN, or last 4–6 digits of account/card. Not
+                  stored.
+                </p>
+              </div>
+            </div>
+            <label className="block text-sm">
+              <span className="font-medium text-[var(--text)]">PDF password</span>
+              <div className="relative mt-1.5">
+                <input
+                  ref={passwordInputRef}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="off"
+                  value={pdfPassword}
+                  onChange={(e) => setPdfPassword(e.target.value)}
+                  disabled={busy}
+                  placeholder="Enter password"
+                  className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 py-2 pr-11 text-sm text-[var(--text)] placeholder:text-[var(--muted)]"
+                />
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[var(--muted)] hover:text-[var(--text)]"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  onClick={() => setShowPassword((v) => !v)}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy ? 'Unlocking…' : 'Unlock & import'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => {
+                  setNeedPassword(false)
+                  setPendingFile(null)
+                  setPdfPassword('')
+                  setErr(null)
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <label
+            className={`mt-5 flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed px-4 py-10 text-sm transition-colors ${
+              dragOver
+                ? 'border-[var(--sapphire)] bg-[var(--accent-soft)]'
+                : 'border-[var(--border-strong)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
+            }`}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              void saveFile(e.dataTransfer.files?.[0] || null)
+            }}
+          >
+            <FileUp size={18} className="text-[var(--muted)]" />
+            <span className="font-medium text-[var(--text)]">
+              {busy ? 'Importing…' : 'Drop statement or click to browse'}
+            </span>
+            <span className="text-xs text-[var(--muted)]">.pdf · .xlsx · .csv</span>
+            <input
+              type="file"
+              accept=".csv,.tsv,.txt,.xlsx,.xls,.pdf"
+              className="sr-only"
+              disabled={busy}
+              onChange={(e) => void saveFile(e.target.files?.[0] || null)}
+            />
+          </label>
+        )}
 
-        {busy ? (
+        {busy && !needPassword ? (
           <p className="mt-4 flex items-center gap-2 text-sm text-[var(--muted)]">
             <Sparkles size={14} className="animate-pulse" />
             Extracting → Mapping → Categorizing → Validating → Review…

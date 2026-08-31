@@ -42,10 +42,22 @@ def default_persona_text() -> str:
     )
 
 
-def get_advisor_persona_settings(settings: Collection | None) -> dict[str, Any]:
+def _persona_settings_id(user_id: Any | None = None) -> str:
+    if user_id is None:
+        return SETTINGS_ID
+    return f"{SETTINGS_ID}:{user_id}"
+
+
+def get_advisor_persona_settings(
+    settings: Collection | None,
+    *,
+    user_id: Any = None,
+) -> dict[str, Any]:
     doc: dict[str, Any] = {}
     if settings is not None:
-        doc = settings.find_one({"_id": SETTINGS_ID}) or {}
+        doc = settings.find_one({"_id": _persona_settings_id(user_id)}) or {}
+        if not doc and user_id is not None:
+            doc = settings.find_one({"_id": SETTINGS_ID}) or {}
     persona = (doc.get("persona_text") or "").strip() or default_persona_text()
     sensitivity = doc.get("strictness_sensitivity")
     try:
@@ -72,8 +84,9 @@ def save_advisor_persona_settings(
     persona_text: str | None = None,
     strictness_sensitivity: int | None = None,
     reset_persona_to_default: bool = False,
+    user_id: Any = None,
 ) -> dict[str, Any]:
-    current = get_advisor_persona_settings(settings)
+    current = get_advisor_persona_settings(settings, user_id=user_id)
     patch: dict[str, Any] = {"updated_at": _now()}
     if reset_persona_to_default:
         patch["persona_text"] = default_persona_text()
@@ -93,12 +106,15 @@ def save_advisor_persona_settings(
     else:
         patch["strictness_sensitivity"] = current["strictness_sensitivity"]
 
+    sid = _persona_settings_id(user_id)
+    if user_id is not None:
+        patch["user_id"] = user_id
     settings.update_one(
-        {"_id": SETTINGS_ID},
-        {"$set": patch, "$setOnInsert": {"_id": SETTINGS_ID}},
+        {"_id": sid},
+        {"$set": patch, "$setOnInsert": {"_id": sid}},
         upsert=True,
     )
-    return get_advisor_persona_settings(settings)
+    return get_advisor_persona_settings(settings, user_id=user_id)
 
 
 def _strict_month_threshold(sensitivity: int) -> int:
@@ -600,10 +616,12 @@ def system_briefing(
 def preview_samples(
     settings: Collection | None = None,
     learned_facts: Collection | None = None,
+    *,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Sample advisor lines at each severity for settings UI."""
-    cfg = get_advisor_persona_settings(settings)
-    profile = advisor_profile_from_facts(learned_facts)
+    cfg = get_advisor_persona_settings(settings, user_id=user_id)
+    profile = advisor_profile_from_facts(learned_facts, user_id=user_id)
     name = profile.get("preferred_name") or "you"
     soft = profile.get("soft_spot") or "Shopping"
     goal = profile.get("motivation") or "your goal"

@@ -585,8 +585,11 @@ def build_report_stats(
     news_cache: Collection | None = None,
     learned_facts: Collection | None = None,
     goals_col: Collection | None = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Pre-compute all numbers for the monthly report (no LLM)."""
+    if user_id is None:
+        raise ValueError("user_id is required for monthly report stats")
     start, end = _month_bounds(year, month)
     py, pm = _prev_month(year, month)
     prev_start, prev_end = _month_bounds(py, pm)
@@ -604,6 +607,7 @@ def build_report_stats(
             liabilities=liabilities,
             budgets=budgets,
             learned_facts=learned_facts,
+            user_id=user_id,
         )
         if with_smart:
             return attach_smart_insights(
@@ -612,6 +616,7 @@ def build_report_stats(
                 sip_overrides=sip_overrides,
                 settings=settings,
                 learned_facts=learned_facts,
+                user_id=user_id,
             )
         return raw
 
@@ -1062,8 +1067,11 @@ def generate_monthly_report(
     memories_col: Collection | None = None,
     provider_name: str | None = None,
     force: bool = False,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Build stats, narrate with LLM, upsert into reports collection."""
+    if user_id is None:
+        raise ValueError("user_id is required for monthly report generation")
     now = datetime.now(timezone.utc)
     if year is None or month is None:
         # Default: prior calendar month (for 1st-of-month job)
@@ -1071,7 +1079,7 @@ def generate_monthly_report(
         year, month = py, pm
 
     month_key = _ym(year, month)
-    existing = reports.find_one({"month": month_key})
+    existing = reports.find_one({"user_id": user_id, "month": month_key})
     if existing and not force:
         return _serialize_report(existing)
 
@@ -1088,6 +1096,7 @@ def generate_monthly_report(
         news_cache=news_cache,
         learned_facts=learned_facts,
         goals_col=goals_col,
+        user_id=user_id,
     )
     if memories_col is not None:
         stats["_memories_col"] = memories_col
@@ -1110,9 +1119,10 @@ def generate_monthly_report(
         "generated_at": now,
         "updated_at": now,
         "emailed_at": None,
+        "user_id": user_id,
     }
-    reports.update_one({"month": month_key}, {"$set": doc}, upsert=True)
-    saved = reports.find_one({"month": month_key})
+    reports.update_one({"user_id": user_id, "month": month_key}, {"$set": doc}, upsert=True)
+    saved = reports.find_one({"user_id": user_id, "month": month_key})
     return _serialize_report(saved or doc)
 
 
@@ -1127,8 +1137,10 @@ def _serialize_report(doc: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def list_reports(reports: Collection, *, limit: int = 24) -> list[dict[str, Any]]:
-    rows = list(reports.find().sort("month", -1).limit(limit))
+def list_reports(reports: Collection, *, limit: int = 24, user_id: Any = None) -> list[dict[str, Any]]:
+    if user_id is None:
+        raise ValueError("user_id is required to list reports")
+    rows = list(reports.find({"user_id": user_id}).sort("month", -1).limit(limit))
     return [
         {
             "id": str(r["_id"]),
@@ -1147,6 +1159,8 @@ def list_reports(reports: Collection, *, limit: int = 24) -> list[dict[str, Any]
     ]
 
 
-def get_report(reports: Collection, month: str) -> dict[str, Any] | None:
-    doc = reports.find_one({"month": month})
+def get_report(reports: Collection, month: str, *, user_id: Any = None) -> dict[str, Any] | None:
+    if user_id is None:
+        raise ValueError("user_id is required to get a report")
+    doc = reports.find_one({"user_id": user_id, "month": month})
     return _serialize_report(doc) if doc else None

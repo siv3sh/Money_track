@@ -288,9 +288,13 @@ def categorize_batch(
     merchant_memory: dict[str, str] | None = None,
     settings: Any = None,
     learned_facts: Any = None,
+    user_id: Any = None,
 ) -> dict[str, Any]:
     """Categorize uncategorized / Other transactions. Memory → rules → LLM leftovers."""
+    if user_id is None:
+        raise ValueError("user_id is required for categorize_batch")
     query = {
+        "user_id": user_id,
         "$or": [
             {"category": {"$exists": False}},
             {"category": None},
