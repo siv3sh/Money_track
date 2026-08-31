@@ -1,12 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowRight, Eye, EyeOff, Loader2, Mail, Phone, Send } from 'lucide-react'
+import { ArrowRight, Eye, EyeOff, Loader2, Mail } from 'lucide-react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { sendOtpRequest, verifyOtpRequest, type OtpChannel } from '../api'
 import { useAuth } from '../context/AuthContext'
 
 type Mode = 'signin' | 'signup'
-type SignInMethod = 'password' | 'otp'
-type Step = 'form' | 'verify-email' | 'verify-phone'
 
 const fieldClass =
   'w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)] transition-[border-color,box-shadow] duration-200 placeholder:text-[var(--muted)]/70 focus:border-[var(--sapphire)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]'
@@ -33,17 +30,14 @@ function SegmentedToggle({
   options,
   value,
   onChange,
-  size = 'md',
 }: {
   options: { id: string; label: string }[]
   value: string
   onChange: (id: string) => void
-  size?: 'md' | 'sm'
 }) {
-  const pad = size === 'md' ? 'py-2.5 text-sm' : 'py-1.5 text-xs'
   return (
     <div
-      className={`flex rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-1 shadow-[inset_0_1px_2px_rgba(11,31,58,0.06)] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)]`}
+      className="flex rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-1 text-sm shadow-[inset_0_1px_2px_rgba(11,31,58,0.06)] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.35)]"
       role="tablist"
     >
       {options.map((opt) => {
@@ -54,7 +48,7 @@ function SegmentedToggle({
             type="button"
             role="tab"
             aria-selected={active}
-            className={`flex-1 rounded-lg font-semibold transition-all duration-200 ${pad} ${
+            className={`flex-1 rounded-lg py-2.5 font-semibold transition-all duration-200 ${
               active
                 ? 'bg-[var(--sheet)] text-[var(--text)] shadow-[var(--elev-1)] ring-1 ring-[var(--border)]'
                 : 'text-[var(--muted)] hover:text-[var(--text)]'
@@ -69,71 +63,21 @@ function SegmentedToggle({
   )
 }
 
-function PrimaryButton({
-  busy,
-  disabled,
-  idleIcon,
-  busyLabel,
-  idleLabel,
-}: {
-  busy: boolean
-  disabled: boolean
-  idleIcon: ReactNode
-  busyLabel: string
-  idleLabel: string
-}) {
-  return (
-    <button
-      type="submit"
-      className="btn btn-primary w-full justify-center gap-2 py-2.5 text-sm transition-transform duration-150 active:scale-[0.98] disabled:active:scale-100"
-      disabled={disabled}
-    >
-      {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden /> : idleIcon}
-      <span>{busy ? busyLabel : idleLabel}</span>
-    </button>
-  )
-}
-
 export function LoginPage() {
-  const { user, loading, login, register, applySession } = useAuth()
+  const { user, loading, login, register } = useAuth()
   const navigate = useNavigate()
   const [mode, setMode] = useState<Mode>('signin')
-  const [signInMethod, setSignInMethod] = useState<SignInMethod>('password')
-  const [step, setStep] = useState<Step>('form')
   const [email, setEmail] = useState('')
-  const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [signupCode, setSignupCode] = useState('')
-  const [otpChannel, setOtpChannel] = useState<OtpChannel>('email')
-  const [otpDestination, setOtpDestination] = useState('')
-  const [otpCode, setOtpCode] = useState('')
-  const [otpHint, setOtpHint] = useState<string | null>(null)
-  const [smsAvailable, setSmsAvailable] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  if (!loading && user && step === 'form' && mode === 'signin') {
+  if (!loading && user) {
     return <Navigate to={postAuthPath(user)} replace />
-  }
-  if (
-    !loading &&
-    user &&
-    step === 'form' &&
-    mode === 'signup' &&
-    user.email_verified !== false &&
-    (user.phone_verified !== false || !user.phone)
-  ) {
-    return <Navigate to={postAuthPath(user)} replace />
-  }
-
-  const resetFormState = () => {
-    setStep('form')
-    setOtpCode('')
-    setOtpHint(null)
-    setError(null)
   }
 
   const onSubmit = async (e: FormEvent) => {
@@ -152,49 +96,15 @@ export function LoginPage() {
           setBusy(false)
           return
         }
-        if (!phone.trim()) {
-          setError('Enter your phone number')
-          setBusy(false)
-          return
-        }
-        const res = await register({
+        const u = await register({
           email: email.trim(),
           password,
-          phone: phone.trim(),
           signup_code: signupCode.trim() || undefined,
         })
-        setSmsAvailable(Boolean(res.sms_otp_available))
-        setOtpDestination(email.trim())
-        setOtpChannel('email')
-        setStep('verify-email')
-        setOtpHint(
-          res.otp_sent?.email
-            ? 'We sent a 6-digit code to your email.'
-            : 'Enter the email code (resend if needed).',
-        )
-      } else if (signInMethod === 'password') {
-        const u = await login(email.trim(), password)
         navigate(postAuthPath(u), { replace: true })
       } else {
-        const dest = otpChannel === 'email' ? email.trim() : phone.trim()
-        if (!dest) {
-          setError(otpChannel === 'email' ? 'Enter your email' : 'Enter your phone number')
-          setBusy(false)
-          return
-        }
-        const sent = await sendOtpRequest({
-          channel: otpChannel,
-          destination: dest,
-          purpose: 'login',
-        })
-        setOtpDestination(dest)
-        setSmsAvailable(Boolean(sent.sms_otp_available))
-        setOtpHint(
-          sent.destination_masked
-            ? `Code sent to ${sent.destination_masked}`
-            : sent.detail || 'If that account exists, a code was sent.',
-        )
-        setStep('verify-email')
+        const u = await login(email.trim(), password)
+        navigate(postAuthPath(u), { replace: true })
       }
     } catch (err) {
       setError(
@@ -208,172 +118,6 @@ export function LoginPage() {
       setBusy(false)
     }
   }
-
-  const onVerifyOtp = async (e: FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      const purpose = mode === 'signup' ? 'verify' : 'login'
-      const channel: OtpChannel =
-        mode === 'signup' ? (step === 'verify-phone' ? 'phone' : 'email') : otpChannel
-      const destination =
-        mode === 'signup'
-          ? step === 'verify-phone'
-            ? phone.trim()
-            : email.trim()
-          : otpDestination
-
-      const res = await verifyOtpRequest({
-        channel,
-        destination,
-        purpose,
-        code: otpCode.trim(),
-      })
-      applySession(res.access_token, res.user)
-
-      if (mode === 'signup' && step === 'verify-email' && smsAvailable && phone.trim()) {
-        setOtpCode('')
-        setStep('verify-phone')
-        setOtpHint('Enter the SMS code we sent to your phone.')
-        try {
-          await sendOtpRequest({
-            channel: 'phone',
-            destination: phone.trim(),
-            purpose: 'verify',
-          })
-        } catch {
-          // Phone OTP may already have been sent at register time.
-        }
-        setBusy(false)
-        return
-      }
-
-      navigate(postAuthPath(res.user), { replace: true })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid code')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const onResend = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      const channel: OtpChannel =
-        mode === 'signup' ? (step === 'verify-phone' ? 'phone' : 'email') : otpChannel
-      const destination =
-        mode === 'signup'
-          ? step === 'verify-phone'
-            ? phone.trim()
-            : email.trim()
-          : otpDestination
-      const purpose = mode === 'signup' ? 'verify' : 'login'
-      const sent = await sendOtpRequest({ channel, destination, purpose })
-      setOtpHint(
-        sent.destination_masked
-          ? `Code sent to ${sent.destination_masked}`
-          : sent.detail || 'Code sent.',
-      )
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not resend code')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const skipPhoneVerify = () => {
-    if (user) navigate(postAuthPath(user), { replace: true })
-  }
-
-  if (step !== 'form') {
-    return (
-      <AuthCard>
-        <div className="mb-1">
-          <h1 className="font-[family-name:var(--font-display)] text-[1.45rem] font-semibold tracking-tight text-[var(--text)] sm:text-[1.65rem]">
-            {step === 'verify-phone' ? 'Verify phone' : 'Enter code'}
-          </h1>
-          <p className="mt-1.5 text-[13px] leading-snug text-[var(--text-secondary)]">
-            {otpHint || 'Enter the 6-digit code to continue.'}
-          </p>
-        </div>
-        <form className="mt-6 space-y-4" onSubmit={(e) => void onVerifyOtp(e)}>
-          <label className="block">
-            <span className={labelClass}>6-digit code</span>
-            <input
-              className={`${fieldClass} tracking-[0.3em]`}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              required
-              minLength={6}
-              maxLength={6}
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="••••••"
-            />
-          </label>
-          {error ? (
-            <p
-              role="alert"
-              className="rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]"
-            >
-              {error}
-            </p>
-          ) : null}
-          <PrimaryButton
-            busy={busy}
-            disabled={busy || otpCode.length !== 6}
-            idleIcon={<ArrowRight className="h-4 w-4 shrink-0" aria-hidden />}
-            busyLabel="Checking…"
-            idleLabel="Verify & continue"
-          />
-        </form>
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-sm">
-          <button
-            type="button"
-            className="font-medium text-[var(--sapphire)] underline-offset-2 transition-opacity hover:underline disabled:opacity-50"
-            disabled={busy}
-            onClick={() => void onResend()}
-          >
-            Resend code
-          </button>
-          {step === 'verify-phone' ? (
-            <button
-              type="button"
-              className="text-[var(--muted)] underline-offset-2 transition-colors hover:text-[var(--text)] hover:underline"
-              onClick={skipPhoneVerify}
-            >
-              Skip for now
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="text-[var(--muted)] underline-offset-2 transition-colors hover:text-[var(--text)] hover:underline"
-              onClick={resetFormState}
-            >
-              Back
-            </button>
-          )}
-        </div>
-      </AuthCard>
-    )
-  }
-
-  const submitBusyLabel =
-    mode === 'signup'
-      ? 'Creating account…'
-      : signInMethod === 'otp'
-        ? 'Sending code…'
-        : 'Signing in…'
-  const submitIdleLabel =
-    mode === 'signup' ? 'Create account' : signInMethod === 'otp' ? 'Send OTP' : 'Sign in'
-  const submitIdleIcon =
-    mode === 'signin' && signInMethod === 'otp' ? (
-      <Send className="h-4 w-4 shrink-0" aria-hidden />
-    ) : (
-      <ArrowRight className="h-4 w-4 shrink-0" aria-hidden />
-    )
 
   return (
     <AuthCard>
@@ -398,7 +142,6 @@ export function LoginPage() {
 
       <div className="mb-5">
         <SegmentedToggle
-          size="md"
           value={mode}
           options={[
             { id: 'signin', label: 'Sign in' },
@@ -406,145 +149,54 @@ export function LoginPage() {
           ]}
           onChange={(id) => {
             setMode(id as Mode)
-            resetFormState()
+            setError(null)
           }}
         />
       </div>
 
-      {mode === 'signin' ? (
-        <div className="mb-4">
-          <SegmentedToggle
-            size="sm"
-            value={signInMethod}
-            options={[
-              { id: 'password', label: 'Password' },
-              { id: 'otp', label: 'OTP' },
-            ]}
-            onChange={(id) => {
-              setSignInMethod(id as SignInMethod)
-              setError(null)
-            }}
-          />
-        </div>
-      ) : null}
-
       <form className="space-y-4" onSubmit={(e) => void onSubmit(e)}>
-        {mode === 'signin' && signInMethod === 'otp' ? (
-          <>
-            <SegmentedToggle
-              size="sm"
-              value={otpChannel}
-              options={[
-                { id: 'email', label: 'Email' },
-                { id: 'phone', label: 'Phone' },
-              ]}
-              onChange={(id) => setOtpChannel(id as OtpChannel)}
+        <label className="block">
+          <span className={labelClass}>Email</span>
+          <div className="relative">
+            <Mail
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
+              aria-hidden
             />
-            {otpChannel === 'email' ? (
-              <label className="block">
-                <span className={labelClass}>Email</span>
-                <div className="relative">
-                  <Mail
-                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
-                    aria-hidden
-                  />
-                  <input
-                    className={`${fieldClass} pl-10`}
-                    type="email"
-                    autoComplete="username"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                  />
-                </div>
-              </label>
-            ) : (
-              <label className="block">
-                <span className={labelClass}>Phone</span>
-                <div className="relative">
-                  <Phone
-                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
-                    aria-hidden
-                  />
-                  <input
-                    className={`${fieldClass} pl-10`}
-                    type="tel"
-                    autoComplete="tel"
-                    required
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="10-digit mobile"
-                  />
-                </div>
-              </label>
-            )}
-          </>
-        ) : (
-          <>
-            <label className="block">
-              <span className={labelClass}>Email</span>
-              <div className="relative">
-                <Mail
-                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
-                  aria-hidden
-                />
-                <input
-                  className={`${fieldClass} pl-10`}
-                  type="email"
-                  autoComplete="username"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                />
-              </div>
-            </label>
-            {mode === 'signup' ? (
-              <label className="block">
-                <span className={labelClass}>Phone</span>
-                <div className="relative">
-                  <Phone
-                    className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]"
-                    aria-hidden
-                  />
-                  <input
-                    className={`${fieldClass} pl-10`}
-                    type="tel"
-                    autoComplete="tel"
-                    required
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="10-digit mobile"
-                  />
-                </div>
-              </label>
-            ) : null}
-            <label className="block">
-              <span className={labelClass}>Password</span>
-              <div className="relative">
-                <input
-                  className={`${fieldClass} pr-11`}
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                  required
-                  minLength={mode === 'signup' ? 8 : 1}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'}
-                />
-                <button
-                  type="button"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  onClick={() => setShowPassword((v) => !v)}
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </label>
-          </>
-        )}
+            <input
+              className={`${fieldClass} pl-10`}
+              type="email"
+              autoComplete="username"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+            />
+          </div>
+        </label>
+
+        <label className="block">
+          <span className={labelClass}>Password</span>
+          <div className="relative">
+            <input
+              className={`${fieldClass} pr-11`}
+              type={showPassword ? 'text' : 'password'}
+              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+              required
+              minLength={mode === 'signup' ? 8 : 1}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'}
+            />
+            <button
+              type="button"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              onClick={() => setShowPassword((v) => !v)}
+            >
+              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </label>
 
         {mode === 'signup' ? (
           <>
@@ -596,7 +248,7 @@ export function LoginPage() {
           </p>
         ) : null}
 
-        {mode === 'signin' && signInMethod === 'password' ? (
+        {mode === 'signin' ? (
           <p className="text-right text-xs">
             <button
               type="button"
@@ -608,13 +260,26 @@ export function LoginPage() {
           </p>
         ) : null}
 
-        <PrimaryButton
-          busy={busy}
+        <button
+          type="submit"
+          className="btn btn-primary w-full justify-center gap-2 py-2.5 text-sm transition-transform duration-150 active:scale-[0.98] disabled:active:scale-100"
           disabled={busy || loading}
-          idleIcon={submitIdleIcon}
-          busyLabel={submitBusyLabel}
-          idleLabel={submitIdleLabel}
-        />
+        >
+          {busy ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          ) : (
+            <ArrowRight className="h-4 w-4 shrink-0" aria-hidden />
+          )}
+          <span>
+            {busy
+              ? mode === 'signup'
+                ? 'Creating account…'
+                : 'Signing in…'
+              : mode === 'signup'
+                ? 'Create account'
+                : 'Sign in'}
+          </span>
+        </button>
       </form>
 
       <p className="mt-6 text-center text-[11px] leading-relaxed text-[var(--muted)]">
@@ -626,7 +291,7 @@ export function LoginPage() {
               className="font-semibold text-[var(--sapphire)] underline-offset-2 transition-opacity hover:underline"
               onClick={() => {
                 setMode('signup')
-                resetFormState()
+                setError(null)
               }}
             >
               Create an account
@@ -641,7 +306,7 @@ export function LoginPage() {
               className="font-semibold text-[var(--sapphire)] underline-offset-2 transition-opacity hover:underline"
               onClick={() => {
                 setMode('signin')
-                resetFormState()
+                setError(null)
               }}
             >
               Sign in

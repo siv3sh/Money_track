@@ -111,8 +111,7 @@ function shouldClearSession(path: string, status: number, detail: string): boole
     path.startsWith('/auth/login') ||
     path.startsWith('/auth/register') ||
     path.startsWith('/auth/forgot-password') ||
-    path.startsWith('/auth/reset-password') ||
-    path.startsWith('/auth/otp/')
+    path.startsWith('/auth/reset-password')
   ) {
     return false
   }
@@ -196,59 +195,16 @@ export function loginRequest(
 export function registerRequest(payload: {
   email: string
   password: string
-  phone: string
   signup_code?: string
-}): Promise<{
-  access_token: string
-  token_type: string
-  user: AuthUser
-  otp_sent?: { email?: boolean; phone?: boolean }
-  sms_otp_available?: boolean
-}> {
+}): Promise<{ access_token: string; token_type: string; user: AuthUser }> {
   return request('/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       email: payload.email,
       password: payload.password,
-      phone: payload.phone,
       signup_code: payload.signup_code || undefined,
     }),
-  })
-}
-
-export type OtpChannel = 'email' | 'phone'
-export type OtpPurpose = 'login' | 'verify' | 'reset'
-
-export function sendOtpRequest(payload: {
-  channel: OtpChannel
-  destination: string
-  purpose: OtpPurpose
-}): Promise<{
-  ok: boolean
-  detail?: string
-  channel: OtpChannel
-  destination_masked?: string
-  sms_otp_available?: boolean
-}> {
-  return request('/auth/otp/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-}
-
-export function verifyOtpRequest(payload: {
-  channel: OtpChannel
-  destination: string
-  purpose: OtpPurpose
-  code: string
-  new_password?: string
-}): Promise<{ access_token: string; token_type: string; user: AuthUser }> {
-  return request('/auth/otp/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
   })
 }
 

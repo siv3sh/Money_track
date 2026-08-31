@@ -64,17 +64,6 @@ from monthly_report import generate_monthly_report, get_report, list_reports
 from email_report import email_configured, render_report_html, send_report_email
 from report_pdf import render_report_pdf
 from rate_limit import enforce_rate_limit
-from sms_send import sms_configured
-from otp_auth import (
-    create_otp,
-    deliver_otp,
-    ensure_otp_indexes,
-    find_user_by_destination,
-    mask_destination,
-    normalize_phone,
-    resolve_destination,
-    verify_otp,
-)
 from auth_users import (
     authenticate_user,
     create_access_token,
@@ -84,10 +73,8 @@ from auth_users import (
     find_linked_by_token,
     get_current_user,
     get_primary_user,
-    hash_password,
     is_admin_user,
     migrate_assign_user_id,
-    normalize_email,
     purge_user_owned_data,
     register_user,
     reset_password_with_token,
@@ -174,7 +161,6 @@ advisor_memories = db["advisor_memories"]
 advisor_chat_sessions = db["advisor_chat_sessions"]
 users_col = db["users"]
 linked_accounts_col = db["linked_accounts"]
-otp_col = db["otp_challenges"]
 
 API_KEY = os.getenv("API_KEY", "")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173").strip().rstrip("/")
@@ -215,8 +201,6 @@ def _is_public_path(path: str) -> bool:
     if path in {
         "/auth/forgot-password",
         "/auth/reset-password",
-        "/auth/otp/send",
-        "/auth/otp/verify",
     }:
         return True
     if path.startswith("/jobs/"):
@@ -336,7 +320,6 @@ try:
     webhook_events.create_index([("user_id", 1), ("received_at", DESCENDING)])
     users_col.create_index("disabled")
     ensure_auth_indexes(users_col, linked_accounts_col)
-    ensure_otp_indexes(otp_col)
 except Exception as exc:  # noqa: BLE001 — allow import/boot without Mongo during local checks
     print(f"Warning: could not create Mongo indexes yet: {exc}")
 
@@ -976,7 +959,6 @@ class LoginPayload(BaseModel):
 class RegisterPayload(BaseModel):
     email: str = Field(..., min_length=3, max_length=200)
     password: str = Field(..., min_length=8, max_length=200)
-    phone: str = Field(..., min_length=8, max_length=20)
     signup_code: str | None = Field(default=None, max_length=120)
 
 
@@ -1002,20 +984,6 @@ class DeleteAccountPayload(BaseModel):
     password: str = Field(..., min_length=1, max_length=200)
 
 
-class OtpSendPayload(BaseModel):
-    channel: str = Field(..., pattern="^(email|phone)$")
-    destination: str = Field(..., min_length=3, max_length=200)
-    purpose: str = Field(..., pattern="^(login|verify|reset)$")
-
-
-class OtpVerifyPayload(BaseModel):
-    channel: str = Field(..., pattern="^(email|phone)$")
-    destination: str = Field(..., min_length=3, max_length=200)
-    purpose: str = Field(..., pattern="^(login|verify|reset)$")
-    code: str = Field(..., min_length=6, max_length=6)
-    new_password: str | None = Field(default=None, min_length=8, max_length=200)
-
-
 class LinkedAccountCreate(BaseModel):
     label: str = Field(..., min_length=1, max_length=80)
     kind: str = Field(default="phone", pattern="^(phone|bank_source|email)$")
@@ -1023,20 +991,16 @@ class LinkedAccountCreate(BaseModel):
     platform: str | None = Field(default=None, pattern="^(ios|android|email)$")
 
 
-def _auth_token_response(user: dict[str, Any]) -> dict[str, Any]:
+@app.post("/auth/login")
+def auth_login(request: Request, payload: LoginPayload):
+    enforce_rate_limit(request, bucket="auth_login", limit=20, window_sec=60)
+    user = authenticate_user(users_col, payload.email, payload.password)
     token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
     return {
         "access_token": token,
         "token_type": "bearer",
         "user": serialize_user(user),
     }
-
-
-@app.post("/auth/login")
-def auth_login(request: Request, payload: LoginPayload):
-    enforce_rate_limit(request, bucket="auth_login", limit=20, window_sec=60)
-    user = authenticate_user(users_col, payload.email, payload.password)
-    return _auth_token_response(user)
 
 
 @app.post("/auth/register")
@@ -1047,139 +1011,14 @@ def auth_register(request: Request, payload: RegisterPayload):
         given = (payload.signup_code or "").strip()
         if not given or given != required_code:
             raise HTTPException(status_code=403, detail="Invite code required or incorrect")
-    phone = normalize_phone(payload.phone)
-    user = register_user(users_col, payload.email, payload.password, phone=phone)
+    user = register_user(users_col, payload.email, payload.password)
     ensure_default_linked_account(linked_accounts_col, user_id=user["_id"])
-    # Kick off email (and phone when SMS is configured) verification OTPs.
-    sent: dict[str, bool] = {"email": False, "phone": False}
-    try:
-        code = create_otp(otp_col, channel="email", destination=user["email"], purpose="verify")
-        deliver_otp(channel="email", destination=user["email"], code=code, purpose="verify")
-        sent["email"] = True
-    except Exception as exc:  # noqa: BLE001
-        print(f"Warning: register email OTP failed: {exc}")
-    if sms_configured():
-        try:
-            code = create_otp(otp_col, channel="phone", destination=phone, purpose="verify")
-            deliver_otp(channel="phone", destination=phone, code=code, purpose="verify")
-            sent["phone"] = True
-        except Exception as exc:  # noqa: BLE001
-            print(f"Warning: register phone OTP failed: {exc}")
-    out = _auth_token_response(user)
-    out["otp_sent"] = sent
-    out["sms_otp_available"] = sms_configured()
-    return out
-
-
-@app.post("/auth/otp/send")
-def auth_otp_send(request: Request, payload: OtpSendPayload):
-    enforce_rate_limit(request, bucket="auth_otp_send", limit=8, window_sec=60)
-    channel = payload.channel  # type: ignore[assignment]
-    purpose = payload.purpose  # type: ignore[assignment]
-    destination = resolve_destination(channel, payload.destination)
-    generic = {
-        "ok": True,
-        "detail": "If that account exists, a code was sent.",
-        "channel": channel,
-        "destination_masked": mask_destination(channel, destination),
-        "sms_otp_available": sms_configured(),
-    }
-
-    if channel == "phone" and not sms_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Phone OTP is not configured yet. Use email OTP or password.",
-        )
-
-    user = find_user_by_destination(users_col, channel=channel, destination=destination)
-
-    if purpose == "login":
-        if not user or user.get("disabled"):
-            return generic
-        # Phone login requires a stored phone (always true here); email always ok.
-        code = create_otp(otp_col, channel=channel, destination=destination, purpose="login")
-        deliver_otp(channel=channel, destination=destination, code=code, purpose="login")
-        return generic
-
-    if purpose == "reset":
-        if not user or user.get("disabled"):
-            return generic
-        code = create_otp(otp_col, channel=channel, destination=destination, purpose="reset")
-        deliver_otp(channel=channel, destination=destination, code=code, purpose="reset")
-        return generic
-
-    # purpose == verify — prefer authenticated user; else destination must match an account
-    authed = getattr(request.state, "user", None)
-    if authed:
-        if channel == "email" and normalize_email(str(authed.get("email") or "")) != destination:
-            raise HTTPException(status_code=400, detail="Email does not match this account")
-        if channel == "phone" and (authed.get("phone") or "") != destination:
-            raise HTTPException(status_code=400, detail="Phone does not match this account")
-        user = authed
-    if not user or user.get("disabled"):
-        raise HTTPException(status_code=400, detail="Account not found for verification")
-    code = create_otp(otp_col, channel=channel, destination=destination, purpose="verify")
-    deliver_otp(channel=channel, destination=destination, code=code, purpose="verify")
+    token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
     return {
-        "ok": True,
-        "detail": "Verification code sent.",
-        "channel": channel,
-        "destination_masked": mask_destination(channel, destination),
-        "sms_otp_available": sms_configured(),
+        "access_token": token,
+        "token_type": "bearer",
+        "user": serialize_user(user),
     }
-
-
-@app.post("/auth/otp/verify")
-def auth_otp_verify(request: Request, payload: OtpVerifyPayload):
-    enforce_rate_limit(request, bucket="auth_otp_verify", limit=20, window_sec=60)
-    channel = payload.channel  # type: ignore[assignment]
-    purpose = payload.purpose  # type: ignore[assignment]
-    destination = resolve_destination(channel, payload.destination)
-    verify_otp(
-        otp_col,
-        channel=channel,
-        destination=destination,
-        purpose=purpose,
-        code=payload.code,
-    )
-    user = find_user_by_destination(users_col, channel=channel, destination=destination)
-    if not user or user.get("disabled"):
-        raise HTTPException(status_code=400, detail="Account not found")
-
-    now = datetime.now(timezone.utc)
-    if purpose == "login":
-        flag = "email_verified" if channel == "email" else "phone_verified"
-        users_col.update_one({"_id": user["_id"]}, {"$set": {flag: True, "updated_at": now}})
-        refreshed = users_col.find_one({"_id": user["_id"]}) or user
-        return _auth_token_response(refreshed)
-
-    if purpose == "verify":
-        flag = "email_verified" if channel == "email" else "phone_verified"
-        users_col.update_one({"_id": user["_id"]}, {"$set": {flag: True, "updated_at": now}})
-        refreshed = users_col.find_one({"_id": user["_id"]}) or user
-        return _auth_token_response(refreshed)
-
-    # reset — require new password, then sign in
-    new_password = (payload.new_password or "").strip()
-    if len(new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    flag = "email_verified" if channel == "email" else "phone_verified"
-    users_col.update_one(
-        {"_id": user["_id"]},
-        {
-            "$set": {
-                "password_hash": hash_password(new_password),
-                flag: True,
-                "updated_at": now,
-            },
-            "$unset": {
-                "password_reset_token_hash": "",
-                "password_reset_expires": "",
-            },
-        },
-    )
-    refreshed = users_col.find_one({"_id": user["_id"]}) or user
-    return _auth_token_response(refreshed)
 
 
 @app.post("/auth/forgot-password")

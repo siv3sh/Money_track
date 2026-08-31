@@ -32,20 +32,6 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
-      - key: SMS_PROVIDER
-        sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_FROM
-        sync: false
-      - key: MSG91_AUTH_KEY
-        sync: false
-      - key: MSG91_TEMPLATE_ID
-        sync: false
-      - key: MSG91_SENDER
-        sync: false
 
   # Runs on the 1st of each month (UTC) — generates prior-month report + email
   - type: cron

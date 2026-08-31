@@ -26,14 +26,8 @@ type AuthState = {
   register: (payload: {
     email: string
     password: string
-    phone: string
     signup_code?: string
-  }) => Promise<{
-    user: AuthUser
-    otp_sent?: { email?: boolean; phone?: boolean }
-    sms_otp_available?: boolean
-  }>
-  applySession: (accessToken: string, user: AuthUser) => void
+  }) => Promise<AuthUser>
   logout: () => void
   refreshUser: () => Promise<void>
   setUser: (u: AuthUser | null) => void
@@ -75,10 +69,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Keep React user state in sync when any API call hits 401 / disabled-account 403.
   useEffect(() => onAuthExpired(() => setUser(null)), [])
 
-  // Keep Render free tier warm while the tab is open (cold starts are ~15–60s).
   useEffect(() => {
     if (!user) return
     const ping = () => {
@@ -89,33 +81,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(id)
   }, [user])
 
-  const applySession = useCallback((accessToken: string, next: AuthUser) => {
-    setStoredToken(accessToken)
-    setUser(next)
-  }, [])
-
   const login = useCallback(async (email: string, password: string) => {
     const res = await loginRequest(email, password)
-    applySession(res.access_token, res.user)
+    setStoredToken(res.access_token)
+    setUser(res.user)
     return res.user
-  }, [applySession])
+  }, [])
 
   const register = useCallback(
-    async (payload: {
-      email: string
-      password: string
-      phone: string
-      signup_code?: string
-    }) => {
+    async (payload: { email: string; password: string; signup_code?: string }) => {
       const res = await registerRequest(payload)
-      applySession(res.access_token, res.user)
-      return {
-        user: res.user,
-        otp_sent: res.otp_sent,
-        sms_otp_available: res.sms_otp_available,
-      }
+      setStoredToken(res.access_token)
+      setUser(res.user)
+      return res.user
     },
-    [applySession],
+    [],
   )
 
   const logout = useCallback(() => {
@@ -124,17 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({
-      user,
-      loading,
-      login,
-      register,
-      applySession,
-      logout,
-      refreshUser,
-      setUser,
-    }),
-    [user, loading, login, register, applySession, logout, refreshUser],
+    () => ({ user, loading, login, register, logout, refreshUser, setUser }),
+    [user, loading, login, register, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
