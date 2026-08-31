@@ -140,11 +140,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ...(init?.headers || {}),
       },
     })
+  const slowTimer =
+    typeof window !== 'undefined'
+      ? window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('mt:api-slow', { detail: { path } }))
+        }, 3500)
+      : null
   try {
     try {
       res = await doFetch()
     } catch {
       // One retry helps Render free-tier cold starts / brief network blips.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('mt:api-slow', { detail: { path, retry: true } }))
+      }
       await new Promise((r) => setTimeout(r, 1200))
       res = await doFetch()
     }
@@ -152,6 +161,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(
       `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
     )
+  } finally {
+    if (slowTimer != null) window.clearTimeout(slowTimer)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('mt:api-ready', { detail: { path } }))
+    }
   }
   if (!res.ok) {
     const fallback = `Request failed (${res.status})`

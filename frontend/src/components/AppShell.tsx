@@ -27,6 +27,7 @@ export function AppShell() {
   const [offline, setOffline] = useState(
     typeof navigator !== 'undefined' ? !navigator.onLine : false,
   )
+  const [waking, setWaking] = useState(false)
   const { isVisible } = useNavVisibility()
   const { enabled: advisorEnabled } = useAdvisorSettings()
   const { enabled: wealthEnabled } = useWealthSettings()
@@ -50,6 +51,25 @@ export function AppShell() {
     }
   }, [])
 
+  useEffect(() => {
+    let hideTimer: number | undefined
+    const onSlow = () => {
+      setWaking(true)
+      if (hideTimer) window.clearTimeout(hideTimer)
+    }
+    const onReady = () => {
+      if (hideTimer) window.clearTimeout(hideTimer)
+      hideTimer = window.setTimeout(() => setWaking(false), 400)
+    }
+    window.addEventListener('mt:api-slow', onSlow)
+    window.addEventListener('mt:api-ready', onReady)
+    return () => {
+      window.removeEventListener('mt:api-slow', onSlow)
+      window.removeEventListener('mt:api-ready', onReady)
+      if (hideTimer) window.clearTimeout(hideTimer)
+    }
+  }, [])
+
   return (
     <FilterProvider autoLoad={loadSharedAnalytics} lite={liteAnalytics}>
       <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
@@ -59,6 +79,13 @@ export function AppShell() {
             className="sticky top-0 z-[70] border-b border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-2 text-center text-sm text-[var(--debit)]"
           >
             You are offline. Changes may fail until your connection returns.
+          </div>
+        ) : waking ? (
+          <div
+            role="status"
+            className="sticky top-0 z-[70] border-b border-[var(--sapphire)]/25 bg-[var(--accent-soft)] px-4 py-2 text-center text-sm text-[var(--sapphire)]"
+          >
+            Waking the server… first load after idle can take up to a minute.
           </div>
         ) : null}
         {mobileOpen ? (

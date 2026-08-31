@@ -124,6 +124,11 @@ export function SpendingPage() {
           <SubscriptionsCard merchants={data.recurring?.merchants || []} />
           <AnomalyFlags items={anomalies} onAnomalyClick={onAnomalyClick} />
         </>
+      ) : !error ? (
+        <p className="rounded-xl border border-[var(--border)] bg-[var(--sheet)] px-4 py-10 text-center text-sm text-[var(--muted)]">
+          No spending data for this range yet. Connect SMS or import a statement to see categories
+          and merchants.
+        </p>
       ) : null}
     </div>
   )

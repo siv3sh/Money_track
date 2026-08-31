@@ -63,6 +63,7 @@ from smart_insights import attach_smart_insights, find_ambiguous_transfers
 from monthly_report import generate_monthly_report, get_report, list_reports
 from email_report import email_configured, render_report_html, send_report_email
 from report_pdf import render_report_pdf
+from rate_limit import enforce_rate_limit
 from auth_users import (
     authenticate_user,
     create_access_token,
@@ -988,7 +989,8 @@ class LinkedAccountCreate(BaseModel):
 
 
 @app.post("/auth/login")
-def auth_login(payload: LoginPayload):
+def auth_login(request: Request, payload: LoginPayload):
+    enforce_rate_limit(request, bucket="auth_login", limit=20, window_sec=60)
     user = authenticate_user(users_col, payload.email, payload.password)
     token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
     return {
@@ -999,7 +1001,8 @@ def auth_login(payload: LoginPayload):
 
 
 @app.post("/auth/register")
-def auth_register(payload: RegisterPayload):
+def auth_register(request: Request, payload: RegisterPayload):
+    enforce_rate_limit(request, bucket="auth_register", limit=10, window_sec=60)
     required_code = (os.getenv("SIGNUP_CODE") or "").strip()
     if required_code:
         given = (payload.signup_code or "").strip()
@@ -1016,8 +1019,9 @@ def auth_register(payload: RegisterPayload):
 
 
 @app.post("/auth/forgot-password")
-def auth_forgot_password(payload: ForgotPasswordPayload):
+def auth_forgot_password(request: Request, payload: ForgotPasswordPayload):
     """Always return ok so emails cannot be enumerated. Sends reset mail when Resend is configured."""
+    enforce_rate_limit(request, bucket="auth_forgot", limit=8, window_sec=60)
     generic = {
         "ok": True,
         "detail": "If that email is registered, you will receive a reset link shortly.",
@@ -1049,7 +1053,8 @@ def auth_forgot_password(payload: ForgotPasswordPayload):
 
 
 @app.post("/auth/reset-password")
-def auth_reset_password(payload: ResetPasswordPayload):
+def auth_reset_password(request: Request, payload: ResetPasswordPayload):
+    enforce_rate_limit(request, bucket="auth_reset", limit=10, window_sec=60)
     user = reset_password_with_token(users_col, payload.token, payload.password)
     token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
     return {

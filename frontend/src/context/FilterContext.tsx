@@ -100,6 +100,7 @@ export function FilterProvider({
       setData(payload)
       setError(null)
     } catch (err) {
+      setData(null)
       setError(err instanceof Error ? err.message : 'Failed to load analytics')
     } finally {
       setLoading(false)
