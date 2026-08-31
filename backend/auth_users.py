@@ -122,9 +122,15 @@ def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
         onboarding_completed = bool(doc.get("onboarding_completed"))
     else:
         onboarding_completed = bool(doc.get("setup_completed"))
+    # Legacy accounts (no verification flags) are treated as already verified.
+    email_verified = True if "email_verified" not in doc else bool(doc.get("email_verified"))
+    phone_verified = True if "phone_verified" not in doc else bool(doc.get("phone_verified"))
     return {
         "id": str(doc["_id"]),
         "email": doc.get("email"),
+        "phone": doc.get("phone"),
+        "email_verified": email_verified,
+        "phone_verified": phone_verified,
         "created_at": doc["created_at"].isoformat()
         if isinstance(doc.get("created_at"), datetime)
         else doc.get("created_at"),
@@ -138,6 +144,7 @@ def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
 
 def ensure_auth_indexes(users: Collection, linked_accounts: Collection) -> None:
     users.create_index("email", unique=True)
+    users.create_index("phone", unique=True, sparse=True)
     linked_accounts.create_index("webhook_token", unique=True)
     linked_accounts.create_index([("user_id", 1), ("kind", 1), ("identifier", 1)], unique=True)
     linked_accounts.create_index("user_id")
@@ -168,7 +175,13 @@ def seed_user_from_env(users: Collection) -> dict[str, Any] | None:
     return doc
 
 
-def register_user(users: Collection, email: str, password: str) -> dict[str, Any]:
+def register_user(
+    users: Collection,
+    email: str,
+    password: str,
+    *,
+    phone: str | None = None,
+) -> dict[str, Any]:
     """Create a self-service account. Raises HTTPException on conflict / validation."""
     email_n = normalize_email(email)
     if not email_n or "@" not in email_n:
@@ -177,8 +190,11 @@ def register_user(users: Collection, email: str, password: str) -> dict[str, Any
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     if users.find_one({"email": email_n}):
         raise HTTPException(status_code=409, detail="An account with this email already exists")
+    phone_n = (phone or "").strip() or None
+    if phone_n and users.find_one({"phone": phone_n}):
+        raise HTTPException(status_code=409, detail="An account with this phone already exists")
     now = _now()
-    doc = {
+    doc: dict[str, Any] = {
         "email": email_n,
         "password_hash": hash_password(password),
         "created_at": now,
@@ -186,8 +202,18 @@ def register_user(users: Collection, email: str, password: str) -> dict[str, Any
         "setup_completed": False,
         "setup_platform": None,
         "onboarding_completed": False,
+        "email_verified": False,
+        "phone_verified": False,
     }
-    res = users.insert_one(doc)
+    if phone_n:
+        doc["phone"] = phone_n
+    try:
+        res = users.insert_one(doc)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email or phone already exists",
+        ) from exc
     doc["_id"] = res.inserted_id
     return doc
 

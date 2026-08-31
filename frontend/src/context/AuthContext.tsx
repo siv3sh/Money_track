@@ -26,8 +26,14 @@ type AuthState = {
   register: (payload: {
     email: string
     password: string
+    phone: string
     signup_code?: string
-  }) => Promise<AuthUser>
+  }) => Promise<{
+    user: AuthUser
+    otp_sent?: { email?: boolean; phone?: boolean }
+    sms_otp_available?: boolean
+  }>
+  applySession: (accessToken: string, user: AuthUser) => void
   logout: () => void
   refreshUser: () => Promise<void>
   setUser: (u: AuthUser | null) => void
@@ -83,21 +89,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(id)
   }, [user])
 
-  const login = useCallback(async (email: string, password: string) => {
-    const res = await loginRequest(email, password)
-    setStoredToken(res.access_token)
-    setUser(res.user)
-    return res.user
+  const applySession = useCallback((accessToken: string, next: AuthUser) => {
+    setStoredToken(accessToken)
+    setUser(next)
   }, [])
 
+  const login = useCallback(async (email: string, password: string) => {
+    const res = await loginRequest(email, password)
+    applySession(res.access_token, res.user)
+    return res.user
+  }, [applySession])
+
   const register = useCallback(
-    async (payload: { email: string; password: string; signup_code?: string }) => {
+    async (payload: {
+      email: string
+      password: string
+      phone: string
+      signup_code?: string
+    }) => {
       const res = await registerRequest(payload)
-      setStoredToken(res.access_token)
-      setUser(res.user)
-      return res.user
+      applySession(res.access_token, res.user)
+      return {
+        user: res.user,
+        otp_sent: res.otp_sent,
+        sms_otp_available: res.sms_otp_available,
+      }
     },
-    [],
+    [applySession],
   )
 
   const logout = useCallback(() => {
@@ -106,8 +124,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({ user, loading, login, register, logout, refreshUser, setUser }),
-    [user, loading, login, register, logout, refreshUser],
+    () => ({
+      user,
+      loading,
+      login,
+      register,
+      applySession,
+      logout,
+      refreshUser,
+      setUser,
+    }),
+    [user, loading, login, register, applySession, logout, refreshUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
