@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { APP_NAV } from '../lib/navConfig'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
@@ -8,6 +9,18 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
   const { visible, toggle, showAll } = useNavVisibility()
   const { enabled: advisorEnabled } = useAdvisorSettings()
   const { enabled: wealthEnabled } = useWealthSettings()
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    // Focus the dialog panel for keyboard users.
+    panelRef.current?.querySelector<HTMLElement>('button, input')?.focus()
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, onClose])
 
   if (!open) return null
 
@@ -24,7 +37,9 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
         onClick={onClose}
       />
       <div
+        ref={panelRef}
         role="dialog"
+        aria-modal="true"
         aria-labelledby="nav-customize-title"
         className="relative z-[61] w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--shadow-lg)]"
       >
@@ -68,7 +83,7 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
                     disabled={locked}
                     onChange={() => toggle(item.id)}
                   />
-                  <item.icon size={16} className="shrink-0 text-[var(--muted)]" />
+                  <item.icon size={16} className="shrink-0 text-[var(--muted)]" aria-hidden />
                   <span className="flex-1 text-[var(--text)]">{item.label}</span>
                   {locked ? (
                     <span className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Always on</span>

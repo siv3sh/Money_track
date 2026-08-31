@@ -104,7 +104,14 @@ function notifyAuthExpired(): void {
 }
 
 function shouldClearSession(path: string, status: number, detail: string): boolean {
-  if (path.startsWith('/auth/login') || path.startsWith('/auth/register')) return false
+  if (
+    path.startsWith('/auth/login') ||
+    path.startsWith('/auth/register') ||
+    path.startsWith('/auth/forgot-password') ||
+    path.startsWith('/auth/reset-password')
+  ) {
+    return false
+  }
   if (status === 401) return true
   if (status === 403 && detail.toLowerCase().includes('disabled')) return true
   return false
@@ -206,6 +213,33 @@ export function saveOnboarding(payload: {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ onboarding_completed: true, ...payload }),
+  })
+}
+
+export function forgotPasswordRequest(email: string): Promise<{ ok: boolean; detail?: string }> {
+  return request('/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+}
+
+export function resetPasswordRequest(
+  token: string,
+  password: string,
+): Promise<{ access_token: string; token_type: string; user: AuthUser }> {
+  return request('/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  })
+}
+
+export function deleteAccountRequest(password: string): Promise<{ ok: boolean }> {
+  return request('/auth/me', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
   })
 }
 

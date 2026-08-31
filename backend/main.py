@@ -66,6 +66,7 @@ from report_pdf import render_report_pdf
 from auth_users import (
     authenticate_user,
     create_access_token,
+    create_password_reset_token,
     ensure_auth_indexes,
     ensure_default_linked_account,
     find_linked_by_token,
@@ -73,11 +74,14 @@ from auth_users import (
     get_primary_user,
     is_admin_user,
     migrate_assign_user_id,
+    purge_user_owned_data,
     register_user,
+    reset_password_with_token,
     seed_user_from_env,
     serialize_linked_account,
     serialize_user,
     user_match,
+    verify_password,
 )
 from advisor_persona import (
     default_persona_text,
@@ -192,6 +196,8 @@ app.state.linked_accounts = linked_accounts_col
 def _is_public_path(path: str) -> bool:
     """Explicit public allowlist — never expose /sms-webhook/debug or docs-by-prefix alone."""
     if path == "/health" or path == "/auth/login" or path == "/auth/register":
+        return True
+    if path in {"/auth/forgot-password", "/auth/reset-password"}:
         return True
     if path.startswith("/jobs/"):
         return True
@@ -961,6 +967,19 @@ class OnboardingPayload(BaseModel):
     onboarding_completed: bool = True
 
 
+class ForgotPasswordPayload(BaseModel):
+    email: str = Field(..., min_length=3, max_length=200)
+
+
+class ResetPasswordPayload(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class DeleteAccountPayload(BaseModel):
+    password: str = Field(..., min_length=1, max_length=200)
+
+
 class LinkedAccountCreate(BaseModel):
     label: str = Field(..., min_length=1, max_length=80)
     kind: str = Field(default="phone", pattern="^(phone|bank_source|email)$")
@@ -994,6 +1013,63 @@ def auth_register(payload: RegisterPayload):
         "token_type": "bearer",
         "user": serialize_user(user),
     }
+
+
+@app.post("/auth/forgot-password")
+def auth_forgot_password(payload: ForgotPasswordPayload):
+    """Always return ok so emails cannot be enumerated. Sends reset mail when Resend is configured."""
+    generic = {
+        "ok": True,
+        "detail": "If that email is registered, you will receive a reset link shortly.",
+    }
+    created = create_password_reset_token(users_col, payload.email)
+    if not created:
+        return generic
+    user, raw_token = created
+    try:
+        from email_report import email_configured, send_transactional_email
+
+        if not email_configured():
+            print("Warning: password reset requested but RESEND_API_KEY is not set")
+            return generic
+        link = f"{APP_BASE_URL}/reset-password?token={raw_token}"
+        email = str(user.get("email") or "")
+        send_transactional_email(
+            to_email=email,
+            subject="Reset your Money Track password",
+            html=(
+                "<p>We received a request to reset your Money Track password.</p>"
+                f'<p><a href="{link}">Reset password</a></p>'
+                "<p>This link expires in 1 hour. If you did not ask for this, you can ignore this email.</p>"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: password reset email failed: {exc}")
+    return generic
+
+
+@app.post("/auth/reset-password")
+def auth_reset_password(payload: ResetPasswordPayload):
+    user = reset_password_with_token(users_col, payload.token, payload.password)
+    token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": serialize_user(user),
+    }
+
+
+@app.delete("/auth/me")
+def auth_delete_me(payload: DeleteAccountPayload, request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    if not verify_password(str(user.get("password_hash") or ""), payload.password):
+        raise HTTPException(status_code=401, detail="Wrong password")
+    oid = user["_id"]
+    deleted = purge_user_owned_data(db, oid)
+    users_col.delete_one({"_id": oid})
+    return {"ok": True, "deleted": deleted}
 
 
 @app.get("/auth/me")
@@ -1112,32 +1188,7 @@ def admin_delete_user(user_id: str, request: Request):
     target = users_col.find_one({"_id": oid})
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    deleted: dict[str, int] = {}
-    for name in (
-        "transactions",
-        "webhook_events",
-        "linked_accounts",
-        "portfolio",
-        "networth_snapshots",
-        "liabilities",
-        "credit_cards",
-        "budgets",
-        "user_learned_facts",
-        "planning_goals",
-        "monthly_reports",
-        "sip_overrides",
-        "category_memory",
-        "advisor_memories",
-        "advisor_chat_sessions",
-        "import_events",
-        "transfer_suggestions",
-        "learn_question_events",
-    ):
-        try:
-            deleted[name] = int(db[name].delete_many({"user_id": oid}).deleted_count)
-        except Exception as exc:  # noqa: BLE001
-            deleted[name] = 0
-            print(f"Warning: admin delete skipped {name}: {exc}")
+    deleted = purge_user_owned_data(db, oid)
     users_col.delete_one({"_id": oid})
     return {"ok": True, "email": target.get("email"), "deleted": deleted}
 

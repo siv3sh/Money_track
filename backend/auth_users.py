@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -327,3 +328,98 @@ def user_match(user_id: ObjectId | None) -> dict[str, Any]:
     if user_id is None:
         raise ValueError("user_match requires an authenticated user_id")
     return {"user_id": user_id}
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_password_reset_token(users: Collection, email: str) -> tuple[dict[str, Any], str] | None:
+    """
+    If the email exists and is not disabled, store a hashed reset token (1h TTL)
+    and return (user_doc, raw_token). Returns None when the email is unknown
+    (callers should still respond generically).
+    """
+    email_n = normalize_email(email)
+    if not email_n:
+        return None
+    doc = users.find_one({"email": email_n})
+    if not doc or doc.get("disabled"):
+        return None
+    raw = secrets.token_urlsafe(32)
+    users.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {
+                "password_reset_token_hash": _hash_reset_token(raw),
+                "password_reset_expires": _now() + timedelta(hours=1),
+                "updated_at": _now(),
+            }
+        },
+    )
+    refreshed = users.find_one({"_id": doc["_id"]}) or doc
+    return refreshed, raw
+
+
+def reset_password_with_token(users: Collection, token: str, new_password: str) -> dict[str, Any]:
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    raw = (token or "").strip()
+    if len(raw) < 20:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    token_hash = _hash_reset_token(raw)
+    doc = users.find_one({"password_reset_token_hash": token_hash})
+    if not doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    expires = doc.get("password_reset_expires")
+    if not isinstance(expires, datetime):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < _now():
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    users.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(new_password),
+                "updated_at": _now(),
+            },
+            "$unset": {
+                "password_reset_token_hash": "",
+                "password_reset_expires": "",
+            },
+        },
+    )
+    refreshed = users.find_one({"_id": doc["_id"]})
+    return refreshed or doc
+
+
+def purge_user_owned_data(db, user_id: ObjectId) -> dict[str, int]:
+    """Delete all tenant-owned collections + per-user app_settings docs for user_id."""
+    deleted: dict[str, int] = {}
+    for name in USER_OWNED_COLLECTIONS:
+        try:
+            deleted[name] = int(db[name].delete_many({"user_id": user_id}).deleted_count)
+        except Exception as exc:  # noqa: BLE001
+            deleted[name] = 0
+            print(f"Warning: purge skipped {name}: {exc}")
+    # Per-user settings ids look like allocation:{ObjectId}
+    try:
+        uid_s = str(user_id)
+        deleted["app_settings"] = int(
+            db["app_settings"]
+            .delete_many(
+                {
+                    "$or": [
+                        {"user_id": user_id},
+                        {"_id": {"$regex": f":{uid_s}$"}},
+                    ]
+                }
+            )
+            .deleted_count
+        )
+    except Exception as exc:  # noqa: BLE001
+        deleted["app_settings"] = 0
+        print(f"Warning: purge skipped app_settings: {exc}")
+    return deleted

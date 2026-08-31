@@ -1,7 +1,9 @@
+import { useBlocker } from 'react-router-dom'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CheckCircle2, Circle, Sparkles, UserRound, Wallet } from 'lucide-react'
 import {
   createLearnedFact,
+  deleteAccountRequest,
   deleteLearnedFact,
   deletePlanningGoal,
   fetchAdvisorTraining,
@@ -13,12 +15,14 @@ import {
   type PlanningGoal,
 } from '../api'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
+import { useAuth } from '../context/AuthContext'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 import { useWealthSettings } from '../hooks/useWealthSettings'
 
 const RELATION_OPTIONS = ['Mom', 'Dad', 'Spouse', 'Sibling', 'Family', 'Friend', 'Roommate', 'Other']
 
 export function ProfilePage() {
+  const { logout } = useAuth()
   const { enabled: advisorEnabled, setEnabled: setAdvisorEnabled } = useAdvisorSettings()
   const { enabled: wealthEnabled, setEnabled: setWealthEnabled } = useWealthSettings()
   const [loading, setLoading] = useState(true)
@@ -31,6 +35,10 @@ export function ProfilePage() {
   const [expectedNet, setExpectedNet] = useState('')
   const [ctcLpa, setCtcLpa] = useState('')
   const [designation, setDesignation] = useState('')
+  const [incomeBaseline, setIncomeBaseline] = useState('')
+  const [deletePassword, setDeletePassword] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [deleting, setDeleting] = useState(false)
 
   const [trainingQs, setTrainingQs] = useState<AdvisorTrainingQuestion[]>([])
   const [trainAnswers, setTrainAnswers] = useState<Record<string, string>>({})
@@ -68,6 +76,18 @@ export function ProfilePage() {
       )
       setCtcLpa(byKey.ctc_lpa != null && byKey.ctc_lpa !== '' ? String(byKey.ctc_lpa) : '')
       setDesignation(String(byKey.designation || ''))
+      setIncomeBaseline(
+        JSON.stringify({
+          employer: String(byKey.employer || ''),
+          salaryKeywords: String(byKey.salary_keywords || byKey.salary_sms_words || ''),
+          expectedNet:
+            byKey.expected_net_monthly != null && byKey.expected_net_monthly !== ''
+              ? String(byKey.expected_net_monthly)
+              : '',
+          ctcLpa: byKey.ctc_lpa != null && byKey.ctc_lpa !== '' ? String(byKey.ctc_lpa) : '',
+          designation: String(byKey.designation || ''),
+        }),
+      )
 
       setTrainingQs(training.questions || [])
       setCompleteness(Number(training.completeness || 0))
@@ -95,6 +115,35 @@ export function ProfilePage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const incomeDirty =
+    !loading &&
+    incomeBaseline !==
+      JSON.stringify({
+        employer,
+        salaryKeywords,
+        expectedNet,
+        ctcLpa,
+        designation,
+      })
+
+  useEffect(() => {
+    if (!incomeDirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [incomeDirty])
+
+  const blocker = useBlocker(incomeDirty)
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return
+    const leave = window.confirm('You have unsaved salary settings. Leave without saving?')
+    if (leave) blocker.proceed()
+    else blocker.reset()
+  }, [blocker])
 
   const flash = (msg: string) => {
     setSaved(msg)
@@ -160,6 +209,30 @@ export function ProfilePage() {
       setError(err instanceof Error ? err.message : 'Could not save salary settings')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const deleteAccount = async (e: FormEvent) => {
+    e.preventDefault()
+    if (deleting) return
+    if (deleteConfirm.trim().toUpperCase() !== 'DELETE') {
+      setError('Type DELETE to confirm account removal')
+      return
+    }
+    if (!deletePassword) {
+      setError('Enter your password to delete the account')
+      return
+    }
+    setDeleting(true)
+    setError(null)
+    try {
+      await deleteAccountRequest(deletePassword)
+      logout()
+      window.location.assign('/login')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete account')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -366,12 +439,18 @@ export function ProfilePage() {
       </ChartCard>
 
       {error ? (
-        <div className="rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
+        <div
+          role="alert"
+          className="rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]"
+        >
           {error}
         </div>
       ) : null}
       {saved ? (
-        <div className="rounded-xl border border-[var(--credit)]/30 bg-[var(--credit-soft)] px-4 py-3 text-sm text-[var(--credit)]">
+        <div
+          role="status"
+          className="rounded-xl border border-[var(--credit)]/30 bg-[var(--credit-soft)] px-4 py-3 text-sm text-[var(--credit)]"
+        >
           {saved}
         </div>
       ) : null}
@@ -632,6 +711,41 @@ export function ProfilePage() {
             ))}
           </ul>
         )}
+      </ChartCard>
+
+      <ChartCard
+        title="Delete account"
+        subtitle="Permanently removes your transactions, portfolio, and settings from Money Track"
+      >
+        <form className="max-w-xl space-y-3" onSubmit={(e) => void deleteAccount(e)}>
+          <p className="text-sm text-[var(--muted)]">
+            This cannot be undone. Type <span className="font-semibold text-[var(--text)]">DELETE</span>{' '}
+            and enter your password.
+          </p>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Confirmation</span>
+            <input
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
+              value={deleteConfirm}
+              onChange={(e) => setDeleteConfirm(e.target.value)}
+              placeholder="DELETE"
+              autoComplete="off"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Password</span>
+            <input
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
+              type="password"
+              autoComplete="current-password"
+              value={deletePassword}
+              onChange={(e) => setDeletePassword(e.target.value)}
+            />
+          </label>
+          <button type="submit" className="btn text-[var(--debit)]" disabled={deleting || busy}>
+            {deleting ? 'Deleting…' : 'Delete my account'}
+          </button>
+        </form>
       </ChartCard>
 
       <p className="flex items-center gap-2 text-xs text-[var(--muted)]">

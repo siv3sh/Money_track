@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Menu, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 import { useWealthSettings } from '../hooks/useWealthSettings'
@@ -24,6 +24,9 @@ const FULL_ANALYTICS_PATHS = new Set(['/ai', '/spending'])
 
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [offline, setOffline] = useState(
+    typeof navigator !== 'undefined' ? !navigator.onLine : false,
+  )
   const { isVisible } = useNavVisibility()
   const { enabled: advisorEnabled } = useAdvisorSettings()
   const { enabled: wealthEnabled } = useWealthSettings()
@@ -36,9 +39,28 @@ export function AppShell() {
   const loadSharedAnalytics = FILTER_ANALYTICS_PATHS.has(location.pathname)
   const liteAnalytics = !FULL_ANALYTICS_PATHS.has(location.pathname)
 
+  useEffect(() => {
+    const on = () => setOffline(false)
+    const off = () => setOffline(true)
+    window.addEventListener('online', on)
+    window.addEventListener('offline', off)
+    return () => {
+      window.removeEventListener('online', on)
+      window.removeEventListener('offline', off)
+    }
+  }, [])
+
   return (
     <FilterProvider autoLoad={loadSharedAnalytics} lite={liteAnalytics}>
       <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
+        {offline ? (
+          <div
+            role="status"
+            className="sticky top-0 z-[70] border-b border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-2 text-center text-sm text-[var(--debit)]"
+          >
+            You are offline. Changes may fail until your connection returns.
+          </div>
+        ) : null}
         {mobileOpen ? (
           <button
             type="button"

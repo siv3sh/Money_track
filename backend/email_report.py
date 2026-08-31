@@ -466,3 +466,41 @@ def send_report_email(
 
 def email_configured() -> bool:
     return bool(RESEND_API_KEY)
+
+
+def send_transactional_email(
+    *,
+    to_email: str,
+    subject: str,
+    html: str,
+    from_email: str | None = None,
+) -> dict[str, Any]:
+    """Send a simple HTML email via Resend (password reset, notices)."""
+    if not RESEND_API_KEY:
+        raise RuntimeError("RESEND_API_KEY is not configured")
+    if not to_email or "@" not in to_email:
+        raise RuntimeError("Invalid recipient email")
+    payload = {
+        "from": from_email or RESEND_FROM,
+        "to": [to_email.strip()],
+        "subject": subject,
+        "html": html,
+    }
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Resend error {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+    return {
+        "ok": True,
+        "id": data.get("id"),
+        "to": to_email,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }

@@ -183,8 +183,23 @@ export function LoginPage() {
           ) : null}
 
           {error ? (
-            <p className="rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]">
+            <p
+              role="alert"
+              className="rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]"
+            >
               {error}
+            </p>
+          ) : null}
+
+          {mode === 'signin' ? (
+            <p className="text-right text-xs">
+              <button
+                type="button"
+                className="font-medium text-[var(--sapphire)] underline-offset-2 hover:underline"
+                onClick={() => navigate('/forgot-password')}
+              >
+                Forgot password?
+              </button>
             </p>
           ) : null}
 

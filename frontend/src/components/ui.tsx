@@ -149,7 +149,11 @@ export function EmptyState({ message }: { message: string }) {
 
 export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div className="flex h-40 items-center justify-center text-sm text-[var(--muted)]">
+    <div
+      className="flex h-40 items-center justify-center text-sm text-[var(--muted)]"
+      role="status"
+      aria-live="polite"
+    >
       {label}
     </div>
   )
