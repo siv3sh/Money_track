@@ -230,6 +230,11 @@ async def require_login_middleware(request: Request, call_next):
         user = users_col.find_one({"_id": uid})
         if not user:
             return JSONResponse({"detail": "Please log in"}, status_code=401)
+        if user.get("disabled"):
+            return JSONResponse(
+                {"detail": "This account has been disabled"},
+                status_code=403,
+            )
         request.state.user = user
         request.state.user_id = uid
     except HTTPException as exc:

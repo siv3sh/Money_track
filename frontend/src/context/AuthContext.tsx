@@ -13,6 +13,7 @@ import {
   getStoredToken,
   loginRequest,
   logoutLocal,
+  onAuthExpired,
   registerRequest,
   setStoredToken,
   type AuthUser,
@@ -67,6 +68,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true
     }
   }, [])
+
+  // Keep React user state in sync when any API call hits 401 / disabled-account 403.
+  useEffect(() => onAuthExpired(() => setUser(null)), [])
 
   // Keep Render free tier warm while the tab is open (cold starts are ~15–60s).
   useEffect(() => {

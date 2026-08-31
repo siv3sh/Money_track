@@ -81,6 +81,46 @@ function apiErrorMessage(detail: unknown, fallback: string): string {
   return fallback
 }
 
+type AuthExpiredListener = () => void
+const authExpiredListeners = new Set<AuthExpiredListener>()
+
+/** Subscribe to session expiry / forced logout from any API call. */
+export function onAuthExpired(listener: AuthExpiredListener): () => void {
+  authExpiredListeners.add(listener)
+  return () => {
+    authExpiredListeners.delete(listener)
+  }
+}
+
+function notifyAuthExpired(): void {
+  logoutLocal()
+  for (const listener of [...authExpiredListeners]) {
+    try {
+      listener()
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+}
+
+function shouldClearSession(path: string, status: number, detail: string): boolean {
+  if (path.startsWith('/auth/login') || path.startsWith('/auth/register')) return false
+  if (status === 401) return true
+  if (status === 403 && detail.toLowerCase().includes('disabled')) return true
+  return false
+}
+
+async function readErrorDetail(res: Response, fallback: string): Promise<string> {
+  let detail = res.statusText || fallback
+  try {
+    const body = (await res.json()) as { detail?: unknown }
+    detail = apiErrorMessage(body.detail, detail)
+  } catch {
+    /* ignore */
+  }
+  return detail || fallback
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   const token = getStoredToken()
@@ -106,17 +146,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
     )
   }
-  if (res.status === 401 && !path.startsWith('/auth/login') && !path.startsWith('/auth/register')) {
-    logoutLocal()
-  }
   if (!res.ok) {
     const fallback = `Request failed (${res.status})`
-    let detail = res.statusText || fallback
-    try {
-      const body = (await res.json()) as { detail?: unknown }
-      detail = apiErrorMessage(body.detail, detail)
-    } catch {
-      /* ignore */
+    const detail = await readErrorDetail(res, fallback)
+    if (shouldClearSession(path, res.status, detail)) {
+      notifyAuthExpired()
     }
     throw new Error(detail || fallback)
   }
@@ -471,18 +505,14 @@ export async function uploadStatementFile(
   })
   if (!res.ok) {
     const fallback = `Upload failed (${res.status})`
-    let detail = res.statusText || fallback
-    try {
-      const body = (await res.json()) as { detail?: unknown }
-      detail = apiErrorMessage(body.detail, detail)
-    } catch {
-      /* ignore */
+    const detail = await readErrorDetail(res, fallback)
+    if (shouldClearSession('/statements/upload', res.status, detail)) {
+      notifyAuthExpired()
     }
-    const msg = detail || fallback
-    if (looksLikePdfPasswordError(msg, res.status)) {
-      throw new PdfPasswordNeededError(msg)
+    if (looksLikePdfPasswordError(detail, res.status)) {
+      throw new PdfPasswordNeededError(detail)
     }
-    throw new Error(msg)
+    throw new Error(detail)
   }
   return res.json() as Promise<StatementImportResult>
 }
@@ -498,12 +528,9 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   })
   if (!res.ok) {
     const fallback = `Request failed (${res.status})`
-    let detail = res.statusText || fallback
-    try {
-      const body = (await res.json()) as { detail?: unknown }
-      detail = apiErrorMessage(body.detail, detail)
-    } catch {
-      /* ignore */
+    const detail = await readErrorDetail(res, fallback)
+    if (shouldClearSession(path, res.status, detail)) {
+      notifyAuthExpired()
     }
     throw new Error(detail || fallback)
   }
@@ -1094,7 +1121,11 @@ export async function downloadMonthlyReportPdf(month: string): Promise<void> {
     },
   })
   if (!res.ok) {
-    throw new Error(`PDF download failed (${res.status})`)
+    const detail = await readErrorDetail(res, `PDF download failed (${res.status})`)
+    if (shouldClearSession(`/reports/monthly/${month}/pdf`, res.status, detail)) {
+      notifyAuthExpired()
+    }
+    throw new Error(detail)
   }
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)

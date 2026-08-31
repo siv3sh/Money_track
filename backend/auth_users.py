@@ -315,6 +315,8 @@ async def get_current_user(
     doc = users.find_one({"_id": uid})
     if not doc:
         raise HTTPException(status_code=401, detail="Account not found — please log in again")
+    if doc.get("disabled"):
+        raise HTTPException(status_code=403, detail="This account has been disabled")
     request.state.user = doc
     request.state.user_id = uid
     return doc
