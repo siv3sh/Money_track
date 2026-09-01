@@ -64,6 +64,13 @@ from monthly_report import generate_monthly_report, get_report, list_reports
 from email_report import email_configured, render_report_html, send_report_email
 from report_pdf import render_report_pdf
 from rate_limit import enforce_rate_limit
+from resend_inbound import (
+    fetch_received_email,
+    fields_from_resend_received,
+    inbound_configured,
+    resend_inbound_webhook_url,
+    token_from_recipients,
+)
 from auth_users import (
     authenticate_user,
     create_access_token,
@@ -170,6 +177,7 @@ WEBHOOK_PUBLIC_BASE = (
     or os.getenv("API_PUBLIC_URL", "").strip().rstrip("/")
     or "http://localhost:8000"
 )
+RESEND_INBOUND_DOMAIN = (os.getenv("RESEND_INBOUND_DOMAIN") or "").strip().lstrip("@").lower()
 _DEFAULT_CORS = (
     "http://localhost:5173,http://127.0.0.1:5173,"
     "https://fin.sivesh-pb.com,https://money-track-rho-six.vercel.app"
@@ -194,6 +202,15 @@ app.state.users = users_col
 app.state.linked_accounts = linked_accounts_col
 
 
+def _serialize_linked(doc: dict[str, Any], *, include_token: bool = False) -> dict[str, Any]:
+    return serialize_linked_account(
+        doc,
+        include_token=include_token,
+        webhook_base=WEBHOOK_PUBLIC_BASE,
+        inbound_domain=RESEND_INBOUND_DOMAIN,
+    )
+
+
 def _is_public_path(path: str) -> bool:
     """Explicit public allowlist — never expose /sms-webhook/debug or docs-by-prefix alone."""
     if path == "/health" or path == "/auth/login" or path == "/auth/register":
@@ -204,6 +221,8 @@ def _is_public_path(path: str) -> bool:
     }:
         return True
     if path.startswith("/jobs/"):
+        return True
+    if path == "/webhooks/resend-inbound":
         return True
     # Legacy key webhook + token webhooks only (not /sms-webhook/debug)
     if path == "/sms-webhook" or path == "/email-webhook":
@@ -1211,15 +1230,13 @@ def list_linked_accounts(
         raise HTTPException(status_code=401, detail="Please log in")
     rows = list(linked_accounts_col.find({"user_id": user["_id"]}).sort("linked_at", 1))
     return {
-        "items": [
-            serialize_linked_account(
-                r,
-                include_token=reveal,
-                webhook_base=WEBHOOK_PUBLIC_BASE,
-            )
-            for r in rows
-        ],
+        "items": [_serialize_linked(r, include_token=reveal) for r in rows],
         "webhook_base": WEBHOOK_PUBLIC_BASE,
+        "resend_inbound_configured": inbound_configured(),
+        "resend_inbound_webhook_url": resend_inbound_webhook_url(WEBHOOK_PUBLIC_BASE)
+        if inbound_configured()
+        else None,
+        "resend_inbound_domain": RESEND_INBOUND_DOMAIN or None,
     }
 
 
@@ -1249,7 +1266,7 @@ def create_linked_account(payload: LinkedAccountCreate, request: Request):
             detail="That phone/bank source is already linked. Use a different label or number.",
         ) from exc
     doc["_id"] = res.inserted_id
-    return serialize_linked_account(doc, include_token=True, webhook_base=WEBHOOK_PUBLIC_BASE)
+    return _serialize_linked(doc, include_token=True)
 
 
 class LinkedAccountUpdate(BaseModel):
@@ -1283,7 +1300,7 @@ def update_linked_account(account_id: str, payload: LinkedAccountUpdate, request
     )
     if not result:
         raise HTTPException(status_code=404, detail="Linked account not found")
-    return serialize_linked_account(result, include_token=True, webhook_base=WEBHOOK_PUBLIC_BASE)
+    return _serialize_linked(result, include_token=True)
 
 
 @app.post("/linked-accounts/{account_id}/rotate-token")
@@ -1303,7 +1320,7 @@ def rotate_linked_token(account_id: str, request: Request):
     )
     if not result:
         raise HTTPException(status_code=404, detail="Linked account not found")
-    return serialize_linked_account(result, include_token=True, webhook_base=WEBHOOK_PUBLIC_BASE)
+    return _serialize_linked(result, include_token=True)
 
 
 @app.delete("/linked-accounts/{account_id}")
@@ -1976,6 +1993,81 @@ async def receive_email_with_token(token: str, request: Request):
             ),
         )
     return await _ingest_email_request(request, linked_account=linked)
+
+
+@app.post("/webhooks/resend-inbound")
+async def resend_inbound_webhook(request: Request):
+    """
+    Resend Inbound live hook: webhook has metadata only; body is fetched via API.
+    Point Resend Inbound webhooks here. Users forward bank alerts to
+    {token}@RESEND_INBOUND_DOMAIN (shown in Accounts).
+    """
+    if not inbound_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Resend inbound is not configured (set RESEND_INBOUND_DOMAIN on the server)",
+        )
+    try:
+        payload = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+    if payload.get("type") != "email.received":
+        return {"ok": True, "ignored": True, "reason": "not email.received"}
+
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    token = token_from_recipients(data.get("to") or [])
+    if not token:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "unknown_inbound_recipient",
+                "channel": "email",
+                "to": data.get("to"),
+                "subject": str(data.get("subject") or "")[:120],
+            }
+        )
+        return {
+            "stored": False,
+            "reason": "Unknown recipient — forward to your personal inbound address from Accounts",
+        }
+
+    linked = find_linked_by_token(linked_accounts_col, token)
+    if not linked:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "bad_inbound_token",
+                "channel": "email",
+                "token_preview": token[:6] + "…",
+            }
+        )
+        raise HTTPException(status_code=401, detail="Inbound address not linked to an active account")
+
+    email_id = str(data.get("email_id") or "").strip()
+    if not email_id:
+        return {"stored": False, "reason": "missing email_id in webhook"}
+
+    try:
+        full = fetch_received_email(email_id)
+        fields = fields_from_resend_received(full)
+    except Exception as exc:  # noqa: BLE001
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "resend_fetch_failed",
+                "channel": "email",
+                "error": str(exc)[:200],
+                "email_id": email_id,
+            }
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Could not download email body from Resend",
+        ) from exc
+
+    return await _ingest_email_request(request, linked_account=linked, forced=fields)
 
 
 class EmailPastePayload(BaseModel):

@@ -32,6 +32,8 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: RESEND_INBOUND_DOMAIN
+        sync: false
 
   # Runs on the 1st of each month (UTC) — generates prior-month report + email
   - type: cron

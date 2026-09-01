@@ -275,6 +275,7 @@ def serialize_linked_account(
     *,
     include_token: bool = False,
     webhook_base: str = "",
+    inbound_domain: str = "",
 ) -> dict[str, Any]:
     token = doc.get("webhook_token") or ""
     out: dict[str, Any] = {
@@ -296,6 +297,8 @@ def serialize_linked_account(
         base = webhook_base.rstrip("/")
         out["webhook_url"] = f"{base}/sms-webhook/{token}" if token else None
         out["email_webhook_url"] = f"{base}/email-webhook/{token}" if token else None
+        domain = (inbound_domain or "").strip().lstrip("@").lower()
+        out["inbound_email"] = f"{token}@{domain}" if token and domain else None
     else:
         out["webhook_url_hint"] = "Reveal in Accounts to copy your private SMS / email links"
     return out

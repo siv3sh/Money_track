@@ -11,6 +11,8 @@ import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
 
 export function AccountsPage() {
   const [items, setItems] = useState<LinkedAccount[]>([])
+  const [inboundConfigured, setInboundConfigured] = useState(false)
+  const [inboundDomain, setInboundDomain] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -30,6 +32,8 @@ export function AccountsPage() {
     try {
       const res = await fetchLinkedAccounts(true)
       setItems(res.items)
+      setInboundConfigured(Boolean(res.resend_inbound_configured))
+      setInboundDomain(res.resend_inbound_domain ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounts')
     } finally {
@@ -112,7 +116,7 @@ export function AccountsPage() {
     <div className="fade-in">
       <PageHeader
         title="Phones & email"
-        description="Each phone gets a private SMS link. Bank alert emails can use a matching email link — or paste one email to try it."
+        description="SMS links for your phone. Forward bank alert emails to your personal inbound address for live parsing."
       />
 
       {error ? (
@@ -163,6 +167,15 @@ export function AccountsPage() {
                         >
                           {copiedId === `${row.id}-email` ? 'Copied' : 'Copy email link'}
                         </button>
+                        {row.inbound_email ? (
+                          <button
+                            type="button"
+                            className="btn btn-primary text-xs"
+                            onClick={() => void copy(row.inbound_email, `${row.id}-inbound`)}
+                          >
+                            {copiedId === `${row.id}-inbound` ? 'Copied' : 'Copy forward address'}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="btn text-xs"
@@ -209,8 +222,13 @@ export function AccountsPage() {
                     <p className="break-all rounded-lg bg-[var(--surface-2)] px-2 py-1.5 font-mono text-[11px] text-[var(--muted)]">
                       SMS: {row.webhook_url}
                     </p>
+                    {row.inbound_email ? (
+                      <p className="break-all rounded-lg border border-[var(--sapphire)]/25 bg-[var(--accent-soft)] px-2 py-1.5 font-mono text-[11px] text-[var(--sapphire)]">
+                        Forward bank emails here: {row.inbound_email}
+                      </p>
+                    ) : null}
                     <p className="break-all rounded-lg bg-[var(--surface-2)] px-2 py-1.5 font-mono text-[11px] text-[var(--muted)]">
-                      Email: {row.email_webhook_url}
+                      Email API: {row.email_webhook_url}
                     </p>
                   </li>
                 ))}
@@ -219,21 +237,33 @@ export function AccountsPage() {
           </ChartCard>
 
           <ChartCard
-            title="Bank alert emails"
-            subtitle="Paste one email to test — or auto-forward using the email link above"
+            title="Bank alert emails — automatic"
+            subtitle={
+              inboundConfigured
+                ? 'Forward bank alerts to your address above — parsed live like SMS'
+                : 'Server inbound not configured yet — use paste below or ask admin to set RESEND_INBOUND_DOMAIN'
+            }
           >
+            {inboundConfigured && primary?.inbound_email ? (
+              <div className="mb-4 rounded-xl border border-[var(--credit)]/30 bg-[var(--credit-soft)] px-3 py-2.5 text-sm text-[var(--credit)]">
+                <strong>Live parsing is on.</strong> In Gmail: Settings → Filters → create a filter for bank
+                senders (e.g. <code>alerts@hdfcbank.net</code>) → <strong>Forward to</strong>{' '}
+                <code className="break-all">{primary.inbound_email}</code>. New alerts appear in Transactions
+                within seconds.
+              </div>
+            ) : null}
             <ol className="mb-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
               <li>
-                Easiest: open a bank / credit-card alert email → copy the text → paste below → Save.
+                <strong>Automatic (recommended):</strong> copy <strong>Forward address</strong> from your
+                phone card → Gmail filter → forward only bank alerts to that address.
+                {inboundDomain ? ` Domain: ${inboundDomain}.` : ''}
               </li>
               <li>
-                Automatic: point Resend Inbound, Zapier, or Make to your <strong>email link</strong>
-                {primary?.email_webhook_url ? ' (copied from the phone card)' : ''} with JSON fields{' '}
+                <strong>Manual test:</strong> paste one email below → Parse &amp; save.
+              </li>
+              <li>
+                <strong>Advanced:</strong> Zapier/Make can POST JSON to the email API link with{' '}
                 <code>from</code>, <code>subject</code>, <code>text</code>.
-              </li>
-              <li>
-                Gmail tip: create a filter for bank alerts → forward to an inbound address that POSTs to
-                that link (or keep pasting until you set that up).
               </li>
             </ol>
             <form className="grid max-w-2xl gap-3" onSubmit={(e) => void onPasteEmail(e)}>

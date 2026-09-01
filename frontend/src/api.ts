@@ -49,6 +49,7 @@ export type LinkedAccount = {
   webhook_token?: string
   webhook_url?: string | null
   email_webhook_url?: string | null
+  inbound_email?: string | null
   webhook_url_hint?: string
 }
 
@@ -299,6 +300,9 @@ export function deleteAdminUser(
 export function fetchLinkedAccounts(reveal = false): Promise<{
   items: LinkedAccount[]
   webhook_base: string
+  resend_inbound_configured?: boolean
+  resend_inbound_webhook_url?: string | null
+  resend_inbound_domain?: string | null
 }> {
   return request(`/linked-accounts${reveal ? '?reveal=true' : ''}`)
 }
