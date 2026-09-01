@@ -7,12 +7,12 @@ import {
   rotateLinkedAccountToken,
   type LinkedAccount,
 } from '../api'
+import { BankEmailSetupCard } from '../components/BankEmailSetupCard'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
 
 export function AccountsPage() {
   const [items, setItems] = useState<LinkedAccount[]>([])
   const [inboundConfigured, setInboundConfigured] = useState(false)
-  const [inboundDomain, setInboundDomain] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -21,6 +21,7 @@ export function AccountsPage() {
   const [identifier, setIdentifier] = useState('')
   const [platform, setPlatform] = useState<'ios' | 'android'>('android')
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [expandedPhoneId, setExpandedPhoneId] = useState<string | null>(null)
 
   const [emailFrom, setEmailFrom] = useState('')
   const [emailSubject, setEmailSubject] = useState('')
@@ -33,7 +34,6 @@ export function AccountsPage() {
       const res = await fetchLinkedAccounts(true)
       setItems(res.items)
       setInboundConfigured(Boolean(res.resend_inbound_configured))
-      setInboundDomain(res.resend_inbound_domain ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounts')
     } finally {
@@ -78,14 +78,14 @@ export function AccountsPage() {
       setCopiedId(id)
       setTimeout(() => setCopiedId(null), 2000)
     } catch {
-      setError('Copy failed — select the link text manually')
+      setError('Copy failed — tap the text and copy manually')
     }
   }
 
   const onPasteEmail = async (e: FormEvent) => {
     e.preventDefault()
     if (!emailText.trim() && !emailSubject.trim()) {
-      setError('Paste the email body (or at least the subject + body text)')
+      setError('Paste the email body (the part with the amount)')
       return
     }
     setBusy(true)
@@ -97,14 +97,21 @@ export function AccountsPage() {
         text: emailText.trim(),
       })
       if (res.stored) {
-        flashOk(`Saved email transaction${res.transaction?.amount != null ? ` · ₹${res.transaction.amount}` : ''}`)
+        flashOk(
+          `Saved${res.transaction?.amount != null ? ` · ₹${res.transaction.amount}` : ''} — check Transactions`,
+        )
         setEmailText('')
         setEmailSubject('')
+        await load()
       } else {
-        setError(res.reason || res.hint || 'Email was not stored as a transaction')
+        setError(
+          res.reason?.includes('not a bank')
+            ? 'That did not look like a transaction email (OTP and promos are ignored).'
+            : res.reason || res.hint || 'Could not save this email',
+        )
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Email paste failed')
+      setError(err instanceof Error ? err.message : 'Could not save email')
     } finally {
       setBusy(false)
     }
@@ -115,8 +122,8 @@ export function AccountsPage() {
   return (
     <div className="fade-in">
       <PageHeader
-        title="Phones & email"
-        description="SMS links for your phone. Forward bank alert emails to your personal inbound address for live parsing."
+        title="Accounts"
+        description="Connect bank SMS on your phone and optionally forward bank emails — everything lands in Transactions."
       />
 
       {error ? (
@@ -134,181 +141,154 @@ export function AccountsPage() {
         <LoadingBlock />
       ) : (
         <div className="space-y-5">
-          <ChartCard title="Linked phones" subtitle="Copy the SMS link into Shortcuts / MacroDroid">
+          <BankEmailSetupCard
+            primary={primary}
+            inboundConfigured={inboundConfigured}
+            busy={busy}
+            emailFrom={emailFrom}
+            emailSubject={emailSubject}
+            emailText={emailText}
+            onEmailFrom={setEmailFrom}
+            onEmailSubject={setEmailSubject}
+            onEmailText={setEmailText}
+            onPasteSubmit={(e) => void onPasteEmail(e)}
+            onCopy={(text, id) => void copy(text, id)}
+            copiedId={copiedId}
+          />
+
+          <ChartCard title="Bank SMS on your phone" subtitle="One private link per phone — for Shortcuts or MacroDroid">
             {items.length === 0 ? (
-              <p className="text-sm text-[var(--muted)]">No phones yet — add one below or finish Setup.</p>
+              <p className="text-sm text-[var(--muted)]">
+                No phone linked yet. Finish <strong>Setup</strong> or add one below.
+              </p>
             ) : (
               <ul className="divide-y divide-[var(--border)]">
-                {items.map((row) => (
-                  <li key={row.id} className="space-y-2 py-4">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <p className="font-medium text-[var(--text)]">{row.label}</p>
-                        <p className="text-xs text-[var(--muted)]">
-                          {row.identifier}
-                          {row.platform ? ` · ${row.platform}` : ''}
-                          {row.last_seen_at
-                            ? ` · last activity ${new Date(row.last_seen_at).toLocaleString('en-IN')}`
-                            : ' · waiting for first SMS/email'}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className="btn text-xs"
-                          onClick={() => void copy(row.webhook_url, `${row.id}-sms`)}
-                        >
-                          {copiedId === `${row.id}-sms` ? 'Copied' : 'Copy SMS link'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn text-xs"
-                          onClick={() => void copy(row.email_webhook_url, `${row.id}-email`)}
-                        >
-                          {copiedId === `${row.id}-email` ? 'Copied' : 'Copy email link'}
-                        </button>
-                        {row.inbound_email ? (
+                {items.map((row) => {
+                  const expanded = expandedPhoneId === row.id
+                  return (
+                    <li key={row.id} className="py-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-medium text-[var(--text)]">{row.label}</p>
+                          <p className="text-xs text-[var(--muted)]">
+                            {row.identifier}
+                            {row.platform ? ` · ${row.platform}` : ''}
+                          </p>
+                          <p className="mt-1 text-xs text-[var(--muted)]">
+                            {row.last_seen_at
+                              ? `Last activity ${new Date(row.last_seen_at).toLocaleString('en-IN')}`
+                              : 'Waiting for first SMS'}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
                             className="btn btn-primary text-xs"
-                            onClick={() => void copy(row.inbound_email, `${row.id}-inbound`)}
+                            onClick={() => void copy(row.webhook_url, `${row.id}-sms`)}
                           >
-                            {copiedId === `${row.id}-inbound` ? 'Copied' : 'Copy forward address'}
+                            {copiedId === `${row.id}-sms` ? 'Copied' : 'Copy SMS link'}
                           </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="btn text-xs"
-                          disabled={busy}
-                          onClick={() =>
-                            void (async () => {
-                              setBusy(true)
-                              try {
-                                await rotateLinkedAccountToken(row.id)
-                                await load()
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : 'Rotate failed')
-                              } finally {
-                                setBusy(false)
-                              }
-                            })()
-                          }
-                        >
-                          New links
-                        </button>
-                        <button
-                          type="button"
-                          className="btn text-xs"
-                          disabled={busy || items.length <= 1}
-                          onClick={() =>
-                            void (async () => {
-                              if (!confirm('Remove this phone link? SMS/email from it will stop arriving.')) return
-                              setBusy(true)
-                              try {
-                                await deleteLinkedAccount(row.id)
-                                await load()
-                              } catch (err) {
-                                setError(err instanceof Error ? err.message : 'Remove failed')
-                              } finally {
-                                setBusy(false)
-                              }
-                            })()
-                          }
-                        >
-                          Remove
-                        </button>
+                          <button
+                            type="button"
+                            className="btn text-xs"
+                            onClick={() => setExpandedPhoneId(expanded ? null : row.id)}
+                          >
+                            {expanded ? 'Hide' : 'More'}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                    <p className="break-all rounded-lg bg-[var(--surface-2)] px-2 py-1.5 font-mono text-[11px] text-[var(--muted)]">
-                      SMS: {row.webhook_url}
-                    </p>
-                    {row.inbound_email ? (
-                      <p className="break-all rounded-lg border border-[var(--sapphire)]/25 bg-[var(--accent-soft)] px-2 py-1.5 font-mono text-[11px] text-[var(--sapphire)]">
-                        Forward bank emails here: {row.inbound_email}
-                      </p>
-                    ) : null}
-                    <p className="break-all rounded-lg bg-[var(--surface-2)] px-2 py-1.5 font-mono text-[11px] text-[var(--muted)]">
-                      Email API: {row.email_webhook_url}
-                    </p>
-                  </li>
-                ))}
+                      {expanded ? (
+                        <div className="mt-3 space-y-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
+                          <p className="break-all font-mono text-[11px] text-[var(--muted)]">
+                            {row.webhook_url}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {row.inbound_email ? (
+                              <button
+                                type="button"
+                                className="btn text-xs"
+                                onClick={() => void copy(row.inbound_email, `${row.id}-inbound`)}
+                              >
+                                {copiedId === `${row.id}-inbound` ? 'Copied' : 'Copy forward address'}
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="btn text-xs"
+                              disabled={busy}
+                              onClick={() =>
+                                void (async () => {
+                                  if (
+                                    !confirm(
+                                      'Generate new links? Update Shortcuts/MacroDroid with the new SMS link.',
+                                    )
+                                  ) {
+                                    return
+                                  }
+                                  setBusy(true)
+                                  try {
+                                    await rotateLinkedAccountToken(row.id)
+                                    await load()
+                                    flashOk('New links generated')
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : 'Could not refresh links')
+                                  } finally {
+                                    setBusy(false)
+                                  }
+                                })()
+                              }
+                            >
+                              New links
+                            </button>
+                            <button
+                              type="button"
+                              className="btn text-xs"
+                              disabled={busy || items.length <= 1}
+                              onClick={() =>
+                                void (async () => {
+                                  if (!confirm('Remove this phone? SMS from it will stop.')) return
+                                  setBusy(true)
+                                  try {
+                                    await deleteLinkedAccount(row.id)
+                                    await load()
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : 'Could not remove')
+                                  } finally {
+                                    setBusy(false)
+                                  }
+                                })()
+                              }
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </ChartCard>
 
-          <ChartCard
-            title="Bank alert emails — automatic"
-            subtitle={
-              inboundConfigured
-                ? 'Forward bank alerts to your address above — parsed live like SMS'
-                : 'Server inbound not configured yet — use paste below or ask admin to set RESEND_INBOUND_DOMAIN'
-            }
-          >
-            {inboundConfigured && primary?.inbound_email ? (
-              <div className="mb-4 rounded-xl border border-[var(--credit)]/30 bg-[var(--credit-soft)] px-3 py-2.5 text-sm text-[var(--credit)]">
-                <strong>Live parsing is on.</strong> In Gmail: Settings → Filters → create a filter for bank
-                senders (e.g. <code>alerts@hdfcbank.net</code>) → <strong>Forward to</strong>{' '}
-                <code className="break-all">{primary.inbound_email}</code>. New alerts appear in Transactions
-                within seconds.
-              </div>
-            ) : null}
-            <ol className="mb-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
-              <li>
-                <strong>Automatic (recommended):</strong> copy <strong>Forward address</strong> from your
-                phone card → Gmail filter → forward only bank alerts to that address.
-                {inboundDomain ? ` Domain: ${inboundDomain}.` : ''}
-              </li>
-              <li>
-                <strong>Manual test:</strong> paste one email below → Parse &amp; save.
-              </li>
-              <li>
-                <strong>Advanced:</strong> Zapier/Make can POST JSON to the email API link with{' '}
-                <code>from</code>, <code>subject</code>, <code>text</code>.
-              </li>
-            </ol>
-            <form className="grid max-w-2xl gap-3" onSubmit={(e) => void onPasteEmail(e)}>
-              <input
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
-                placeholder="From (optional) — e.g. alerts@hdfcbank.net"
-                value={emailFrom}
-                onChange={(e) => setEmailFrom(e.target.value)}
-              />
-              <input
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
-                placeholder="Subject (optional)"
-                value={emailSubject}
-                onChange={(e) => setEmailSubject(e.target.value)}
-              />
-              <textarea
-                className="min-h-[140px] rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-xs"
-                placeholder="Paste the full email body here (the part with Rs / INR / spent / credited)…"
-                value={emailText}
-                onChange={(e) => setEmailText(e.target.value)}
-              />
-              <button type="submit" className="btn self-start" disabled={busy}>
-                {busy ? 'Parsing…' : 'Parse & save email'}
-              </button>
-            </form>
-          </ChartCard>
-
-          <ChartCard title="Add another phone" subtitle="Wife’s SIM, work phone, second Android, etc.">
+          <ChartCard title="Add another phone" subtitle="Second SIM, work phone, family member, etc.">
             <form className="grid max-w-lg gap-3" onSubmit={(e) => void onAdd(e)}>
               <input
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
-                placeholder="Nickname (e.g. Work Pixel)"
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm"
+                placeholder="Nickname (e.g. Work phone)"
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 required
               />
               <input
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
-                placeholder="Phone number or short id"
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm"
+                placeholder="Phone number (for your reference)"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 required
               />
               <select
-                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm"
                 value={platform}
                 onChange={(e) => setPlatform(e.target.value as 'ios' | 'android')}
               >
@@ -322,32 +302,32 @@ export function AccountsPage() {
           </ChartCard>
 
           <ChartCard
-            title="Need the phone steps again?"
-            subtitle="Plain English — do this on the phone that receives bank SMS"
+            title="SMS setup help"
+            subtitle="Step-by-step for the phone that receives bank SMS"
           >
             <details className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
               <summary className="cursor-pointer text-sm font-medium">iPhone (Shortcuts)</summary>
               <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
-                <li>Open the Shortcuts app.</li>
-                <li>Tap Automation → + → Message / SMS received.</li>
-                <li>Add “Get Contents of URL” → Method POST → paste your private SMS link.</li>
+                <li>Open Shortcuts → Automation → + → Message received.</li>
+                <li>Add “Get Contents of URL” → POST → paste your SMS link.</li>
                 <li>
-                  JSON body with fields <code>sender</code> and <code>body</code> from the message.
+                  JSON body: <code>sender</code> and <code>body</code> from the message.
                 </li>
-                <li>Turn off “Ask Before Running” if you want it automatic.</li>
+                <li>Turn off “Ask Before Running” for automatic capture.</li>
               </ol>
             </details>
             <details className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
               <summary className="cursor-pointer text-sm font-medium">Android (MacroDroid)</summary>
               <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
-                <li>Install MacroDroid from the Play Store and allow SMS permission.</li>
-                <li>New macro → Trigger: SMS Received.</li>
-                <li>Action: HTTP Request → POST → paste your private SMS link.</li>
+                <li>Install MacroDroid and allow SMS permission.</li>
+                <li>New macro → SMS Received → HTTP POST → paste your SMS link.</li>
                 <li>
-                  Body like{' '}
-                  <code className="break-all">{"{ \"sender\": \"[sms_from]\", \"body\": \"[sms_body]\" }"}</code>
+                  Body:{' '}
+                  <code className="break-all">
+                    {'{ "sender": "[sms_from]", "body": "[sms_body]" }'}
+                  </code>
                 </li>
-                <li>In Battery settings, allow MacroDroid to run in the background.</li>
+                <li>Allow MacroDroid to run in the background.</li>
               </ol>
             </details>
           </ChartCard>
