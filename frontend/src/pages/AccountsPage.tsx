@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   createLinkedAccount,
   deleteLinkedAccount,
@@ -8,7 +9,9 @@ import {
   type LinkedAccount,
 } from '../api'
 import { BankEmailSetupCard } from '../components/BankEmailSetupCard'
+import { GuideSteps } from '../components/GuideSteps'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
+import { ANDROID_SMS_STEPS, IPHONE_SMS_STEPS } from '../lib/setupGuide'
 
 export function AccountsPage() {
   const [items, setItems] = useState<LinkedAccount[]>([])
@@ -123,7 +126,12 @@ export function AccountsPage() {
     <div className="fade-in">
       <PageHeader
         title="Accounts"
-        description="Connect bank SMS on your phone and optionally forward bank emails — everything lands in Transactions."
+        description="Your private SMS link and optional bank email forwarding. Stuck? Open the full setup guide."
+        actions={
+          <Link to="/getting-started" className="btn text-sm">
+            Setup guide
+          </Link>
+        }
       />
 
       {error ? (
@@ -303,32 +311,25 @@ export function AccountsPage() {
 
           <ChartCard
             title="SMS setup help"
-            subtitle="Step-by-step for the phone that receives bank SMS"
+            subtitle="Detailed steps also in Setup wizard and Help & guide"
           >
+            <p className="mb-3 text-sm text-[var(--muted)]">
+              <Link to="/getting-started" className="font-medium text-[var(--sapphire)] hover:underline">
+                Open the full setup guide
+              </Link>{' '}
+              for end-to-end instructions including troubleshooting.
+            </p>
             <details className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
               <summary className="cursor-pointer text-sm font-medium">iPhone (Shortcuts)</summary>
-              <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
-                <li>Open Shortcuts → Automation → + → Message received.</li>
-                <li>Add “Get Contents of URL” → POST → paste your SMS link.</li>
-                <li>
-                  JSON body: <code>sender</code> and <code>body</code> from the message.
-                </li>
-                <li>Turn off “Ask Before Running” for automatic capture.</li>
-              </ol>
+              <div className="mt-3">
+                <GuideSteps steps={IPHONE_SMS_STEPS} />
+              </div>
             </details>
             <details className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
               <summary className="cursor-pointer text-sm font-medium">Android (MacroDroid)</summary>
-              <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-[var(--muted)]">
-                <li>Install MacroDroid and allow SMS permission.</li>
-                <li>New macro → SMS Received → HTTP POST → paste your SMS link.</li>
-                <li>
-                  Body:{' '}
-                  <code className="break-all">
-                    {'{ "sender": "[sms_from]", "body": "[sms_body]" }'}
-                  </code>
-                </li>
-                <li>Allow MacroDroid to run in the background.</li>
-              </ol>
+              <div className="mt-3">
+                <GuideSteps steps={ANDROID_SMS_STEPS} />
+              </div>
             </details>
           </ChartCard>
         </div>

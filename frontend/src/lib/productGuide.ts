@@ -36,20 +36,26 @@ export const GUIDE_WELCOME = {
 
 export const GUIDE_SETUP_STEPS: Array<{ title: string; body: string; to?: string; cta?: string }> = [
   {
-    title: '1. Link bank SMS',
-    body: 'Use the phone setup wizard (iPhone Shortcuts or Android MacroDroid/Tasker) so debits and credits land automatically.',
-    to: '/accounts',
-    cta: 'Phones & email',
+    title: '1. Connect bank SMS',
+    body: 'Use the setup wizard on your iPhone (Shortcuts) or Android (MacroDroid). This is the main way transactions appear.',
+    to: '/setup',
+    cta: 'Open setup wizard',
   },
   {
-    title: '2. Optional: email statements',
-    body: 'Forward bank emails to your private email webhook from Phones & email when SMS coverage is incomplete.',
-    to: '/accounts',
-    cta: 'Open Accounts',
+    title: '2. Confirm Transactions',
+    body: 'Wait for one real bank SMS, then check Transactions for the correct amount.',
+    to: '/transactions',
+    cta: 'View Transactions',
   },
   {
-    title: '3. Optional: import files',
-    body: 'Upload bank CSVs or INDmoney exports under Import / Wealth when you want holdings and history in bulk.',
+    title: '3. Bank emails (optional)',
+    body: 'Forward only debit/credit alert emails from Gmail — step-by-step on Accounts.',
+    to: '/accounts',
+    cta: 'Email setup',
+  },
+  {
+    title: '4. Import history (optional)',
+    body: 'Upload a bank CSV/PDF or INDmoney export when you want older data or holdings.',
     to: '/import',
     cta: 'Import',
   },

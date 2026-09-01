@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { ArrowLeft } from 'lucide-react'
 import {
   createLinkedAccount,
   fetchLinkedAccounts,
@@ -7,8 +8,15 @@ import {
   updateLinkedAccount,
   type LinkedAccount,
 } from '../api'
+import { GuideSteps, SetupProgressBar } from '../components/GuideSteps'
 import { useAuth } from '../context/AuthContext'
 import { LoadingBlock, PageHeader } from '../components/ui'
+import {
+  ANDROID_SMS_STEPS,
+  IPHONE_SMS_STEPS,
+  SETUP_INTRO,
+  SETUP_PROGRESS_LABELS,
+} from '../lib/setupGuide'
 
 type Platform = 'ios' | 'android'
 
@@ -23,6 +31,8 @@ export function SetupPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+
+  const totalSteps = 4
 
   useEffect(() => {
     if (!user) return
@@ -51,9 +61,7 @@ export function SetupPage() {
   }
   if (!user) return <Navigate to="/login" replace />
   if (user.setup_completed) {
-    return (
-      <Navigate to={user.onboarding_completed ? '/' : '/getting-started'} replace />
-    )
+    return <Navigate to={user.onboarding_completed ? '/' : '/getting-started'} replace />
   }
 
   const webhookUrl = account?.webhook_url || ''
@@ -128,16 +136,25 @@ export function SetupPage() {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      setError('Could not copy — long-press the link and copy manually')
+      setError('Could not copy — select the link below and copy manually')
     }
+  }
+
+  const goBack = () => {
+    setError(null)
+    if (step === 2) {
+      setStep(1)
+      setPlatform(null)
+    } else if (step === 3) setStep(2)
+    else if (step === 4) setStep(3)
   }
 
   return (
     <div className="fade-in mx-auto max-w-2xl px-4 py-8">
-      <PageHeader
-        title="Set up Money Track"
-        description="We’ll ask a few easy questions. No tech skills needed — follow the numbered steps."
-      />
+      <PageHeader title={SETUP_INTRO.title} description={SETUP_INTRO.subtitle} />
+
+      <SetupProgressBar step={step} total={totalSteps} />
+      <p className="-mt-4 mb-6 text-sm font-medium text-[var(--text)]">{SETUP_PROGRESS_LABELS[step - 1]}</p>
 
       {error ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
@@ -145,50 +162,73 @@ export function SetupPage() {
         </div>
       ) : null}
 
+      {step > 1 ? (
+        <button
+          type="button"
+          className="mb-4 inline-flex items-center gap-1 text-sm text-[var(--muted)] hover:text-[var(--text)]"
+          onClick={goBack}
+        >
+          <ArrowLeft size={14} aria-hidden />
+          Back
+        </button>
+      ) : null}
+
       {step === 1 ? (
-        <section className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5">
-          <h2 className="text-lg font-semibold text-[var(--text)]">1. Which phone sends your bank SMS?</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Pick the phone that receives messages like “Rs 500 spent…” from your bank.
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
+          <h2 className="text-lg font-semibold text-[var(--text)]">Which phone gets bank SMS?</h2>
+          <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
+            Choose the phone that receives texts like “Rs 500 spent at…” from your bank. This is how
+            Money Track learns your spending automatically.
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <button type="button" className="btn h-auto flex-col gap-1 py-4" onClick={() => choosePlatform('ios')}>
+            <button
+              type="button"
+              className="btn h-auto flex-col gap-1 border-2 py-4 transition hover:border-[var(--sapphire)]"
+              onClick={() => choosePlatform('ios')}
+            >
               <span className="text-base font-semibold">iPhone</span>
-              <span className="text-xs font-normal text-[var(--muted)]">Uses Apple Shortcuts</span>
+              <span className="text-xs font-normal text-[var(--muted)]">Apple Shortcuts (free, built-in)</span>
             </button>
             <button
               type="button"
-              className="btn h-auto flex-col gap-1 py-4"
+              className="btn h-auto flex-col gap-1 border-2 py-4 transition hover:border-[var(--sapphire)]"
               onClick={() => choosePlatform('android')}
             >
               <span className="text-base font-semibold">Android</span>
-              <span className="text-xs font-normal text-[var(--muted)]">Uses MacroDroid or Tasker</span>
+              <span className="text-xs font-normal text-[var(--muted)]">MacroDroid (free app)</span>
             </button>
           </div>
         </section>
       ) : null}
 
       {step === 2 && platform ? (
-        <section className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5">
-          <h2 className="text-lg font-semibold">2. Name this phone</h2>
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
+          <h2 className="text-lg font-semibold">Name this phone</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Example: “Personal Pixel” or “Work iPhone”. You can add more phones later.
+            So you can tell phones apart later (e.g. “Personal” vs “Work”). You can add more phones
+            anytime under Accounts.
           </p>
           <div className="mt-4 space-y-3">
-            <input
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="Phone nickname"
-            />
-            <input
-              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Phone number (optional, e.g. +91…)"
-            />
-            <button type="button" className="btn" disabled={busy} onClick={() => void createLink()}>
-              {busy ? 'Creating…' : 'Create my SMS link'}
+            <label className="block text-sm">
+              <span className="mb-1 block text-[var(--muted)]">Nickname</span>
+              <input
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="My phone"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-[var(--muted)]">Phone number (optional)</span>
+              <input
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="10-digit mobile — for your reference only"
+              />
+            </label>
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void createLink()}>
+              {busy ? 'Creating…' : 'Continue → get my SMS link'}
             </button>
           </div>
         </section>
@@ -196,76 +236,57 @@ export function SetupPage() {
 
       {step === 3 && platform ? (
         <section className="space-y-4">
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5">
-            <h2 className="text-lg font-semibold">3. Copy your private SMS link</h2>
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
+            <h2 className="text-lg font-semibold">Copy your private SMS link</h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              This link is like a mailbox key for <strong>{label}</strong>. Don’t share it publicly.
+              This link is unique to <strong>{label}</strong>. Keep it private — anyone with the link
+              could post fake transactions.
             </p>
-            <div className="mt-3 break-all rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 font-mono text-xs">
-              {webhookUrl || 'Loading link…'}
+            <div className="mt-3 break-all rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 font-mono text-xs">
+              {webhookUrl || 'Creating link…'}
             </div>
-            <button type="button" className="btn mt-3" disabled={!webhookUrl} onClick={() => void copyUrl()}>
-              {copied ? 'Copied!' : 'Copy link'}
+            <button
+              type="button"
+              className="btn btn-primary mt-3"
+              disabled={!webhookUrl}
+              onClick={() => void copyUrl()}
+            >
+              {copied ? 'Copied!' : 'Copy SMS link'}
             </button>
           </div>
+          <button type="button" className="btn w-full justify-center" onClick={() => setStep(4)}>
+            I copied it — show phone steps
+          </button>
+        </section>
+      ) : null}
 
-          {platform === 'ios' ? (
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5">
-              <h2 className="text-lg font-semibold">4. iPhone — do this on the phone</h2>
-              <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm leading-relaxed text-[var(--text)]">
-                <li>Open the built-in <strong>Shortcuts</strong> app.</li>
-                <li>Tap <strong>Automation</strong> → <strong>+</strong> → <strong>Message</strong> / SMS received (or “Message”).</li>
-                <li>Choose when a message arrives (you can start with “Any Sender”, then tighten later).</li>
-                <li>
-                  Add action <strong>Get Contents of URL</strong>.
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--muted)]">
-                    <li>URL = paste the private link you copied</li>
-                    <li>Method = <strong>POST</strong> (important — not GET)</li>
-                    <li>Request Body = JSON</li>
-                    <li>
-                      Fields: <code>sender</code> = Sender, <code>body</code> = Message Contents (blue chips)
-                    </li>
-                  </ul>
-                </li>
-                <li>Turn off “Ask Before Running” if you want it fully automatic.</li>
-                <li>Send yourself a test bank SMS (or wait for a real one). Then open Money Track Dashboard.</li>
-              </ol>
+      {step === 4 && platform ? (
+        <section className="space-y-4">
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
+            <h2 className="text-lg font-semibold">
+              {platform === 'ios' ? 'Set up on your iPhone' : 'Set up on your Android'}
+            </h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Do these on the phone that receives bank SMS. Come back here when done.
+            </p>
+            <div className="mt-4">
+              <GuideSteps steps={platform === 'ios' ? IPHONE_SMS_STEPS : ANDROID_SMS_STEPS} />
             </div>
-          ) : (
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5">
-              <h2 className="text-lg font-semibold">4. Android — do this on the phone</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">
-                Easiest free app for most people: <strong>MacroDroid</strong> (Play Store). Tasker also works.
-              </p>
-              <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm leading-relaxed">
-                <li>Install <strong>MacroDroid</strong> and allow SMS / notification permissions it asks for.</li>
-                <li>Create a new macro → Trigger: <strong>SMS Received</strong>.</li>
-                <li>
-                  Action: <strong>HTTP Request</strong>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--muted)]">
-                    <li>Method = <strong>POST</strong></li>
-                    <li>URL = paste your private Money Track link</li>
-                    <li>Content type = application/json</li>
-                    <li>
-                      Body example:{' '}
-                      <code className="break-all">
-                        {"{ \"sender\": \"[sms_from]\", \"body\": \"[sms_body]\" }"}
-                      </code>{' '}
-                      (use MacroDroid’s magic text for sender & body)
-                    </li>
-                  </ul>
-                </li>
-                <li>
-                  In phone <strong>Battery</strong> settings, allow MacroDroid to run in the background (otherwise
-                  Android may stop it).
-                </li>
-                <li>Wait for a real bank SMS, then open Money Track Dashboard to confirm it arrived.</li>
-              </ol>
-            </div>
-          )}
+          </div>
 
-          <button type="button" className="btn" disabled={busy} onClick={() => void finish()}>
-            {busy ? 'Saving…' : 'I’ve finished — take me to Accounts'}
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--muted)]">
+            <p className="font-medium text-[var(--text)]">What about bank emails?</p>
+            <p className="mt-1">
+              Optional. After you finish here, open{' '}
+              <Link to="/accounts" className="font-medium text-[var(--sapphire)] hover:underline">
+                Accounts
+              </Link>{' '}
+              for step-by-step Gmail forwarding — or skip if SMS is enough.
+            </p>
+          </div>
+
+          <button type="button" className="btn btn-primary w-full justify-center" disabled={busy} onClick={() => void finish()}>
+            {busy ? 'Saving…' : 'Done — continue to full guide'}
           </button>
         </section>
       ) : null}
