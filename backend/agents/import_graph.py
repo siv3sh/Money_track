@@ -618,9 +618,15 @@ def validation_dedup_agent(state: ImportGraphState) -> ImportGraphState:
                 item["review_reason"] = "anomaly:" + ",".join(flags)
                 review.append(item)
                 continue
+            # Statement PDFs already have clear amounts/dates — commit even when
+            # category is uncertain so Dashboard/Transactions show the rows.
+            # Low-confidence categories stay as "Other" for later correction.
             if conf < CAT_CONFIDENCE_AUTO or (item.get("category") or "Other") == "Other":
-                item["review_reason"] = "low_category_confidence"
-                review.append(item)
+                if not item.get("category") or item.get("category") == "Other":
+                    item["category"] = "Other"
+                    item["category_source"] = item.get("category_source") or "default"
+                    item["category_confidence"] = conf
+                commit.append(item)
                 continue
             commit.append(item)
         else:

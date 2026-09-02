@@ -260,9 +260,20 @@ export function ImportPage() {
           </p>
         ) : null}
         {ok ? (
-          <p className="mt-4 border border-[var(--credit)]/20 bg-[var(--credit-soft)] px-3 py-2 text-sm text-[var(--credit)]">
-            {ok}
-          </p>
+          <div className="mt-4 space-y-2 border border-[var(--credit)]/20 bg-[var(--credit-soft)] px-3 py-2 text-sm text-[var(--credit)]">
+            <p>{ok}</p>
+            <p className="text-xs text-[var(--text)]">
+              Statement months may be older than “This month” on Dashboard. Open{' '}
+              <Link
+                to="/transactions"
+                className="font-semibold text-[var(--sapphire)] underline-offset-2 hover:underline"
+              >
+                Transactions
+              </Link>{' '}
+              and set the date range to the statement period (or clear dates), or use the period
+              control on Dashboard (Month / Year) and step back to July.
+            </p>
+          </div>
         ) : null}
         {err ? (
           <p className="mt-4 border border-[var(--debit)]/20 bg-[var(--debit-soft)] px-3 py-2 text-sm text-[var(--debit)]">
