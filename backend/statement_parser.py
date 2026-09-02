@@ -104,17 +104,24 @@ def detect_statement_profile(
     filename: str = "",
 ) -> dict[str, Any]:
     """
-    Infer bank + product (savings vs ICICI credit card) from filename / header text.
-    Only Federal Bank and ICICI Bank are allowed.
+    Infer bank + product (savings vs credit card) from filename / header text.
     """
     blob = f"{filename}\n{sample[:12000]}".lower()
     name = (filename or "").lower()
 
-    scores = {"Federal Bank": 0, "ICICI Bank": 0}
+    scores = {"Federal Bank": 0, "ICICI Bank": 0, "South Indian Bank": 0}
     if "federal" in blob or "fedbnk" in blob or "fedbk" in blob or "fed-" in name:
         scores["Federal Bank"] += 5
     if "icici" in blob or "icicib" in blob:
         scores["ICICI Bank"] += 5
+    if (
+        "south indian bank" in blob
+        or "southindianbank" in blob
+        or "sibl000" in blob
+        or re.search(r"\bsibl\b", blob)
+        or "sib.bank" in blob
+    ):
+        scores["South Indian Bank"] += 8
 
     is_credit_card = any(h in blob for h in CREDIT_CARD_HINTS) or (
         "credit" in name and "card" in name
@@ -124,14 +131,14 @@ def detect_statement_profile(
         # Credit-card statements in this household are ICICI
         scores["ICICI Bank"] += 4
 
-    # Federal savings account cues
+    # Savings account cues — only nudge when a bank already scored
     if any(k in blob for k in ("savings a/c", "savings account", "a/c no", "account statement")):
-        if scores["Federal Bank"] >= scores["ICICI Bank"]:
-            scores["Federal Bank"] += 1
+        leaders = [b for b, s in scores.items() if s > 0]
+        if len(leaders) == 1:
+            scores[leaders[0]] += 1
 
     bank = max(scores, key=scores.get)
     if scores[bank] <= 0:
-        # Default: Federal is the primary bank account
         bank = "Federal Bank"
         confidence = "low"
     elif scores[bank] >= 5:
@@ -473,6 +480,170 @@ def parse_statement_csv(
     return results
 
 
+def _looks_like_ledger_statement(content: str) -> bool:
+    head = (content or "")[:2500].upper()
+    has_header = (
+        "WITHDRAWALS" in head
+        and "DEPOSITS" in head
+        and ("PARTICULARS" in head or "NARRATION" in head or "DESCRIPTION" in head)
+    )
+    has_date_rows = bool(re.search(r"\n\d{2}[-/]\d{2}[-/]\d{4}\s+\S+", content or ""))
+    return has_header and has_date_rows
+
+
+def parse_ledger_statement_text(
+    content: str,
+    *,
+    bank: Optional[str] = None,
+) -> list[tuple[Transaction, datetime]]:
+    """
+    Parse Indian savings-account PDF text where columns collapse to:
+      DD-MM-YYYY <narration...> <amount> <balance> Cr
+    Multi-line narrations continue until the next date row.
+    Debit vs credit is inferred from running balance (B/F).
+    """
+    lines = [ln.strip() for ln in (content or "").splitlines() if ln.strip()]
+    if not lines:
+        return []
+
+    row_start = re.compile(r"^(\d{2}[-/]\d{2}[-/]\d{4})\s+(.+)$")
+    # One amount + balance, or B/F balance-only
+    tail_two = re.compile(
+        r"^(?P<body>.*?)\s+(?P<amount>[\d,]+\.\d{2})\s+(?P<balance>[\d,]+\.\d{2})\s*(?P<cd>Cr|Dr)?\s*$",
+        re.I | re.S,
+    )
+    tail_one = re.compile(
+        r"^(?P<body>.*?)\s+(?P<balance>[\d,]+\.\d{2})\s*(?P<cd>Cr|Dr)?\s*$",
+        re.I | re.S,
+    )
+    skip_re = re.compile(
+        r"page\s*total|grand\s*total|opening\s*balance|closing\s*balance|"
+        r"statement of account|visit us at|system-generated|page\s+\d+\s+of",
+        re.I,
+    )
+
+    # Collect date-started blocks (join continuation lines)
+    # Amounts always sit on the first date line; later lines are narration only.
+    blocks: list[tuple[str, str, str]] = []  # (date_raw, first_line_rest, continuation)
+    i = 0
+    while i < len(lines):
+        m = row_start.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        date_raw, first = m.group(1), m.group(2)
+        cont: list[str] = []
+        i += 1
+        while i < len(lines) and not row_start.match(lines[i]):
+            if skip_re.search(lines[i]):
+                break
+            if lines[i].upper().startswith("DATE ") and "PARTICULARS" in lines[i].upper():
+                break
+            if re.match(r"^Branch Name\s*:", lines[i], re.I):
+                break
+            cont.append(lines[i])
+            i += 1
+        blocks.append((date_raw, first, " ".join(cont)))
+
+    results: list[tuple[Transaction, datetime]] = []
+    prev_balance: Optional[float] = None
+
+    for date_raw, first, cont in blocks:
+        blob_for_skip = f"{first} {cont}"
+        if skip_re.search(blob_for_skip):
+            continue
+        received_at = _parse_date(date_raw)
+        if not received_at:
+            continue
+
+        # Prefer amount+balance on the first line; fall back to balance-only (B/F)
+        tm = tail_two.search(first)
+        amount: Optional[float] = None
+        balance: Optional[float] = None
+        body_head = first
+        if tm:
+            body_head = (tm.group("body") or "").strip()
+            amount = _parse_money(tm.group("amount"))
+            balance = _parse_money(tm.group("balance"))
+        else:
+            om = tail_one.search(first)
+            if om:
+                body_head = (om.group("body") or "").strip()
+                balance = _parse_money(om.group("balance"))
+
+        body = f"{body_head} {cont}".strip()
+        body_l = body.lower()
+        # Bring-forward / opening row — seed balance only
+        if re.search(r"\bb/?f\b|\bbrought\s+forward\b|\bopening\b", body_l):
+            if balance is not None:
+                prev_balance = balance
+            continue
+
+        if amount is None or amount <= 0 or balance is None:
+            continue
+
+        txn_type: Optional[str] = None
+        if prev_balance is not None:
+            if abs((prev_balance - amount) - balance) < 0.05:
+                txn_type = "debit"
+            elif abs((prev_balance + amount) - balance) < 0.05:
+                txn_type = "credit"
+
+        if txn_type is None:
+            txn_type = _type_from_description(body)
+        if txn_type is None:
+            # NEFT payroll / interest / salary cues → credit; else debit
+            if any(k in body_l for k in ("neft", "salary", "payroll", "int.pd", "interest", "credit")):
+                txn_type = "credit"
+            else:
+                txn_type = "debit"
+
+        merchant = clean_merchant_from_ledger(body)
+        txn: Transaction = {
+            "type": txn_type,
+            "amount": amount,
+            "account_last4": None,
+            "card_type": "upi" if "/upi/" in body_l or " upi" in body_l else "bank_account",
+            "merchant": merchant,
+            "balance": balance,
+            "bank": bank,
+            "raw_text": f"{date_raw} {body} {amount:.2f} {balance:.2f}",
+        }
+        enrich_imported_txn(txn, default_card_type="bank_account")
+        results.append((txn, received_at))
+        prev_balance = balance
+
+    return results
+
+
+def clean_merchant_from_ledger(body: str) -> str:
+    """Pull a readable merchant/label from South Indian / similar ledger narrations."""
+    text = re.sub(r"\s+", " ", (body or "").strip())
+    # UPI: .../UPI/<IFSC>/<digits> <phone>/<payee>/UPI
+    m = re.search(
+        r"/UPI/[A-Z]{4}/\d+\s*(?:\d+/)?([^/]+?)/(?:UPI|Sent via|Paid via|Sent|Paid)\b",
+        text,
+        re.I,
+    )
+    if m:
+        return m.group(1).strip()[:60]
+    m = re.search(r"/UPI/[A-Z]{4}/\d+\s+\d+/([^/]+?)(?:\s+CARMELARAM|\s+HO\b|$)", text, re.I)
+    if m:
+        return m.group(1).strip()[:60]
+    # NEFT: .../NEFT:PAYER NAME...
+    m = re.search(r"NEFT[:\s]+(.+)$", text, re.I)
+    if m:
+        return re.sub(r"\s+", " ", m.group(1)).strip()[:60]
+    # Interest
+    if re.search(r"int\.?\s*pd", text, re.I):
+        return "Interest paid"
+    # Fallback: drop long numeric/ref prefix
+    cleaned = re.sub(r"^[\dX]+/", "", text)
+    cleaned = re.sub(r"\s+CARMELARAM.*$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s+HO\s*-\s*CARD.*$", "", cleaned, flags=re.I)
+    return cleaned[:60].strip() or text[:60]
+
+
 def parse_statement_text(
     content: str,
     *,
@@ -484,7 +655,13 @@ def parse_statement_text(
     Examples:
       2026-07-15 Rs.200 debited ... at SWIGGY
       15/07/2026,SWIGGY,200,DR
+    Also supports Indian ledger PDF text (DATE / PARTICULARS / WITHDRAWALS / DEPOSITS / BALANCE).
     """
+    if _looks_like_ledger_statement(content):
+        ledger = parse_ledger_statement_text(content, bank=bank)
+        if ledger:
+            return ledger
+
     # Try CSV first if it looks like one
     if "," in content and ("date" in content.lower()[:200] or "narration" in content.lower()[:200]):
         csv_rows = parse_statement_csv(content, bank=bank)

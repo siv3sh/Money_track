@@ -112,7 +112,7 @@ def _detect_kind(filename: str) -> str:
     return "unknown"
 
 
-def _ocr_pdf_pages(raw: bytes) -> str:
+def _ocr_pdf_pages(raw: bytes, *, password: str | None = None) -> str:
     """Best-effort OCR for scanned PDFs. Optional deps: pdf2image + pytesseract."""
     try:
         from pdf2image import convert_from_bytes  # type: ignore
@@ -120,7 +120,10 @@ def _ocr_pdf_pages(raw: bytes) -> str:
     except Exception:
         return ""
     try:
-        images = convert_from_bytes(raw, dpi=200, first_page=1, last_page=5)
+        kwargs: dict[str, Any] = {"dpi": 200, "first_page": 1, "last_page": 5}
+        if password:
+            kwargs["userpw"] = password
+        images = convert_from_bytes(raw, **kwargs)
         chunks: list[str] = []
         for img in images:
             chunks.append(pytesseract.image_to_string(img) or "")
@@ -171,15 +174,17 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"PDF parse skipped bad rows: {exc}")
             pairs = []
-        # If empty, try OCR fallback for scanned PDFs
+        # If empty, try OCR fallback for scanned PDFs (pass password for locked files)
         if not pairs:
-            ocr_text = _ocr_pdf_pages(raw)
+            ocr_text = _ocr_pdf_pages(raw, password=pdf_password)
             if ocr_text.strip():
                 pairs = parse_statement_text(ocr_text, bank=state.get("bank"))
                 warnings.append("Used OCR fallback for scanned PDF")
             else:
                 warnings.append(
-                    "PDF had little extractable text — install pdf2image+pytesseract for OCR"
+                    "PDF unlocked but no readable transactions — file may be damaged, "
+                    "image-only without OCR, or empty. Re-download from netbanking, or "
+                    "open in Adobe/Preview, print to a new PDF / export CSV, then re-upload."
                 )
         peek = ""
         try:
@@ -202,7 +207,12 @@ def extraction_agent(state: ImportGraphState) -> ImportGraphState:
             headers, [[d.get("received_at"), d.get("raw_text"), d.get("amount")] for d in docs[:3]]
         )
         status = "ok" if docs else "warn"
-        detail = f"PDF extract · {len(docs)} rows" + (" · OCR" if "OCR" in " ".join(warnings) else "")
+        if docs:
+            detail = f"PDF extract · {len(docs)} rows" + (
+                " · OCR" if "Used OCR" in " ".join(warnings) else ""
+            )
+        else:
+            detail = "PDF extract · 0 rows · unreadable"
     elif kind == "excel":
         # Multi-sheet: score by purpose embedding + parse richness
         best_docs: list[dict[str, Any]] = []

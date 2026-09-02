@@ -152,16 +152,23 @@ BANK_SENDER_MAP = {
     "FEDBNK": "Federal Bank",
     "FEDBK": "Federal Bank",
     "FEDERAL": "Federal Bank",
+    "SIBL": "South Indian Bank",
+    "SIBBK": "South Indian Bank",
+    "SOUTHI": "South Indian Bank",
 }
 
-# Only these banks are stored — everything else is ignored on SMS ingest / import UI
-ALLOWED_BANKS = frozenset({"Federal Bank", "ICICI Bank"})
+# Banks we store from SMS ingest / statement import
+ALLOWED_BANKS = frozenset({"Federal Bank", "ICICI Bank", "South Indian Bank"})
 ALLOWED_BANK_HINTS = (
     "federal",
     "fedbnk",
     "fedbk",
     "icici",
     "icicib",
+    "south indian",
+    "southindian",
+    "sibl",
+    "sibbk",
 )
 
 _BAD_MERCHANT = re.compile(
@@ -207,7 +214,8 @@ _LLM_PARSE_BATCH = 8
 
 _SMS_LLM_SYSTEM = (
     "Extract bank transactions from Indian SMS or statement narrations. "
-    "Only Federal Bank and ICICI Bank. Ignore OTP, KYC, promo, and non-money texts. "
+    "Supported banks: Federal Bank, ICICI Bank, South Indian Bank. "
+    "Ignore OTP, KYC, promo, and non-money texts. "
     "Return JSON only. Amounts are INR numbers (no commas). "
     "type debit = money left the user; credit = money received."
 )
@@ -495,6 +503,8 @@ def _detect_bank(sender: str, body: str = "") -> Optional[str]:
             if cleaned == key.upper() or cleaned.endswith(key.upper()):
                 return name
     blob = f"{sender} {body}".lower()
+    if "south indian" in blob or "southindian" in blob or "sibl" in blob:
+        return "South Indian Bank"
     if "icici" in blob:
         return "ICICI Bank"
     if "federal" in blob or "fedbnk" in blob or "fedbk" in blob:
