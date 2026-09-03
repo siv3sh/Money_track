@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { X } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 import { APP_NAV } from '../lib/navConfig'
 import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
 import { useWealthSettings } from '../hooks/useWealthSettings'
@@ -17,88 +17,134 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
       if (e.key === 'Escape') onClose()
     }
     document.addEventListener('keydown', onKey)
-    // Focus the dialog panel for keyboard users.
-    panelRef.current?.querySelector<HTMLElement>('button, input')?.focus()
+    panelRef.current?.focus()
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
   if (!open) return null
 
   const hintParts: string[] = []
-  if (!advisorEnabled) hintParts.push('Advisor is off in Profile')
-  if (!wealthEnabled) hintParts.push('Wealth is off in Profile')
+  if (!advisorEnabled) hintParts.push('Advisor is off')
+  if (!wealthEnabled) hintParts.push('Wealth is off')
+
+  const items = APP_NAV.filter((item) => {
+    if (!advisorEnabled && item.id === 'planning') return false
+    if (!wealthEnabled && item.id === 'wealth') return false
+    return true
+  })
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-[color-mix(in_srgb,var(--ink)_45%,transparent)] p-4 sm:items-center">
+    /* full-screen dim backdrop */
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+    >
+      {/* click-outside close */}
       <button
         type="button"
         className="absolute inset-0 cursor-default"
-        aria-label="Close customize menu"
+        aria-label="Close"
         onClick={onClose}
+        tabIndex={-1}
       />
+
+      {/* dialog card */}
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="nav-customize-title"
-        className="relative z-[61] w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--shadow-lg)]"
+        aria-labelledby="nav-cust-title"
+        tabIndex={-1}
+        className="relative z-[61] w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--sheet)] shadow-[0_24px_64px_rgba(0,0,0,0.22)] outline-none"
       >
-        <div className="mb-4 flex items-start justify-between gap-3">
+        {/* header */}
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
-            <h2 id="nav-customize-title" className="text-lg font-semibold text-[var(--text)]">
-              What shows in the menu?
+            <h2 id="nav-cust-title" className="text-base font-semibold text-[var(--text)]">
+              Customise menu
             </h2>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Tick only the pages you use. Dashboard stays in the sidebar; Profile is in the top-right avatar
-              menu.
-              {hintParts.length
-                ? ` ${hintParts.join(' · ')} — those pages stay hidden until you turn them back on.`
-                : null}
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
+              Pick the pages you want in the sidebar.
+              {hintParts.length ? ` ${hintParts.join(' · ')} — enable in Profile.` : ''}
             </p>
           </div>
-          <button type="button" className="btn" aria-label="Close" onClick={onClose}>
-            <X size={14} />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"
+          >
+            <X size={15} />
           </button>
         </div>
 
-        <ul className="max-h-[50vh] space-y-1 overflow-y-auto">
-          {APP_NAV.filter((item) => {
-            if (!advisorEnabled && item.id === 'planning') return false
-            if (!wealthEnabled && item.id === 'wealth') return false
-            return true
-          }).map((item) => {
+        {/* item list */}
+        <ul className="max-h-[55vh] overflow-y-auto py-2">
+          {items.map((item) => {
             const locked = ALWAYS_VISIBLE_NAV.includes(item.id)
             const checked = visible[item.id] !== false
             return (
               <li key={item.id}>
-                <label
-                  className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${
-                    locked ? 'opacity-80' : 'hover:bg-[var(--surface)]'
+                <button
+                  type="button"
+                  className={`flex w-full items-center gap-3 px-5 py-3 text-left transition-colors ${
+                    locked
+                      ? 'cursor-default opacity-60'
+                      : 'cursor-pointer hover:bg-[var(--surface-2)]'
                   }`}
+                  onClick={() => {
+                    if (!locked) toggle(item.id)
+                  }}
+                  aria-pressed={checked}
                 >
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-[var(--sapphire)]"
-                    checked={checked}
-                    disabled={locked}
-                    onChange={() => toggle(item.id)}
+                  {/* custom checkbox */}
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors ${
+                      checked
+                        ? 'border-[var(--sapphire)] bg-[var(--sapphire)]'
+                        : 'border-[var(--border-strong)] bg-transparent'
+                    }`}
+                    aria-hidden
+                  >
+                    {checked ? <Check size={11} strokeWidth={3} className="text-white" /> : null}
+                  </span>
+                  {/* nav icon */}
+                  <item.icon
+                    size={16}
+                    className={`shrink-0 transition-colors ${
+                      checked ? 'text-[var(--sapphire)]' : 'text-[var(--muted)]'
+                    }`}
+                    aria-hidden
                   />
-                  <item.icon size={16} className="shrink-0 text-[var(--muted)]" aria-hidden />
-                  <span className="flex-1 text-[var(--text)]">{item.label}</span>
+                  {/* label */}
+                  <span
+                    className={`flex-1 text-sm font-medium ${
+                      checked ? 'text-[var(--text)]' : 'text-[var(--muted)]'
+                    }`}
+                  >
+                    {item.label}
+                  </span>
                   {locked ? (
-                    <span className="text-[10px] uppercase tracking-wide text-[var(--muted)]">Always on</span>
+                    <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
+                      Always on
+                    </span>
                   ) : null}
-                </label>
+                </button>
               </li>
             )
           })}
         </ul>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" className="btn" onClick={showAll}>
+        {/* footer */}
+        <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-5 py-3">
+          <button
+            type="button"
+            className="text-xs font-medium text-[var(--sapphire)] hover:underline"
+            onClick={showAll}
+          >
             Show all
           </button>
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn btn-primary" onClick={onClose}>
             Done
           </button>
         </div>
