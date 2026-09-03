@@ -157,8 +157,8 @@ export function CashFlowPage() {
               />
             </ChartCard>
             <ChartCard
-              title="SMS account balances"
-              subtitle="Last balance from SMS — may be incomplete"
+              title="Account balances"
+              subtitle="Latest from SMS, email, or statements"
             >
               <HorizontalBars
                 data={data.accounts.map((a) => ({
@@ -169,7 +169,8 @@ export function CashFlowPage() {
               />
               {data.accounts[0]?.as_of ? (
                 <p className="mt-2 text-[11px] text-[var(--muted)]">
-                  SMS parsing last ran: {new Date(data.accounts[0].as_of).toLocaleString('en-IN')}
+                  Latest balance as of {new Date(data.accounts[0].as_of).toLocaleString('en-IN')}
+                  {data.accounts[0]?.note ? ` · ${data.accounts[0].note}` : ''}
                 </p>
               ) : null}
             </ChartCard>

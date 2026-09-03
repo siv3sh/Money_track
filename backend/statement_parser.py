@@ -491,10 +491,28 @@ def _looks_like_ledger_statement(content: str) -> bool:
     return has_header and has_date_rows
 
 
+def extract_statement_account_last4(content: str) -> Optional[str]:
+    """Pull account last-4 from statement header (A/C No, Account Number, etc.)."""
+    blob = content or ""
+    patterns = (
+        r"A/?C\s*No\.?\s*[:\-]?\s*(\d{6,})",
+        r"Account\s*(?:No\.?|Number|#)\s*[:\-]?\s*(\d{6,})",
+        r"A/?C\s*[:\-]?\s*(\d{6,})",
+    )
+    for pat in patterns:
+        m = re.search(pat, blob, re.I)
+        if m:
+            digits = re.sub(r"\D", "", m.group(1))
+            if len(digits) >= 4:
+                return digits[-4:]
+    return None
+
+
 def parse_ledger_statement_text(
     content: str,
     *,
     bank: Optional[str] = None,
+    account_last4: Optional[str] = None,
 ) -> list[tuple[Transaction, datetime]]:
     """
     Parse Indian savings-account PDF text where columns collapse to:
@@ -599,10 +617,15 @@ def parse_ledger_statement_text(
                 txn_type = "debit"
 
         merchant = clean_merchant_from_ledger(body)
+        last4 = account_last4
+        if not last4:
+            acct = re.search(r"(?:a/?c|acct|account|card)\D{0,12}(\d{4})\b", body, re.I)
+            if acct:
+                last4 = acct.group(1)
         txn: Transaction = {
             "type": txn_type,
             "amount": amount,
-            "account_last4": None,
+            "account_last4": last4,
             "card_type": "upi" if "/upi/" in body_l or " upi" in body_l else "bank_account",
             "merchant": merchant,
             "balance": balance,
@@ -658,7 +681,11 @@ def parse_statement_text(
     Also supports Indian ledger PDF text (DATE / PARTICULARS / WITHDRAWALS / DEPOSITS / BALANCE).
     """
     if _looks_like_ledger_statement(content):
-        ledger = parse_ledger_statement_text(content, bank=bank)
+        ledger = parse_ledger_statement_text(
+            content,
+            bank=bank,
+            account_last4=extract_statement_account_last4(content),
+        )
         if ledger:
             return ledger
 

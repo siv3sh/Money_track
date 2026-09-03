@@ -41,7 +41,9 @@ export function WealthPage() {
   const liquidHint =
     o?.liquid_source === 'indmoney'
       ? 'From INDmoney savings'
-      : 'From SMS balances (incomplete)'
+      : o?.liquid_source === 'balances'
+        ? 'From SMS / email / statement balances'
+        : 'From SMS balances (incomplete)'
 
   const income = o?.total_credit || 0
   const ratioSeries =
@@ -418,14 +420,14 @@ export function WealthPage() {
           </div>
 
           <ChartCard
-            title="SMS account balances"
-            subtitle="Last balance from SMS — not your full cash picture"
+            title="Account balances"
+            subtitle="Latest closing balance from SMS, email, or imported statements"
             className="mb-5"
             action={<Landmark size={14} className="text-[var(--muted)]" />}
           >
             {!data?.accounts?.length ? (
               <p className="py-12 text-center text-sm text-[var(--muted)]">
-                No balance fields found in SMS yet
+                No balance found yet — import a statement or wait for an SMS with Avl Bal / A/c Bal
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -447,7 +449,11 @@ export function WealthPage() {
                           <p className="text-xs text-[var(--muted)]">
                             ••{a.account_last4}
                             {a.incomplete ? ' · incomplete' : ''}
+                            {a.source ? ` · ${a.source}` : ''}
                           </p>
+                          {a.note ? (
+                            <p className="mt-0.5 text-[10px] text-[var(--muted)]">{a.note}</p>
+                          ) : null}
                         </td>
                         <td className="px-2 py-2.5 text-right font-semibold tabular-nums text-[var(--credit)]">
                           {formatINR(a.balance)}
@@ -458,7 +464,7 @@ export function WealthPage() {
                   <tfoot>
                     <tr className="border-t border-[var(--border)]">
                       <td className="px-2 py-2.5 text-xs font-medium text-[var(--muted)]">
-                        SMS snapshot total
+                        Balance snapshot total
                       </td>
                       <td className="px-2 py-2.5 text-right font-semibold tabular-nums">
                         {formatINR(

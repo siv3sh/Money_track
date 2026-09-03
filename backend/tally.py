@@ -62,17 +62,21 @@ def _iso_day(received: Any) -> str | None:
     return utc.date().isoformat() if utc else None
 
 
-def _latest_balances(transactions: Collection) -> list[dict[str, Any]]:
+def _latest_balances(transactions: Collection, *, user_id: Any = None) -> list[dict[str, Any]]:
+    match: dict[str, Any] = {"balance": {"$ne": None}, "card_type": {"$ne": "wallet"}}
+    if user_id is not None:
+        match["user_id"] = user_id
     rows = list(
         transactions.aggregate(
             [
-                {"$match": {"balance": {"$ne": None}, "card_type": {"$ne": "wallet"}}},
-                {"$sort": {"received_at": -1}},
+                {"$match": match},
+                {"$sort": {"received_at": -1, "_id": -1}},
                 {
                     "$group": {
                         "_id": {"bank": "$bank", "last4": "$account_last4"},
                         "balance": {"$first": "$balance"},
                         "as_of": {"$first": "$received_at"},
+                        "source": {"$first": {"$ifNull": ["$source", "sms"]}},
                     }
                 },
             ]
@@ -87,6 +91,7 @@ def _latest_balances(transactions: Collection) -> list[dict[str, Any]]:
                 "account_last4": key.get("last4"),
                 "balance": round(float(r.get("balance") or 0), 2),
                 "as_of": _iso_day(r.get("as_of")),
+                "source": r.get("source") or "sms",
             }
         )
     out.sort(key=lambda x: -x["balance"])
@@ -353,7 +358,7 @@ def compute_tally(
     else:
         status = "makes_sense"
 
-    balances = _latest_balances(transactions)
+    balances = _latest_balances(transactions, user_id=user_id)
     balance_total = round(sum(b["balance"] for b in balances), 2)
 
     issues = [

@@ -21,8 +21,19 @@ class Transaction(TypedDict):
 
 AMOUNT_RE = re.compile(r"(?:Rs\.?|INR|₹)\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE)
 ACCOUNT_RE = re.compile(r"(?:a/?c|acct|account|card)\D{0,20}(\d{4})\b", re.IGNORECASE)
+# Indian bank SMS / email closing balances (not credit-card "Avl Lmt")
 BALANCE_RE = re.compile(
-    r"(?:avl\.?\s?bal|available\s?bal(?:ance)?|bal(?:ance)?)\D{0,12}(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
+    r"(?:"
+    r"avl\.?\s*bal(?:ance)?"
+    r"|available\s*(?:a/?c\s*)?bal(?:ance)?"
+    r"|a/?c\s*bal(?:ance)?"
+    r"|acct(?:ount)?\s*bal(?:ance)?"
+    r"|cleared\s*bal(?:ance)?"
+    r"|closing\s*bal(?:ance)?"
+    r"|total\s*avl\.?\s*bal(?:ance)?"
+    r"|(?<![a-z])bal(?:ance)?"
+    r")"
+    r"\s*(?:is|:)?\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
     re.IGNORECASE,
 )
 # Credit-card available limit — ICICI uses "Avl Lmt:", others use "limit"
@@ -474,6 +485,20 @@ def extract_credit_card_available_limit(text: str) -> Optional[float]:
     return _to_float(m.group(1)) if m else None
 
 
+def extract_balance_from_text(text: str, *, prefer_limit_for_card: bool = False) -> Optional[float]:
+    """
+    Pull closing/available account balance from SMS/email/statement narration.
+    Prefer true balance phrases; optionally fall back to credit-card available limit.
+    """
+    blob = text or ""
+    bal_match = BALANCE_RE.search(blob)
+    if bal_match:
+        return _to_float(bal_match.group(1))
+    if prefer_limit_for_card:
+        return extract_credit_card_available_limit(blob)
+    return None
+
+
 def _detect_card_type(text_lower: str) -> Optional[str]:
     # Wallet/FASTag debits first — recharge was already counted as bank spend
     if any(h in text_lower for h in WALLET_HINTS):
@@ -665,17 +690,13 @@ def _parse_sms_regex(sender: str, body: str) -> Optional[Transaction]:
         return None
 
     account_match = ACCOUNT_RE.search(text)
-    balance_match = BALANCE_RE.search(text)
-    limit_match = LIMIT_RE.search(text)
-    bal_value = None
-    if balance_match:
-        bal_value = _to_float(balance_match.group(1))
-    elif limit_match:
-        bal_value = _to_float(limit_match.group(1))
-
     card_type = _detect_card_type(text_lower)
     if cc_kind == "purchase":
         card_type = "credit_card"
+    bal_value = extract_balance_from_text(
+        text,
+        prefer_limit_for_card=(card_type == "credit_card" or cc_kind == "purchase"),
+    )
 
     txn: Transaction = {
         "type": txn_type,
@@ -747,12 +768,17 @@ def _txn_from_llm_obj(obj: Any, sender: str, raw_text: str) -> Optional[Transact
         card = "credit_card"
     merchant = obj.get("merchant")
     merchant_s = str(merchant).strip()[:60] if merchant else None
-    # Prefer Avl Lmt from narration when LLM omits balance
+    # Prefer balance (then Avl Lmt) from narration when LLM omits balance
     bal = _coerce_llm_number(obj.get("balance"), allow_zero=True)
     if bal is None:
-        lim = LIMIT_RE.search(raw_text or "")
-        if lim:
-            bal = _to_float(lim.group(1))
+        bal = extract_balance_from_text(
+            raw_text or "",
+            prefer_limit_for_card=(card == "credit_card" or cc_kind == "purchase"),
+        )
+    if not last4_s:
+        acct = ACCOUNT_RE.search(raw_text or "")
+        if acct:
+            last4_s = acct.group(1)
     txn: Transaction = {
         "type": txn_type,
         "amount": amount,
@@ -773,7 +799,9 @@ def _parse_sms_llm(sender: str, body: str) -> Optional[Transaction]:
         provider = get_provider()
         user = (
             "Parse this message into one JSON object with keys: "
-            "is_transaction, type, amount, merchant, account_last4, card_type, balance, bank.\n"
+            "is_transaction, type, amount, merchant, account_last4, card_type, balance, bank. "
+            "balance = available/closing account balance when the SMS mentions it "
+            "(Avl Bal / Available Balance / A/c Bal / Closing Balance).\n"
             f"sender: {sender}\nmessage: {body}"
         )
         raw = provider.complete(_SMS_LLM_SYSTEM, user, temperature=0.0)

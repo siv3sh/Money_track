@@ -446,10 +446,19 @@ def build_analytics(
                 onetime_amount += amt
         recurring_merchants.sort(key=lambda x: -x["amount"])
 
-    # Account balances (latest non-null balance per bank+last4)
+    # Account balances (latest non-null balance per bank+last4).
+    # Scope to this user and ignore the chart date range so Wealth shows the
+    # newest SMS/statement balance even when viewing another month.
+    bal_match: dict[str, Any] = {
+        "user_id": user_id,
+        "balance": {"$ne": None},
+        "card_type": {"$ne": "wallet"},
+    }
+    if banks:
+        bal_match["bank"] = {"$in": banks}
     bal_pipeline = [
-        {"$match": {"balance": {"$ne": None}}},
-        {"$sort": {"received_at": -1}},
+        {"$match": bal_match},
+        {"$sort": {"received_at": -1, "_id": -1}},
         {
             "$group": {
                 "_id": {
@@ -458,6 +467,8 @@ def build_analytics(
                 },
                 "balance": {"$first": "$balance"},
                 "as_of": {"$first": "$received_at"},
+                "source": {"$first": {"$ifNull": ["$source", "sms"]}},
+                "card_type": {"$first": {"$ifNull": ["$card_type", "bank_account"]}},
             }
         },
     ]
@@ -467,26 +478,42 @@ def build_analytics(
         as_of = r.get("as_of")
         bank = str(key.get("bank") or "Unknown")
         last4 = str(key.get("last4") or "????")
+        src = str(r.get("source") or "sms")
+        card = str(r.get("card_type") or "bank_account")
         incomplete = bank.lower() == "unknown" or last4 in {"????", "", "none", "null"}
+        if card == "credit_card":
+            note = "Latest available credit limit from card alerts"
+        elif src == "statement":
+            note = "Latest closing balance from imported statement"
+        elif src == "email":
+            note = "Latest balance from bank alert email"
+        else:
+            note = (
+                "Last balance from SMS — may be incomplete or stale"
+                if incomplete
+                else "Last balance parsed from SMS"
+            )
         accounts.append(
             {
                 "bank": bank,
                 "account_last4": last4,
                 "balance": float(r.get("balance") or 0),
                 "as_of": as_of.isoformat() if isinstance(as_of, datetime) else None,
-                "source": "sms",
+                "source": src,
                 "incomplete": incomplete,
-                "note": (
-                    "Last balance from SMS — may be incomplete or stale"
-                    if incomplete
-                    else "Last balance parsed from SMS"
-                ),
+                "note": note,
             }
         )
     accounts.sort(key=lambda x: -x["balance"])
-    sms_liquid_total = sum(a["balance"] for a in accounts)
+    # Prefer bank_account / upi / statement balances for liquid cash
+    cash_accounts = [
+        a
+        for a in accounts
+        if "credit limit" not in (a.get("note") or "").lower()
+    ]
+    sms_liquid_total = sum(a["balance"] for a in cash_accounts)
     liquid_total = sms_liquid_total
-    liquid_source = "sms"
+    liquid_source = "balances"
 
     # Investments — prefer manual portfolio; only scan SMS invests when needed
     inv_match = {**match, "category": "Investments"}
