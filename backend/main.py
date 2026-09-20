@@ -139,12 +139,30 @@ app = FastAPI(
     openapi_url="/openapi.json" if (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower() in {"development", "dev", "local", "test"} else None,
 )
 
-MONGO_URI = os.environ["MONGO_URI"]
-client = MongoClient(
-    MONGO_URI,
-    serverSelectionTimeoutMS=10000,
-    tlsCAFile=certifi.where(),
-)
+DATABASE_URL = (os.getenv("DATABASE_URL") or os.getenv("SUPABASE_DB_URL") or "").strip()
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip()
+SUPABASE_SECRET_KEY = (
+    os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
+).strip()
+MONGO_URI = (os.getenv("MONGO_URI") or "").strip()
+if DATABASE_URL:
+    from pg_store import PostgresMongoClient
+
+    client = PostgresMongoClient(DATABASE_URL)
+elif SUPABASE_URL and SUPABASE_SECRET_KEY:
+    from pg_store import SupabaseRestClient
+
+    client = SupabaseRestClient(SUPABASE_URL, SUPABASE_SECRET_KEY)
+elif MONGO_URI:
+    client = MongoClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=10000,
+        tlsCAFile=certifi.where(),
+    )
+else:
+    raise RuntimeError(
+        "Set SUPABASE_URL + SUPABASE_SECRET_KEY, DATABASE_URL, or MONGO_URI"
+    )
 db = client["money_tracker"]
 transactions = db["transactions"]
 webhook_events = db["webhook_events"]

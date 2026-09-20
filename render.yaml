@@ -6,6 +6,12 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: MONGO_URI
         sync: false
       - key: API_KEY

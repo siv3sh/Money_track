@@ -1,13 +1,13 @@
 # SMS Money Tracker
 
-Personal finance tracker that captures bank/UPI SMS from your iPhone (via Shortcuts), parses debit/credit details with the tested `parser.py`, stores them in MongoDB, and shows them on a web dashboard.
+Personal finance tracker that captures bank/UPI SMS from your iPhone (via Shortcuts), parses debit/credit details with the tested `parser.py`, stores them in Supabase Postgres, and shows them on a web dashboard.
 
 Single-user — webhook protected by an API key only.
 
 ```
-iPhone Shortcuts  →  POST /sms-webhook  →  parser.py  →  MongoDB
-                                                      ↓
-                                              React dashboard
+iPhone Shortcuts  →  POST /sms-webhook  →  parser.py  →  Supabase Postgres
+                                                                    ↓
+                                                            React dashboard
 ```
 
 ## Project layout
@@ -25,15 +25,23 @@ money_track/
 └── README.md
 ```
 
-## 1. MongoDB (Atlas free tier)
+## 1. Database (Supabase Postgres)
 
-1. Create an account at [mongodb.com/atlas](https://www.mongodb.com/atlas).
-2. Create a **free (M0)** cluster.
-3. **Database Access** → add a user.
-4. **Network Access** → allow your IP (or `0.0.0.0/0` for a trusted personal project).
-5. Copy the connection URI into `backend/.env` as `MONGO_URI`.
+1. Open your Supabase project → **Connect** → copy the **Session pooler** URI (port 5432, IPv4-friendly for Render).
+2. Put it in `backend/.env` as `DATABASE_URL`.
+3. Tables live in the isolated `money_track` schema (`docs` JSONB store). Existing `public` tables are not used.
 
-Local alternative:
+To copy data from MongoDB Atlas:
+
+```bash
+cd backend
+python scripts/migrate_mongo_to_supabase.py --dump /tmp/money_track_dump.json
+DATABASE_URL='postgresql://...' python scripts/migrate_mongo_to_supabase.py --load /tmp/money_track_dump.json --replace
+```
+
+MongoDB remains a fallback if `DATABASE_URL` is unset and `MONGO_URI` is set.
+
+Local Mongo alternative:
 
 ```bash
 docker compose up -d mongo
@@ -47,7 +55,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # set MONGO_URI + API_KEY
+cp .env.example .env   # set DATABASE_URL + API_KEY
 uvicorn main:app --reload --port 8000
 ```
 
@@ -110,7 +118,7 @@ Repo root includes a `Dockerfile` and `render.yaml` so Render can build without 
 
 1. New **Web Service** → connect `siv3sh/Money_track`
 2. Runtime: **Docker** (Dockerfile at repo root is auto-detected)
-3. Set env vars: `MONGO_URI`, `API_KEY`, `CORS_ORIGINS` (include your Vercel URL)
+3. Set env vars: `DATABASE_URL` (Supabase session pooler URI), `API_KEY`, `CORS_ORIGINS` (include your Vercel URL)
 4. Health check path: `/health`
 
 Or use Blueprint: Render → **New Blueprint** → select this repo (`render.yaml`).

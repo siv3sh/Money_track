@@ -1,6 +1,8 @@
 fastapi
 uvicorn[standard]
 pymongo
+psycopg[binary]
+psycopg-pool
 certifi
 pydantic
 python-dotenv
