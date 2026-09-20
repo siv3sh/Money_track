@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Iterable, Iterator
 
 import httpx
@@ -14,9 +15,12 @@ from psycopg.errors import UniqueViolation
 from pg_query import (
     aggregate as run_aggregate,
     apply_update,
+    compile_query,
     doc_id,
+    fmt_dt,
     from_jsonable,
     match_doc,
+    NUMERIC_SORT_FIELDS,
     project_doc,
     sort_docs,
     to_jsonable,
@@ -36,6 +40,7 @@ except ImportError:  # pragma: no cover
 
 DESCENDING = -1
 ASCENDING = 1
+DOCS_TABLE = "public.docs"
 
 
 @dataclass
@@ -85,6 +90,147 @@ def _index_ident(collection: str, keys: list[tuple[str, int]], unique: bool) -> 
     return ident[:63]
 
 
+def _rest_literal(value: Any) -> str:
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, datetime):
+        return fmt_dt(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    text = str(value)
+    if any(ch in text for ch in ",() ") or text == "":
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return text
+
+
+def _rest_field(field: str) -> str:
+    if field in {"_id", "id"}:
+        return "id"
+    if field == "user_id":
+        return "user_id"
+    return f"doc->>{field}"
+
+
+def _sql_field(field: str) -> str:
+    if field in {"_id", "id"}:
+        return "id"
+    if field == "user_id":
+        return "user_id"
+    return f"(doc->>'{field}')"
+
+
+def _ilike_sql(pattern: str) -> str:
+    parts = str(pattern).split("*")
+    escaped = [
+        part.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") for part in parts
+    ]
+    return "%".join(escaped)
+
+
+def _order_rest(sort: list[tuple[str, int]] | None) -> str | None:
+    if not sort:
+        return None
+    bits: list[str] = []
+    for field, direction in sort:
+        if not field.replace("_", "").isalnum():
+            return None
+        suffix = "desc" if direction < 0 else "asc"
+        if field in NUMERIC_SORT_FIELDS:
+            bits.append(f"doc->{field}.{suffix}")
+        elif field in {"_id", "id"}:
+            bits.append(f"id.{suffix}")
+        elif field == "user_id":
+            bits.append(f"user_id.{suffix}")
+        else:
+            bits.append(f"doc->>{field}.{suffix}.nullslast")
+    return ",".join(bits)
+
+
+def _order_sql(sort: list[tuple[str, int]] | None) -> str | None:
+    if not sort:
+        return None
+    bits: list[str] = []
+    for field, direction in sort:
+        if not field.replace("_", "").isalnum():
+            return None
+        suffix = "DESC" if direction < 0 else "ASC"
+        if field in NUMERIC_SORT_FIELDS:
+            bits.append(f"(doc->>'{field}')::numeric {suffix} NULLS LAST")
+        else:
+            bits.append(f"{_sql_field(field)} {suffix} NULLS LAST")
+    return ", ".join(bits)
+
+
+def _pred_sql(pred: Any) -> tuple[str, list[Any]]:
+    col = _sql_field(pred.field)
+    op = pred.op
+    if op == "eq":
+        if pred.value is None:
+            return f" AND {col} IS NULL", []
+        return f" AND {col} = %s", [str(pred.value) if not isinstance(pred.value, (datetime, bool)) else pred.value]
+    if op == "neq":
+        if pred.value is None:
+            return f" AND {col} IS NOT NULL", []
+        return f" AND ({col} IS NULL OR {col} <> %s)", [_rest_literal(pred.value).strip('"')]
+    if op == "in":
+        values = [str(v) for v in pred.value]
+        return f" AND {col} = ANY(%s)", [values]
+    if op == "ilike":
+        return f" AND {col} ILIKE %s ESCAPE '\\'", [_ilike_sql(pred.value)]
+    mapped = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
+    raw = pred.value
+    if isinstance(raw, datetime):
+        raw = fmt_dt(raw)
+    return f" AND {col} {mapped} %s", [str(raw)]
+
+
+def _sql_predicates(compiled: Any) -> tuple[str, list[Any]]:
+    sql = ""
+    params: list[Any] = []
+    for pred in compiled.predicates:
+        chunk, chunk_params = _pred_sql(pred)
+        sql += chunk
+        params.extend(chunk_params)
+    for group in compiled.or_groups:
+        parts: list[str] = []
+        for pred in group:
+            chunk, chunk_params = _pred_sql(pred)
+            parts.append(chunk.removeprefix(" AND "))
+            params.extend(chunk_params)
+        if parts:
+            sql += " AND (" + " OR ".join(parts) + ")"
+    return sql, params
+
+
+def _rest_pred(pred: Any) -> tuple[str, str]:
+    key = _rest_field(pred.field)
+    op = pred.op
+    if op == "eq":
+        if pred.value is None:
+            return key, "is.null"
+        return key, f"eq.{_rest_literal(pred.value)}"
+    if op == "neq":
+        if pred.value is None:
+            return key, "not.is.null"
+        return key, f"neq.{_rest_literal(pred.value)}"
+    if op == "in":
+        joined = ",".join(_rest_literal(v) for v in pred.value)
+        return key, f"in.({joined})"
+    if op == "ilike":
+        return key, f"ilike.{_rest_literal(pred.value)}"
+    return key, f"{op}.{_rest_literal(pred.value)}"
+
+
+def _rest_or_group(group: list[Any]) -> str:
+    bits: list[str] = []
+    for pred in group:
+        key, expr = _rest_pred(pred)
+        bits.append(f"{key}.{expr}")
+    return "(" + ",".join(bits) + ")"
+
+
 class Cursor:
     def __init__(
         self,
@@ -115,12 +261,12 @@ class Cursor:
         return self
 
     def _rows(self) -> list[dict[str, Any]]:
-        docs = self._collection._load(self._query)
-        docs = sort_docs(docs, self._sort)
-        if self._skip:
-            docs = docs[self._skip :]
-        if self._limit and self._limit > 0:
-            docs = docs[: self._limit]
+        docs = self._collection._load(
+            self._query,
+            sort=self._sort,
+            skip=self._skip,
+            limit=self._limit,
+        )
         if self._projection:
             docs = [project_doc(d, self._projection) for d in docs]
         return docs
@@ -141,28 +287,69 @@ class Collection:
         payload = raw if isinstance(raw, dict) else dict(raw)
         return from_jsonable(payload)
 
-    def _load(self, query: dict[str, Any] | None) -> list[dict[str, Any]]:
+    def _load(
+        self,
+        query: dict[str, Any] | None,
+        *,
+        sort: list[tuple[str, int]] | None = None,
+        skip: int = 0,
+        limit: int = 0,
+    ) -> list[dict[str, Any]]:
         query = query or {}
+        compiled = compile_query(query)
+        order_ok = (not sort) or (_order_rest(sort) is not None and _order_sql(sort) is not None)
+        push_page = bool(compiled.complete and order_ok and (sort or skip or limit))
         if getattr(self._client, "backend", "sql") == "rest":
-            rows = self._client._select(self.name, query)
+            rows = self._client._select(
+                self.name,
+                compiled,
+                sort=sort if push_page else None,
+                skip=skip if push_page else 0,
+                limit=limit if push_page else 0,
+            )
             docs = [self._decode_row(row) for row in rows]
-            return [d for d in docs if match_doc(d, query)]
-        sql = "SELECT doc FROM money_track.docs WHERE collection = %s"
+        else:
+            docs = self._sql_select(
+                compiled,
+                sort=sort if push_page else None,
+                skip=skip if push_page else 0,
+                limit=limit if push_page else 0,
+            )
+        if not compiled.complete:
+            docs = [d for d in docs if match_doc(d, query)]
+            docs = sort_docs(docs, sort)
+            if skip:
+                docs = docs[skip:]
+            if limit and limit > 0:
+                docs = docs[:limit]
+            return docs
+        return docs
+
+    def _sql_select(
+        self,
+        compiled: Any,
+        *,
+        sort: list[tuple[str, int]] | None,
+        skip: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        sql = f"SELECT doc FROM {DOCS_TABLE} WHERE collection = %s"
         params: list[Any] = [self.name]
-        if "_id" in query and not isinstance(query["_id"], dict):
-            sql += " AND id = %s"
-            params.append(str(query["_id"]))
-        elif isinstance(query.get("_id"), dict) and "$in" in query["_id"]:
-            ids = [str(v) for v in query["_id"]["$in"]]
-            sql += " AND id = ANY(%s)"
-            params.append(ids)
-        if "user_id" in query and not isinstance(query["user_id"], dict):
-            sql += " AND user_id = %s"
-            params.append(str(query["user_id"]))
+        extra_sql, extra_params = _sql_predicates(compiled)
+        sql += extra_sql
+        params.extend(extra_params)
+        order = _order_sql(sort)
+        if order:
+            sql += f" ORDER BY {order}"
+        if limit and limit > 0:
+            sql += " LIMIT %s"
+            params.append(int(limit))
+        if skip:
+            sql += " OFFSET %s"
+            params.append(int(skip))
         with self._client.pool.connection() as conn:
             rows = conn.execute(sql, params).fetchall()
-        docs = [self._decode_row(row[0]) for row in rows]
-        return [d for d in docs if match_doc(d, query)]
+        return [self._decode_row(row[0]) for row in rows]
 
     def _encoded(self, doc: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         stored = dict(doc)
@@ -179,7 +366,7 @@ class Collection:
             return
         conn.execute(
             """
-            INSERT INTO money_track.docs (collection, id, doc)
+            INSERT INTO public.docs (collection, id, doc)
             VALUES (%s, %s, %s)
             """,
             (self.name, ident, Jsonb(encoded)),
@@ -192,7 +379,7 @@ class Collection:
             return
         conn.execute(
             """
-            INSERT INTO money_track.docs (collection, id, doc)
+            INSERT INTO public.docs (collection, id, doc)
             VALUES (%s, %s, %s)
             ON CONFLICT (collection, id) DO UPDATE
             SET doc = EXCLUDED.doc
@@ -377,7 +564,7 @@ class Collection:
         else:
             with self._client.pool.connection() as conn:
                 conn.execute(
-                    "DELETE FROM money_track.docs WHERE collection = %s AND id = %s",
+                    "DELETE FROM {table} WHERE collection = %s AND id = %s".format(table=DOCS_TABLE),
                     (self.name, ident),
                 )
         return DeleteResult(deleted_count=1)
@@ -392,12 +579,23 @@ class Collection:
         else:
             with self._client.pool.connection() as conn:
                 conn.execute(
-                    "DELETE FROM money_track.docs WHERE collection = %s AND id = ANY(%s)",
+                    f"DELETE FROM {DOCS_TABLE} WHERE collection = %s AND id = ANY(%s)",
                     (self.name, ids),
                 )
         return DeleteResult(deleted_count=len(ids))
 
     def count_documents(self, filter: dict[str, Any] | None = None) -> int:
+        compiled = compile_query(filter or {})
+        if compiled.complete:
+            if self._is_rest():
+                return self._client._count(self.name, compiled)
+            extra_sql, extra_params = _sql_predicates(compiled)
+            with self._client.pool.connection() as conn:
+                row = conn.execute(
+                    f"SELECT COUNT(*) FROM {DOCS_TABLE} WHERE collection = %s{extra_sql}",
+                    [self.name, *extra_params],
+                ).fetchone()
+            return int(row[0] if row else 0)
         return len(self._load(filter))
 
     def estimated_document_count(self) -> int:
@@ -405,7 +603,7 @@ class Collection:
             return self._client._count(self.name)
         with self._client.pool.connection() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM money_track.docs WHERE collection = %s",
+                f"SELECT COUNT(*) FROM {DOCS_TABLE} WHERE collection = %s",
                 (self.name,),
             ).fetchone()
         return int(row[0] if row else 0)
@@ -442,7 +640,7 @@ class Collection:
             where.append(f"COALESCE(doc->>'{first}', '') <> ''")
         sql = (
             f"CREATE {unique_sql}INDEX IF NOT EXISTS {name} "
-            f"ON money_track.docs ({cols}) WHERE {' AND '.join(where)}"
+            f"ON {DOCS_TABLE} ({cols}) WHERE {' AND '.join(where)}"
         )
         if self._is_rest():
             return name
@@ -459,7 +657,7 @@ class Collection:
         ident = name.replace("-", "_")
         try:
             with self._client.pool.connection() as conn:
-                conn.execute(f"DROP INDEX IF EXISTS money_track.{ident}")
+                conn.execute(f"DROP INDEX IF EXISTS public.{ident}")
         except Exception:
             return
 
@@ -507,6 +705,7 @@ class SupabaseRestClient:
         self.base = url.rstrip("/") + "/rest/v1"
         self.http = httpx.Client(
             timeout=60.0,
+            limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
             headers={
                 "apikey": secret_key,
                 "Authorization": f"Bearer {secret_key}",
@@ -529,34 +728,59 @@ class SupabaseRestClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"Supabase REST {resp.status_code}: {resp.text[:500]}")
 
-    def _select(self, collection: str, query: dict[str, Any]) -> list[dict[str, Any]]:
-        params: dict[str, str] = {
-            "select": "doc",
-            "collection": f"eq.{collection}",
-        }
-        if "_id" in query and not isinstance(query["_id"], dict):
-            params["id"] = f"eq.{query['_id']}"
-        elif isinstance(query.get("_id"), dict) and "$in" in query["_id"]:
-            ids = ",".join(str(v) for v in query["_id"]["$in"])
-            params["id"] = f"in.({ids})"
-        if "user_id" in query and not isinstance(query["user_id"], dict):
-            params["user_id"] = f"eq.{query['user_id']}"
+    def _filter_params(self, collection: str, compiled: Any) -> list[tuple[str, str]]:
+        params: list[tuple[str, str]] = [("collection", f"eq.{collection}")]
+        for pred in compiled.predicates:
+            params.append(_rest_pred(pred))
+        for group in compiled.or_groups:
+            params.append(("or", _rest_or_group(group)))
+        return params
+
+    def _select(
+        self,
+        collection: str,
+        compiled: Any,
+        *,
+        sort: list[tuple[str, int]] | None = None,
+        skip: int = 0,
+        limit: int = 0,
+    ) -> list[dict[str, Any]]:
+        params: list[tuple[str, str]] = [("select", "doc"), *self._filter_params(collection, compiled)]
+        order = _order_rest(sort)
+        if order:
+            params.append(("order", order))
         out: list[dict[str, Any]] = []
-        start = 0
-        page = 1000
+        start = max(int(skip), 0)
+        page = int(limit) if limit and limit > 0 else 1000
         while True:
             resp = self.http.get(
                 f"{self.base}/{self.table}",
                 params=params,
-                headers={"Range": f"{start}-{start + page - 1}", "Prefer": "count=exact"},
+                headers={"Range": f"{start}-{start + page - 1}"},
             )
             self._raise(resp)
             rows = resp.json()
             out.extend(r.get("doc") for r in rows if r.get("doc") is not None)
-            if len(rows) < page:
+            if (limit and limit > 0) or len(rows) < page:
                 break
             start += page
         return out
+
+    def _count(self, collection: str, compiled: Any | None = None) -> int:
+        compiled = compiled if compiled is not None else compile_query({})
+        params: list[tuple[str, str]] = [("select", "id"), *self._filter_params(collection, compiled)]
+        resp = self.http.get(
+            f"{self.base}/{self.table}",
+            params=params,
+            headers={"Range": "0-0", "Prefer": "count=exact"},
+        )
+        self._raise(resp)
+        cr = resp.headers.get("content-range") or ""
+        if "/" in cr:
+            total = cr.split("/")[-1]
+            if total.isdigit():
+                return int(total)
+        return 0
 
     def _upsert(self, collection: str, ident: str, encoded: dict[str, Any], *, merge: bool) -> None:
         payload = {
@@ -610,17 +834,3 @@ class SupabaseRestClient:
             headers={"Prefer": "return=minimal,resolution=merge-duplicates"},
         )
         self._raise(resp)
-
-    def _count(self, collection: str) -> int:
-        resp = self.http.get(
-            f"{self.base}/{self.table}",
-            params={"select": "id", "collection": f"eq.{collection}"},
-            headers={"Range": "0-0", "Prefer": "count=exact"},
-        )
-        self._raise(resp)
-        cr = resp.headers.get("content-range") or ""
-        if "/" in cr:
-            total = cr.split("/")[-1]
-            if total.isdigit():
-                return int(total)
-        return 0

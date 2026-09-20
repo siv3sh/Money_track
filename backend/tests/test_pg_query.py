@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 
-from pg_query import aggregate, apply_update, from_jsonable, match_doc, to_jsonable
+from pg_query import aggregate, apply_update, compile_query, from_jsonable, match_doc, to_jsonable
 
 
 class MatchDocTests(unittest.TestCase):
@@ -131,6 +131,59 @@ class CodecTests(unittest.TestCase):
         nxt = apply_update(doc, {"$set": {"active": False}, "$unset": {"token": ""}}, is_insert=False)
         self.assertFalse(nxt["active"])
         self.assertNotIn("token", nxt)
+
+
+class CompileQueryTests(unittest.TestCase):
+    def test_list_endpoint_is_complete(self):
+        uid = ObjectId()
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        compiled = compile_query(
+            {
+                "user_id": uid,
+                "type": "debit",
+                "card_type": "upi",
+                "received_at": {"$gte": start},
+                "bank": {"$regex": "^HDFC$", "$options": "i"},
+            }
+        )
+        self.assertTrue(compiled.complete)
+        ops = {(p.field, p.op) for p in compiled.predicates}
+        self.assertIn(("user_id", "eq"), ops)
+        self.assertIn(("type", "eq"), ops)
+        self.assertIn(("received_at", "gte"), ops)
+        self.assertIn(("bank", "ilike"), ops)
+
+    def test_search_or_is_complete(self):
+        compiled = compile_query(
+            {
+                "user_id": ObjectId(),
+                "$or": [
+                    {"merchant": {"$regex": "ama", "$options": "i"}},
+                    {"raw_text": {"$regex": "ama", "$options": "i"}},
+                ],
+            }
+        )
+        self.assertTrue(compiled.complete)
+        self.assertEqual(len(compiled.or_groups), 1)
+        self.assertEqual(len(compiled.or_groups[0]), 2)
+
+    def test_amount_and_ne_stay_in_remainder(self):
+        compiled = compile_query(
+            {"user_id": ObjectId(), "amount": {"$gte": 10}, "active": {"$ne": False}}
+        )
+        self.assertFalse(compiled.complete)
+        self.assertIn("amount", compiled.remainder)
+        self.assertIn("active", compiled.remainder)
+        self.assertEqual(compiled.predicates[0].field, "user_id")
+
+
+class RestLiteralTests(unittest.TestCase):
+    def test_email_and_iso_are_unquoted(self):
+        from pg_store import _rest_literal
+
+        self.assertEqual(_rest_literal("siv3sh@gmail.com"), "siv3sh@gmail.com")
+        self.assertEqual(_rest_literal("2026-01-01T00:00:00.000Z"), "2026-01-01T00:00:00.000Z")
+        self.assertTrue(_rest_literal("a,b").startswith('"'))
 
 
 if __name__ == "__main__":

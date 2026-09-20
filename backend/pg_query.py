@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,6 +15,26 @@ _ISO_RE = re.compile(
 )
 OID_KEYS = {"_id", "user_id", "linked_account_id", "txn_id", "primary_user_id"}
 _MISSING = object()
+_SAFE_FIELD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+NUMERIC_SORT_FIELDS = {"amount", "current_value", "outstanding", "balance"}
+
+
+@dataclass(frozen=True)
+class Predicate:
+    field: str
+    op: str
+    value: Any
+
+
+@dataclass
+class CompiledQuery:
+    predicates: list[Predicate] = field(default_factory=list)
+    or_groups: list[list[Predicate]] = field(default_factory=list)
+    remainder: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def complete(self) -> bool:
+        return not self.remainder
 
 
 def fmt_dt(value: datetime) -> str:
@@ -238,6 +259,136 @@ def match_doc(doc: dict[str, Any], query: dict[str, Any] | None) -> bool:
         if missing or not _values_equal(value, spec):
             return False
     return True
+
+
+def _unescape_regex_literal(body: str) -> str | None:
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        if body[i] == "\\" and i + 1 < len(body):
+            out.append(body[i + 1])
+            i += 2
+            continue
+        if body[i] in ".*+?()[]{}|^$":
+            return None
+        out.append(body[i])
+        i += 1
+    return "".join(out)
+
+
+def regex_to_ilike(pattern: str, options: str = "") -> str | None:
+    """Map a simple Mongo regex to a PostgREST/SQL ILIKE pattern, or None."""
+    if not pattern or "x" in (options or ""):
+        return None
+    anchored_start = pattern.startswith("^")
+    anchored_end = pattern.endswith("$") and not pattern.endswith("\\$")
+    body = pattern[1:] if anchored_start else pattern
+    if anchored_end and body.endswith("$"):
+        body = body[:-1]
+    literal = _unescape_regex_literal(body)
+    if literal is None or "*" in literal:
+        return None
+    if not anchored_start:
+        literal = "*" + literal
+    if not anchored_end:
+        literal = literal + "*"
+    return literal
+
+
+def _predicates_for_field(field: str, spec: Any) -> list[Predicate] | None:
+    if field != "_id" and not _SAFE_FIELD.match(field):
+        return None
+    if isinstance(spec, dict) and any(str(k).startswith("$") for k in spec):
+        ops = spec
+        if "$regex" in ops:
+            if any(k not in {"$regex", "$options"} for k in ops):
+                return None
+            ilike = regex_to_ilike(str(ops["$regex"]), str(ops.get("$options") or ""))
+            if ilike is None:
+                return None
+            return [Predicate(field, "ilike", ilike)]
+        if "$exists" in ops or "$ne" in ops or "$nin" in ops:
+            return None
+        if "$eq" in ops and len(ops) == 1:
+            return _predicates_for_field(field, ops["$eq"])
+        if "$in" in ops and len(ops) == 1:
+            expected = ops["$in"]
+            if not isinstance(expected, (list, tuple)) or not expected:
+                return None
+            if any(isinstance(v, (int, float)) and not isinstance(v, bool) for v in expected):
+                return None
+            return [Predicate(field, "in", list(expected))]
+        mapped = {"$gt": "gt", "$gte": "gte", "$lt": "lt", "$lte": "lte"}
+        if ops and all(k in mapped for k in ops):
+            out: list[Predicate] = []
+            for op, expected in ops.items():
+                if isinstance(expected, datetime) or (
+                    isinstance(expected, str) and _ISO_RE.match(str(expected))
+                ):
+                    out.append(Predicate(field, mapped[op], expected))
+                else:
+                    return None
+            return out or None
+        return None
+    if isinstance(spec, (int, float)) and not isinstance(spec, bool):
+        return None
+    return [Predicate(field, "eq", spec)]
+
+
+def compile_query(query: dict[str, Any] | None) -> CompiledQuery:
+    """Split a Mongo filter into PostgREST/SQL predicates plus a remainder."""
+    compiled = CompiledQuery()
+    if not query:
+        return compiled
+    remainder: dict[str, Any] = {}
+    for key, spec in query.items():
+        if key == "$and":
+            if not isinstance(spec, list):
+                remainder[key] = spec
+                continue
+            leftover_and: list[Any] = []
+            for part in spec:
+                if not isinstance(part, dict):
+                    leftover_and.append(part)
+                    continue
+                nested = compile_query(part)
+                compiled.predicates.extend(nested.predicates)
+                compiled.or_groups.extend(nested.or_groups)
+                if nested.remainder:
+                    leftover_and.append(nested.remainder)
+            if leftover_and:
+                remainder[key] = leftover_and
+            continue
+        if key == "$or":
+            if not isinstance(spec, list) or not spec:
+                remainder[key] = spec
+                continue
+            group: list[Predicate] = []
+            ok = True
+            for part in spec:
+                nested = compile_query(part if isinstance(part, dict) else {})
+                if not nested.complete or (len(nested.predicates) + len(nested.or_groups)) != 1:
+                    ok = False
+                    break
+                if nested.or_groups:
+                    ok = False
+                    break
+                group.extend(nested.predicates)
+            if ok and group:
+                compiled.or_groups.append(group)
+            else:
+                remainder[key] = spec
+            continue
+        if key in {"$nor"}:
+            remainder[key] = spec
+            continue
+        preds = _predicates_for_field(key, spec)
+        if preds is None:
+            remainder[key] = spec
+        else:
+            compiled.predicates.extend(preds)
+    compiled.remainder = remainder
+    return compiled
 
 
 def project_doc(doc: dict[str, Any], projection: dict[str, Any] | None) -> dict[str, Any]:
