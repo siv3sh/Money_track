@@ -9,8 +9,8 @@ import {
   type ReactNode,
 } from 'react'
 
-/** Bumped so ledger-first defaults apply for everyone once. */
-const NAV_PREF_KEY = 'tally-nav-visible-v3'
+/** Customer main — core ledger pages only (extras live on `dev`). */
+const NAV_PREF_KEY = 'tally-nav-visible-customer-v1'
 
 export const NAV_PREF_IDS = [
   'dashboard',
@@ -18,34 +18,21 @@ export const NAV_PREF_IDS = [
   'transactions',
   'accounts',
   'import',
-  'cash-flow',
-  'monthly-reports',
-  'wealth',
-  'planning',
-  'ai',
 ] as const
 
 export type NavPrefId = (typeof NAV_PREF_IDS)[number]
 
-export const ALWAYS_VISIBLE_NAV: NavPrefId[] = ['dashboard']
+export const ALWAYS_VISIBLE_NAV: NavPrefId[] = ['dashboard', 'spending', 'transactions']
 
-/** Core ledger loop — advanced pages off until the user opts in. */
 const DEFAULT_VISIBLE: Record<NavPrefId, boolean> = {
   dashboard: true,
   spending: true,
   transactions: true,
   accounts: true,
   import: true,
-  'cash-flow': false,
-  'monthly-reports': false,
-  wealth: false,
-  planning: false,
-  ai: false,
 }
 
-const ALL_VISIBLE: Record<NavPrefId, boolean> = Object.fromEntries(
-  NAV_PREF_IDS.map((id) => [id, true]),
-) as Record<NavPrefId, boolean>
+const ALL_VISIBLE: Record<NavPrefId, boolean> = { ...DEFAULT_VISIBLE }
 
 function loadPrefs(): Record<NavPrefId, boolean> {
   try {

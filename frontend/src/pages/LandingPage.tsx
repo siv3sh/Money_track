@@ -256,7 +256,7 @@ const HOW_STEPS = [
     id: 'trust',
     icon: LayoutDashboard,
     title: 'Trust the ledger',
-    body: 'Dashboard, Spending, and Transactions stay front and center. Wealth and AI stay optional.',
+    body: 'Dashboard, Spending, and Transactions stay front and center — the ledger customers actually use.',
     preview: 'The promise: a UPI/SMS ledger that doesn’t lie.',
   },
 ] as const

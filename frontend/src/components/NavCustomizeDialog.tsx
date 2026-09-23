@@ -1,14 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { Check, X } from 'lucide-react'
 import { APP_NAV } from '../lib/navConfig'
-import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
-import { useWealthSettings } from '../hooks/useWealthSettings'
 import { ALWAYS_VISIBLE_NAV, useNavVisibility } from '../hooks/useNavVisibility'
 
 export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { visible, toggle, showAll, resetDefaults } = useNavVisibility()
-  const { enabled: advisorEnabled } = useAdvisorSettings()
-  const { enabled: wealthEnabled } = useWealthSettings()
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -23,23 +19,11 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
 
   if (!open) return null
 
-  const hintParts: string[] = []
-  if (!advisorEnabled) hintParts.push('Advisor is off')
-  if (!wealthEnabled) hintParts.push('Wealth is off')
-
-  const items = APP_NAV.filter((item) => {
-    if (!advisorEnabled && item.id === 'planning') return false
-    if (!wealthEnabled && item.id === 'wealth') return false
-    return true
-  })
-
   return (
-    /* full-screen dim backdrop */
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.45)' }}
     >
-      {/* click-outside close */}
       <button
         type="button"
         className="absolute inset-0 cursor-default"
@@ -48,7 +32,6 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
         tabIndex={-1}
       />
 
-      {/* dialog card */}
       <div
         ref={panelRef}
         role="dialog"
@@ -57,15 +40,13 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
         tabIndex={-1}
         className="relative z-[61] w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--sheet)] shadow-[0_24px_64px_rgba(0,0,0,0.22)] outline-none"
       >
-        {/* header */}
         <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
             <h2 id="nav-cust-title" className="text-base font-semibold text-[var(--text)]">
               Customise menu
             </h2>
             <p className="mt-0.5 text-xs text-[var(--muted)]">
-              Core ledger pages stay on. Optional extras are off until you enable them.
-              {hintParts.length ? ` ${hintParts.join(' · ')} — turn on in Profile.` : ''}
+              Hide Phones & email or Import if you prefer a shorter sidebar.
             </p>
           </div>
           <button
@@ -78,9 +59,8 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
           </button>
         </div>
 
-        {/* item list */}
         <ul className="max-h-[55vh] overflow-y-auto py-2">
-          {items.map((item) => {
+          {APP_NAV.map((item) => {
             const locked = ALWAYS_VISIBLE_NAV.includes(item.id)
             const checked = visible[item.id] !== false
             return (
@@ -97,7 +77,6 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
                   }}
                   aria-pressed={checked}
                 >
-                  {/* custom checkbox */}
                   <span
                     className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-colors ${
                       checked
@@ -108,7 +87,6 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
                   >
                     {checked ? <Check size={11} strokeWidth={3} className="text-white" /> : null}
                   </span>
-                  {/* nav icon */}
                   <item.icon
                     size={16}
                     className={`shrink-0 transition-colors ${
@@ -116,7 +94,6 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
                     }`}
                     aria-hidden
                   />
-                  {/* label */}
                   <span
                     className={`flex-1 text-sm font-medium ${
                       checked ? 'text-[var(--text)]' : 'text-[var(--muted)]'
@@ -128,10 +105,6 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
                     <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
                       Always on
                     </span>
-                  ) : item.advanced ? (
-                    <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
-                      Extra
-                    </span>
                   ) : null}
                 </button>
               </li>
@@ -139,7 +112,6 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
           })}
         </ul>
 
-        {/* footer */}
         <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-5 py-3">
           <div className="flex items-center gap-3">
             <button
@@ -154,7 +126,7 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
               className="text-xs font-medium text-[var(--muted)] hover:underline"
               onClick={resetDefaults}
             >
-              Ledger defaults
+              Defaults
             </button>
           </div>
           <button type="button" className="btn btn-primary" onClick={onClose}>

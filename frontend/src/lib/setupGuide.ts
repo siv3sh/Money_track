@@ -233,8 +233,8 @@ export const FULL_SETUP_JOURNEY: SetupChapter[] = [
         body: 'Set soft caps per category if you want Spending to warn you early.',
       },
       {
-        title: 'Hide sections you do not need',
-        body: 'Turn off Wealth or Advisor in Profile if you want a simpler menu.',
+        title: 'Customise menu',
+        body: 'Avatar → Customise menu to hide Phones & email or Import if you want a shorter sidebar.',
       },
     ],
     cta: { label: 'Open Profile', to: '/profile' },
@@ -242,17 +242,13 @@ export const FULL_SETUP_JOURNEY: SetupChapter[] = [
   {
     id: 'import',
     part: 6,
-    title: 'Statements & portfolio (optional)',
-    summary: 'Bulk history and investments — not required for day-to-day spend tracking.',
+    title: 'Statement history (optional)',
+    summary: 'Bulk history — not required for day-to-day spend tracking.',
     optional: true,
     steps: [
       {
         title: 'Import bank CSV/PDF',
         body: 'Import page → upload a statement for backfill or cards that do not SMS.',
-      },
-      {
-        title: 'INDmoney / holdings',
-        body: 'Wealth → import if you want net worth alongside spend.',
       },
     ],
     cta: { label: 'Go to Import', to: '/import' },

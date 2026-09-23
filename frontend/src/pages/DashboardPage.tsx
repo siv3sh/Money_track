@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { fetchAnalytics, fetchTransactions, updateTransactionCategory, deleteTransaction } from '../api'
-import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
 import { DailyCashflowBars } from '../components/charts'
 import { ChartCard, KpiCard, LoadingBlock, PageHeader } from '../components/ui'
 import { LedgerAmount } from '../components/LedgerAmount'
@@ -518,8 +517,6 @@ export function DashboardPage() {
         title="Dashboard"
         description="Cash pulse for the selected period — Day, Week, Month, or Year."
       />
-
-      {analytics?.advisor ? <AdvisorVoiceBanner advisor={analytics.advisor} /> : null}
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1 rounded-xl border border-[var(--border)] bg-[var(--sheet)] p-1 shadow-[var(--elev-1)]">

@@ -76,7 +76,7 @@ export function AccountBanners() {
           <div className="flex min-w-0 flex-1 items-start gap-2">
             <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-[var(--wealth)]" aria-hidden />
             <span className="leading-snug">
-              Your trial ended. Upgrade to Pro for optional AI, wealth, and planning — SMS ledger stays free.
+              Your trial ended. Upgrade to Pro if you want to support Tally — the SMS ledger stays free.
             </span>
           </div>
           <div className="flex items-center gap-2 pl-6 sm:pl-0">

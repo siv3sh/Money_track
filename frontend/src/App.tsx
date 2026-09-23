@@ -2,30 +2,22 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 import { AppShell } from './components/AppShell'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { AdvisorSettingsProvider, useAdvisorSettings } from './hooks/useAdvisorSettings'
-import { WealthSettingsProvider, useWealthSettings } from './hooks/useWealthSettings'
 import { ThemeProvider } from './hooks/useTheme'
 import { NavVisibilityProvider } from './hooks/useNavVisibility'
-import { AiInsightsPage } from './pages/AiInsightsPage'
 import { AccountsPage } from './pages/AccountsPage'
 import { AdminPage } from './pages/AdminPage'
-import { CashFlowPage } from './pages/CashFlowPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { GettingStartedPage } from './pages/GettingStartedPage'
 import { ImportPage } from './pages/ImportPage'
-import { IndmoneyImportPage } from './pages/IndmoneyImportPage'
 import { LandingPage } from './pages/LandingPage'
 import { PrivacyPage, TermsPage } from './pages/LegalPages'
 import { LoginPage } from './pages/LoginPage'
 import { PricingPage } from './pages/PricingPage'
-import { MoneyPlanningPage } from './pages/MoneyPlanningPage'
-import { MonthlyReportsPage } from './pages/MonthlyReportsPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { SetupPage } from './pages/SetupPage'
 import { SpendingPage } from './pages/SpendingPage'
 import { TransactionsPage } from './pages/TransactionsPage'
-import { WealthPage } from './pages/WealthPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { VerifyEmailPage } from './pages/VerifyEmailPage'
 import { LoadingBlock } from './components/ui'
@@ -65,103 +57,55 @@ function RequireOnboardingForHome() {
   return <Outlet />
 }
 
-function RequireAdvisorEnabled() {
-  const { enabled } = useAdvisorSettings()
-  if (!enabled) return <Navigate to="/profile" replace />
-  return <Outlet />
-}
-
-function RequireWealthEnabled() {
-  const { enabled } = useWealthSettings()
-  if (!enabled) return <Navigate to="/profile" replace />
-  return <Outlet />
-}
-
-function RequirePro({ feature }: { feature: 'ai' | 'wealth' | 'planning' }) {
-  const { user, loading } = useAuth()
-  if (loading) return <FullScreenLoading />
-  if (!user) return <Navigate to="/login" replace />
-  if (user.billing_enabled && user.entitled === false) {
-    const need = ((): string => {
-      switch (feature) {
-        case 'ai':
-          return 'ai'
-        case 'wealth':
-          return 'wealth'
-        case 'planning':
-          return 'planning'
-        default: {
-          const _exhaustive: never = feature
-          return _exhaustive
-        }
-      }
-    })()
-    return <Navigate to={`/pricing?need=${need}`} replace />
-  }
-  return <Outlet />
-}
-
+/** Customer main: SMS ledger only. Wealth / Advisor / AI / Cash Flow / Reports live on `dev`. */
 export default function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
         <NavVisibilityProvider>
-          <AdvisorSettingsProvider>
-            <WealthSettingsProvider>
-              <AuthProvider>
-                <BrowserRouter>
-                  <Routes>
-                    <Route path="/" element={<LandingPage />} />
-                    <Route path="/privacy" element={<PrivacyPage />} />
-                    <Route path="/terms" element={<TermsPage />} />
-                    <Route path="/pricing" element={<PricingPage />} />
-                    <Route path="/login" element={<LoginPage />} />
-                    <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-                    <Route path="/reset-password" element={<ResetPasswordPage />} />
-                    <Route path="/verify-email" element={<VerifyEmailPage />} />
-                    <Route element={<RequireLogin />}>
-                      <Route path="/setup" element={<SetupPage />} />
-                      <Route element={<RequireSetupDone />}>
-                        <Route element={<AppShell />}>
-                          <Route path="getting-started" element={<GettingStartedPage />} />
-                          <Route element={<RequireOnboardingForHome />}>
-                            <Route path="dashboard" element={<DashboardPage />} />
-                          </Route>
-                          <Route element={<RequirePro feature="wealth" />}>
-                            <Route element={<RequireWealthEnabled />}>
-                              <Route path="wealth" element={<WealthPage />} />
-                              <Route path="investments/indmoney" element={<IndmoneyImportPage />} />
-                            </Route>
-                          </Route>
-                          <Route path="net-worth" element={<Navigate to="/wealth" replace />} />
-                          <Route path="investments" element={<Navigate to="/wealth" replace />} />
-                          <Route element={<RequirePro feature="planning" />}>
-                            <Route element={<RequireAdvisorEnabled />}>
-                              <Route path="planning" element={<MoneyPlanningPage />} />
-                            </Route>
-                          </Route>
-                          <Route path="cash-flow" element={<CashFlowPage />} />
-                          <Route path="spending" element={<SpendingPage />} />
-                          <Route path="transactions" element={<TransactionsPage />} />
-                          <Route element={<RequirePro feature="ai" />}>
-                            <Route path="ai" element={<AiInsightsPage />} />
-                          </Route>
-                          <Route path="monthly-reports" element={<MonthlyReportsPage />} />
-                          <Route path="monthly-reports/:month" element={<MonthlyReportsPage />} />
-                          <Route path="import" element={<ImportPage />} />
-                          <Route path="reports" element={<MonthlyReportsPage />} />
-                          <Route path="accounts" element={<AccountsPage />} />
-                          <Route path="profile" element={<ProfilePage />} />
-                          <Route path="admin" element={<AdminPage />} />
-                        </Route>
+          <AuthProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/" element={<LandingPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="/pricing" element={<PricingPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password" element={<ResetPasswordPage />} />
+                <Route path="/verify-email" element={<VerifyEmailPage />} />
+                <Route element={<RequireLogin />}>
+                  <Route path="/setup" element={<SetupPage />} />
+                  <Route element={<RequireSetupDone />}>
+                    <Route element={<AppShell />}>
+                      <Route path="getting-started" element={<GettingStartedPage />} />
+                      <Route element={<RequireOnboardingForHome />}>
+                        <Route path="dashboard" element={<DashboardPage />} />
                       </Route>
+                      <Route path="spending" element={<SpendingPage />} />
+                      <Route path="transactions" element={<TransactionsPage />} />
+                      <Route path="import" element={<ImportPage />} />
+                      <Route path="accounts" element={<AccountsPage />} />
+                      <Route path="profile" element={<ProfilePage />} />
+                      <Route path="admin" element={<AdminPage />} />
+                      {/* Old bookmarks → core app */}
+                      <Route path="wealth" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="net-worth" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="investments" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="investments/indmoney" element={<Navigate to="/import" replace />} />
+                      <Route path="planning" element={<Navigate to="/profile" replace />} />
+                      <Route path="ai" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="cash-flow" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="monthly-reports" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="monthly-reports/:month" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="reports" element={<Navigate to="/dashboard" replace />} />
                     </Route>
-                    <Route path="*" element={<Navigate to="/" replace />} />
-                  </Routes>
-                </BrowserRouter>
-              </AuthProvider>
-            </WealthSettingsProvider>
-          </AdvisorSettingsProvider>
+                  </Route>
+                </Route>
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </BrowserRouter>
+          </AuthProvider>
         </NavVisibilityProvider>
       </ThemeProvider>
     </ErrorBoundary>

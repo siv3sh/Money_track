@@ -1,31 +1,22 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { CheckCircle2, Circle, Sparkles, UserRound, Wallet } from 'lucide-react'
+import { CheckCircle2, Circle, UserRound } from 'lucide-react'
 import {
   changePasswordRequest,
   createLearnedFact,
   deleteAccountRequest,
   deleteLearnedFact,
-  deletePlanningGoal,
-  fetchAdvisorTraining,
   fetchLearnedFacts,
-  fetchPlanningSummary,
-  saveAdvisorTraining,
   setStoredToken,
-  type AdvisorTrainingQuestion,
   type LearnedFact,
-  type PlanningGoal,
 } from '../api'
 import { ChartCard, LoadingBlock, PageHeader } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
-import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
-import { useWealthSettings } from '../hooks/useWealthSettings'
 
 const RELATION_OPTIONS = ['Mom', 'Dad', 'Spouse', 'Sibling', 'Family', 'Friend', 'Roommate', 'Other']
 
+/** Customer main Profile — salary labels, people, budgets. No Wealth/Advisor/AI. */
 export function ProfilePage() {
   const { logout, setUser, user } = useAuth()
-  const { enabled: advisorEnabled, setEnabled: setAdvisorEnabled } = useAdvisorSettings()
-  const { enabled: wealthEnabled, setEnabled: setWealthEnabled } = useWealthSettings()
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -46,10 +37,6 @@ export function ProfilePage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [changingPassword, setChangingPassword] = useState(false)
 
-  const [trainingQs, setTrainingQs] = useState<AdvisorTrainingQuestion[]>([])
-  const [trainAnswers, setTrainAnswers] = useState<Record<string, string>>({})
-  const [completeness, setCompleteness] = useState(0)
-
   const [people, setPeople] = useState<LearnedFact[]>([])
   const [personName, setPersonName] = useState('')
   const [personRelation, setPersonRelation] = useState('Family')
@@ -59,18 +46,11 @@ export function ProfilePage() {
   const [budgetCat, setBudgetCat] = useState('Shopping')
   const [budgetAmt, setBudgetAmt] = useState('')
 
-  const [goals, setGoals] = useState<PlanningGoal[]>([])
-  const [motivationFactId, setMotivationFactId] = useState<string | null>(null)
-
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [factsRes, training, planning] = await Promise.all([
-        fetchLearnedFacts(),
-        fetchAdvisorTraining(),
-        fetchPlanningSummary(),
-      ])
+      const factsRes = await fetchLearnedFacts()
       const income = factsRes.facts.filter((f) => f.fact_type === 'income_profile')
       const byKey = Object.fromEntries(income.map((f) => [f.key, f.value]))
       setEmployer(String(byKey.employer || ''))
@@ -95,22 +75,8 @@ export function ProfilePage() {
         }),
       )
 
-      setTrainingQs(training.questions || [])
-      setCompleteness(Number(training.completeness || 0))
-      const answers: Record<string, string> = {}
-      for (const q of training.questions || []) {
-        answers[q.key] = String(q.value || '')
-      }
-      setTrainAnswers(answers)
-
       setPeople(factsRes.facts.filter((f) => f.fact_type === 'people_relation'))
       setBudgets(factsRes.facts.filter((f) => f.fact_type === 'budget_target'))
-
-      const motFact = factsRes.facts.find(
-        (f) => f.fact_type === 'advisor_profile' && f.key === 'motivation',
-      )
-      setMotivationFactId(motFact?.id || null)
-      setGoals((planning.goals || []).filter((g) => g.status !== 'completed'))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load profile')
     } finally {
@@ -162,22 +128,10 @@ export function ProfilePage() {
         label: 'At least one family / friend',
         tip: 'Stops mom/dad UPI from looking like income',
       },
-      {
-        id: 'coach',
-        done: completeness >= 50,
-        label: 'Optional: coach answers',
-        tip: 'Only if you turn Advisor on later',
-      },
-      {
-        id: 'goal',
-        done: goals.length > 0,
-        label: 'Optional: a savings goal',
-        tip: 'Not required for SMS tracking',
-      },
     ]
     const done = items.filter((i) => i.done).length
     return { items, done, total: items.length }
-  }, [employer, salaryKeywords, people.length, completeness, goals.length])
+  }, [employer, salaryKeywords, people.length])
 
   const upsertIncome = async (e: FormEvent) => {
     e.preventDefault()
@@ -231,28 +185,6 @@ export function ProfilePage() {
       setError(err instanceof Error ? err.message : 'Could not delete account')
     } finally {
       setDeleting(false)
-    }
-  }
-
-  const saveCoach = async (e: FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      const answers = Object.entries(trainAnswers)
-        .map(([key, value]) => ({ key, value: value.trim() }))
-        .filter((a) => a.value)
-      if (!answers.length) {
-        setError('Answer at least one coaching question')
-        return
-      }
-      await saveAdvisorTraining(answers)
-      flash('Coach profile saved')
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save coach profile')
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -322,34 +254,13 @@ export function ProfilePage() {
     }
   }
 
-  const removeGoal = async (goal: PlanningGoal) => {
-    if (!confirm(`Remove goal “${goal.name}”?`)) return
-    setBusy(true)
-    setError(null)
-    try {
-      await deletePlanningGoal(goal.id)
-      if (
-        motivationFactId &&
-        (trainAnswers.motivation || '').trim().toLowerCase() === goal.name.trim().toLowerCase()
-      ) {
-        await deleteLearnedFact(motivationFactId)
-      }
-      flash(`Removed “${goal.name}”`)
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not remove goal')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   if (loading) return <LoadingBlock />
 
   return (
     <div className="fade-in space-y-5">
       <PageHeader
         title="Your profile"
-        description="Salary keywords and people labels so your ledger stays clean. Wealth, Advisor, and AI stay off until you want them."
+        description="Salary keywords and people labels so your ledger stays clean."
       />
 
       {error ? (
@@ -371,7 +282,7 @@ export function ProfilePage() {
 
       <ChartCard
         title={`Setup progress · ${checklist.done}/${checklist.total}`}
-        subtitle="Ledger basics first — extras are optional"
+        subtitle="Optional labels that keep Spending honest"
       >
         <ul className="space-y-2">
           {checklist.items.map((item) => (
@@ -516,47 +427,7 @@ export function ProfilePage() {
         </form>
       </ChartCard>
 
-      {advisorEnabled ? (
-      <ChartCard
-        title="3. How the advisor coaches you"
-        subtitle={`${Math.round(completeness)}% complete — answer what feels useful`}
-      >
-        <form className="grid max-w-xl gap-3" onSubmit={(e) => void saveCoach(e)}>
-          {trainingQs.map((q) => (
-            <label key={q.key} className="text-sm">
-              <span className="mb-1 block text-[var(--muted)]">{q.prompt}</span>
-              {q.options?.length ? (
-                <select
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
-                  value={trainAnswers[q.key] || ''}
-                  onChange={(e) => setTrainAnswers((prev) => ({ ...prev, [q.key]: e.target.value }))}
-                >
-                  <option value="">Choose…</option>
-                  {q.options.map((o) => (
-                    <option key={o} value={o}>
-                      {o}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
-                  value={trainAnswers[q.key] || ''}
-                  onChange={(e) => setTrainAnswers((prev) => ({ ...prev, [q.key]: e.target.value }))}
-                  placeholder={q.placeholder || ''}
-                />
-              )}
-              {q.hint ? <span className="mt-1 block text-xs text-[var(--muted)]">{q.hint}</span> : null}
-            </label>
-          ))}
-          <button type="submit" className="btn self-start" disabled={busy}>
-            Save coach answers
-          </button>
-        </form>
-      </ChartCard>
-      ) : null}
-
-      <ChartCard title="4. Monthly budget caps" subtitle="Soft limits the advisor watches — change anytime">
+      <ChartCard title="3. Monthly budget caps" subtitle="Soft limits shown on Spending — change anytime">
         {budgets.length ? (
           <ul className="mb-4 divide-y divide-[var(--border)]">
             {budgets.map((b) => (
@@ -600,31 +471,6 @@ export function ProfilePage() {
             Add budget
           </button>
         </form>
-      </ChartCard>
-
-      <ChartCard title="5. Savings goals" subtitle="Remove anything you no longer want tracked">
-        {goals.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">No active goals. Add one under Advisor when ready.</p>
-        ) : (
-          <ul className="divide-y divide-[var(--border)]">
-            {goals.map((g) => (
-              <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 py-3">
-                <div>
-                  <p className="font-medium text-[var(--text)]">{g.name}</p>
-                  <p className="text-xs text-[var(--muted)]">
-                    {g.target_date ? `Target ${g.target_date}` : 'No date'}
-                    {g.manual_price || g.target_price
-                      ? ` · ₹${Number(g.manual_price || g.target_price).toLocaleString('en-IN')}`
-                      : ''}
-                  </p>
-                </div>
-                <button type="button" className="btn text-xs" disabled={busy} onClick={() => void removeGoal(g)}>
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </ChartCard>
 
       <ChartCard
@@ -704,88 +550,6 @@ export function ProfilePage() {
         </form>
       </ChartCard>
 
-      <details className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-4 shadow-[var(--elev-1)]">
-        <summary className="cursor-pointer list-none text-sm font-semibold text-[var(--text)] [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center justify-between gap-2">
-            Optional extras — Wealth & Advisor
-            <span className="text-xs font-normal text-[var(--muted)]">Off by default · tap to expand</span>
-          </span>
-        </summary>
-        <div className="mt-4 space-y-4 border-t border-[var(--border)] pt-4">
-          <p className="text-xs text-[var(--muted)]">
-            The core product is SMS → transactions → spending. These do not improve ledger accuracy.
-          </p>
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
-                <Sparkles size={16} />
-              </span>
-              <div>
-                <p className="text-sm font-semibold text-[var(--text)]">
-                  {advisorEnabled ? 'Advisor is on' : 'Advisor is off'}
-                </p>
-                <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
-                  Optional coaching UI — not financial advice.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={advisorEnabled}
-              aria-label={advisorEnabled ? 'Turn advisor off' : 'Turn advisor on'}
-              onClick={() => {
-                setAdvisorEnabled(!advisorEnabled)
-                flash(advisorEnabled ? 'Advisor turned off' : 'Advisor turned on')
-              }}
-              className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
-                advisorEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
-              }`}
-            >
-              <span
-                className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                  advisorEnabled ? 'translate-x-6' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
-                <Wallet size={16} />
-              </span>
-              <div>
-                <p className="text-sm font-semibold text-[var(--text)]">
-                  {wealthEnabled ? 'Wealth is on' : 'Wealth is off'}
-                </p>
-                <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
-                  Optional net worth / INDmoney — separate from your SMS ledger.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={wealthEnabled}
-              aria-label={wealthEnabled ? 'Turn wealth off' : 'Turn wealth on'}
-              onClick={() => {
-                setWealthEnabled(!wealthEnabled)
-                flash(wealthEnabled ? 'Wealth turned off' : 'Wealth turned on')
-              }}
-              className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
-                wealthEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
-              }`}
-            >
-              <span
-                className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                  wealthEnabled ? 'translate-x-6' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-        </div>
-      </details>
-
       <ChartCard
         title="Delete account"
         subtitle="Permanently removes transactions, phones & SMS links, and settings"
@@ -823,7 +587,7 @@ export function ProfilePage() {
 
       <p className="flex items-center gap-2 text-xs text-[var(--muted)]">
         <UserRound size={14} />
-        Tip: use the avatar (top right) for Customize menu, Dark mode, and Sign out.
+        Tip: use the avatar (top right) for Dark mode and Sign out.
       </p>
     </div>
   )

@@ -2,26 +2,16 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Menu, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { FilterProvider } from '../context/FilterContext'
-import { useAdvisorSettings } from '../hooks/useAdvisorSettings'
-import { useWealthSettings } from '../hooks/useWealthSettings'
 import { useNavVisibility } from '../hooks/useNavVisibility'
 import { APP_NAV } from '../lib/navConfig'
 import { AccountMenu } from './AccountMenu'
 import { AccountBanners } from './AccountBanners'
-import { AdvisorChatWidget } from './AdvisorChatWidget'
 
 /** Pages that need shared FilterContext analytics on mount. Dashboard has its own loader. */
-const FILTER_ANALYTICS_PATHS = new Set([
-  '/wealth',
-  '/cash-flow',
-  '/spending',
-  '/transactions',
-  '/ai',
-  '/investments/indmoney',
-])
+const FILTER_ANALYTICS_PATHS = new Set(['/spending', '/transactions'])
 
 /** Full analytics (merchants, recurring, budgets, alerts) — slower path. */
-const FULL_ANALYTICS_PATHS = new Set(['/ai', '/spending'])
+const FULL_ANALYTICS_PATHS = new Set(['/spending'])
 
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -30,13 +20,7 @@ export function AppShell() {
   )
   const [waking, setWaking] = useState(false)
   const { isVisible } = useNavVisibility()
-  const { enabled: advisorEnabled } = useAdvisorSettings()
-  const { enabled: wealthEnabled } = useWealthSettings()
-  const shownNav = APP_NAV.filter((item) => {
-    if (item.id === 'planning' && !advisorEnabled) return false
-    if (item.id === 'wealth' && !wealthEnabled) return false
-    return isVisible(item.id)
-  })
+  const shownNav = APP_NAV.filter((item) => isVisible(item.id))
   const location = useLocation()
   const loadSharedAnalytics = FILTER_ANALYTICS_PATHS.has(location.pathname)
   const liteAnalytics = !FULL_ANALYTICS_PATHS.has(location.pathname)
@@ -169,7 +153,6 @@ export function AppShell() {
             <Outlet />
           </main>
         </div>
-        {advisorEnabled ? <AdvisorChatWidget /> : null}
       </div>
     </FilterProvider>
   )

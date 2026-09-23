@@ -21,10 +21,9 @@ const FREE_FEATURES = [
 
 const PRO_FEATURES = [
   'Everything in Free',
-  'Optional Ask Tally (AI on your numbers)',
-  'Optional Wealth / INDmoney',
-  'Optional Advisor goals',
-  'Monthly report emails',
+  'Priority support when something looks wrong',
+  'Early access to upcoming extras (as we ship them)',
+  'Helps fund bank coverage & parsing accuracy',
 ]
 
 export function PricingPage() {
@@ -119,11 +118,11 @@ export function PricingPage() {
             Pricing
           </p>
           <h1 className="mt-2 font-[family-name:var(--font-display)] text-3xl font-semibold tracking-tight sm:text-4xl">
-            Ledger free. Extras when you want them.
+            The ledger is free.
           </h1>
           <p className="mx-auto mt-3 max-w-lg text-[var(--text-secondary)]">
-            Free forever for SMS → transactions → spending. Pro is optional AI, wealth, and planning —
-            never required for an honest ledger. {trialDays}-day trial when billing is on.
+            Free forever for SMS → transactions → spending. Pro is optional support for the product —
+            never required to use Tally. {trialDays}-day trial when billing is on.
           </p>
         </div>
 
