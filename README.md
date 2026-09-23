@@ -2,7 +2,9 @@
 
 Your UPI/SMS ledger that doesn’t lie: capture bank/UPI SMS from your phone, parse debit/credit with `parser.py`, store per-user data, and show a private Dashboard / Spending / Transactions loop.
 
-Wealth, Advisor, and AI stay optional. Not financial advice.
+Not financial advice.
+
+**Branches:** `main` = customer product (SMS ledger only). `dev` = full lab with Wealth, Advisor, AI, Cash Flow, and Reports.
 
 **Live:** [tally.nuential.com](https://tally.nuential.com) · Marketing landing at `/`, app at `/dashboard` after signup.
 
