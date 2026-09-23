@@ -38,7 +38,7 @@ export function ResetPasswordPage() {
       setUser(res.user)
       if (!res.user.setup_completed) navigate('/setup', { replace: true })
       else if (!res.user.onboarding_completed) navigate('/getting-started', { replace: true })
-      else navigate('/', { replace: true })
+      else navigate('/dashboard', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not reset password')
     } finally {

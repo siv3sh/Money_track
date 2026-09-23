@@ -7,6 +7,7 @@ import { useWealthSettings } from '../hooks/useWealthSettings'
 import { useNavVisibility } from '../hooks/useNavVisibility'
 import { APP_NAV } from '../lib/navConfig'
 import { AccountMenu } from './AccountMenu'
+import { AccountBanners } from './AccountBanners'
 import { AdvisorChatWidget } from './AdvisorChatWidget'
 
 /** Pages that need shared FilterContext analytics on mount. Dashboard has its own loader. */
@@ -72,18 +73,18 @@ export function AppShell() {
 
   return (
     <FilterProvider autoLoad={loadSharedAnalytics} lite={liteAnalytics}>
-      <div className="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
+      <div className="min-h-screen overflow-x-hidden bg-[var(--canvas)] text-[var(--text)]">
         {offline ? (
           <div
             role="status"
-            className="sticky top-0 z-[70] border-b border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-2 text-center text-sm text-[var(--debit)]"
+            className="sticky top-0 z-[70] border-b border-[var(--debit)]/30 bg-[var(--debit-soft)] px-3 py-2 text-center text-xs text-[var(--debit)] sm:px-4 sm:text-sm"
           >
             You are offline. Changes may fail until your connection returns.
           </div>
         ) : waking ? (
           <div
             role="status"
-            className="sticky top-0 z-[70] border-b border-[var(--sapphire)]/25 bg-[var(--accent-soft)] px-4 py-2 text-center text-sm text-[var(--sapphire)]"
+            className="sticky top-0 z-[70] border-b border-[var(--sapphire)]/25 bg-[var(--accent-soft)] px-3 py-2 text-center text-xs text-[var(--sapphire)] sm:px-4 sm:text-sm"
           >
             Waking the server… first load after idle can take up to a minute.
           </div>
@@ -113,9 +114,9 @@ export function AppShell() {
                   ₹
                 </span>
                 <div>
-                  <p className="display text-sm font-semibold tracking-tight">Money Track</p>
+                  <p className="display text-sm font-semibold tracking-tight">Tally</p>
                   <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--muted)]">
-                    Sapphire Vault
+                    SMS ledger
                   </p>
                 </div>
               </div>
@@ -147,22 +148,24 @@ export function AppShell() {
         </aside>
 
         <div className="lg:pl-[248px]">
-          <header className="app-topbar elev-float sticky top-0 z-30 flex items-center gap-3 border-b px-4 py-3 sm:px-6">
+          <header className="app-topbar elev-float sticky top-0 z-30 flex items-center gap-2 border-b px-3 py-2.5 pt-[max(0.625rem,env(safe-area-inset-top))] sm:gap-3 sm:px-6 sm:py-3">
             <button
               type="button"
-              className="btn lg:hidden"
+              className="btn min-h-10 min-w-10 lg:hidden"
               onClick={() => setMobileOpen(true)}
               aria-label="Open menu"
             >
               <Menu size={16} />
             </button>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-[var(--muted)]">SMS + email + statements</p>
+              <p className="truncate text-xs text-[var(--muted)] sm:text-sm">Ledger from bank SMS</p>
             </div>
             <AccountMenu />
           </header>
 
-          <main className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
+          <AccountBanners />
+
+          <main className="mx-auto w-full max-w-[1600px] px-3 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-5 lg:px-8">
             <Outlet />
           </main>
         </div>

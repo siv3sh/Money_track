@@ -1,4 +1,4 @@
-"""Postgres-backed Mongo-compatible collections for Money Track."""
+"""Postgres-backed Mongo-compatible collections for Tally."""
 
 from __future__ import annotations
 

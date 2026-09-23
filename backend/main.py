@@ -73,7 +73,9 @@ from resend_inbound import (
 )
 from auth_users import (
     authenticate_user,
+    change_password,
     create_access_token,
+    create_email_verify_token,
     create_password_reset_token,
     ensure_auth_indexes,
     ensure_default_linked_account,
@@ -89,7 +91,17 @@ from auth_users import (
     serialize_linked_account,
     serialize_user,
     user_match,
+    verify_email_with_token,
     verify_password,
+)
+from billing import (
+    billing_configured,
+    construct_webhook_event,
+    create_checkout_session,
+    create_portal_session,
+    handle_stripe_webhook_event,
+    require_pro_feature,
+    resolve_entitlement,
 )
 from advisor_persona import (
     default_persona_text,
@@ -133,7 +145,7 @@ from learned_facts import (
 )
 
 app = FastAPI(
-    title="SMS Money Tracker",
+    title="SMS Tallyer",
     docs_url="/docs" if (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower() in {"development", "dev", "local", "test"} else None,
     redoc_url=None,
     openapi_url="/openapi.json" if (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower() in {"development", "dev", "local", "test"} else None,
@@ -188,6 +200,14 @@ users_col = db["users"]
 linked_accounts_col = db["linked_accounts"]
 
 API_KEY = os.getenv("API_KEY", "")
+# Legacy POST /sms-webhook with shared X-API-Key routes into the seed/primary user.
+# Off by default — multi-tenant prod must use /sms-webhook/{token} only.
+ALLOW_LEGACY_API_KEY_WEBHOOK = (os.getenv("ALLOW_LEGACY_API_KEY_WEBHOOK") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173").strip().rstrip("/")
 # Where phones POST SMS (API host). Do not use the Vercel frontend URL here.
 WEBHOOK_PUBLIC_BASE = (
@@ -198,7 +218,7 @@ WEBHOOK_PUBLIC_BASE = (
 RESEND_INBOUND_DOMAIN = (os.getenv("RESEND_INBOUND_DOMAIN") or "").strip().lstrip("@").lower()
 _DEFAULT_CORS = (
     "http://localhost:5173,http://127.0.0.1:5173,"
-    "https://fin.sivesh-pb.com,https://money-track-rho-six.vercel.app"
+    "https://tally.nuential.com,https://money-track-rho-six.vercel.app"
 )
 CORS_ORIGINS = [
     o.strip()
@@ -236,11 +256,13 @@ def _is_public_path(path: str) -> bool:
     if path in {
         "/auth/forgot-password",
         "/auth/reset-password",
+        "/auth/verify-email",
+        "/billing/config",
     }:
         return True
     if path.startswith("/jobs/"):
         return True
-    if path == "/webhooks/resend-inbound":
+    if path == "/webhooks/resend-inbound" or path == "/webhooks/stripe":
         return True
     # Legacy key webhook + token webhooks only (not /sms-webhook/debug)
     if path == "/sms-webhook" or path == "/email-webhook":
@@ -255,6 +277,24 @@ def _is_public_path(path: str) -> bool:
         if path.startswith("/docs") or path.startswith("/openapi") or path.startswith("/redoc"):
             return True
     return False
+
+
+_PRO_ROUTE_GATES: tuple[tuple[str, str], ...] = (
+    ("/ai/", "ai"),
+    ("/planning/", "planning"),
+    ("/advisor/", "advisor"),
+    ("/portfolio", "wealth"),
+    ("/liabilities", "wealth"),
+)
+
+
+def _pro_feature_for_path(path: str) -> str | None:
+    if path == "/ai/status":
+        return None
+    for prefix, feature in _PRO_ROUTE_GATES:
+        if path == prefix.rstrip("/") or path.startswith(prefix):
+            return feature
+    return None
 
 
 @app.middleware("http")
@@ -284,6 +324,16 @@ async def require_login_middleware(request: Request, call_next):
             )
         request.state.user = user
         request.state.user_id = uid
+        feature = _pro_feature_for_path(path)
+        if feature:
+            try:
+                require_pro_feature(user, feature)
+            except HTTPException as exc:
+                detail = exc.detail
+                return JSONResponse(
+                    {"detail": detail},
+                    status_code=exc.status_code,
+                )
     except HTTPException as exc:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     except Exception:
@@ -1017,6 +1067,11 @@ class ResetPasswordPayload(BaseModel):
     password: str = Field(..., min_length=8, max_length=200)
 
 
+class ChangePasswordPayload(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=200)
+    new_password: str = Field(..., min_length=8, max_length=200)
+
+
 class DeleteAccountPayload(BaseModel):
     password: str = Field(..., min_length=1, max_length=200)
 
@@ -1050,12 +1105,146 @@ def auth_register(request: Request, payload: RegisterPayload):
             raise HTTPException(status_code=403, detail="Invite code required or incorrect")
     user = register_user(users_col, payload.email, payload.password)
     ensure_default_linked_account(linked_accounts_col, user_id=user["_id"])
+    # Best-effort verification email (account still usable; banner prompts verify)
+    try:
+        from email_report import email_configured, send_transactional_email
+
+        raw = create_email_verify_token(users_col, user["_id"])
+        if raw and email_configured():
+            link = f"{APP_BASE_URL}/verify-email?token={raw}"
+            send_transactional_email(
+                to_email=str(user.get("email") or ""),
+                subject="Verify your Tally email",
+                html=(
+                    "<p>Welcome to Tally.</p>"
+                    f'<p><a href="{link}">Verify your email</a></p>'
+                    "<p>This link expires in 48 hours.</p>"
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: verification email failed: {exc}")
     token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
     return {
         "access_token": token,
         "token_type": "bearer",
         "user": serialize_user(user),
     }
+
+
+class VerifyEmailPayload(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200)
+
+
+@app.post("/auth/verify-email")
+def auth_verify_email(request: Request, payload: VerifyEmailPayload):
+    enforce_rate_limit(request, bucket="auth_verify", limit=20, window_sec=60)
+    user = verify_email_with_token(users_col, payload.token)
+    token = create_access_token(user_id=str(user["_id"]), email=str(user.get("email") or ""))
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": serialize_user(user),
+        "ok": True,
+    }
+
+
+@app.post("/auth/resend-verification")
+def auth_resend_verification(request: Request):
+    enforce_rate_limit(request, bucket="auth_resend_verify", limit=5, window_sec=60)
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    if user.get("email_verified") is True or "email_verified" not in user:
+        return {"ok": True, "detail": "Email already verified"}
+    from email_report import email_configured, send_transactional_email
+
+    if not email_configured():
+        raise HTTPException(status_code=503, detail="Email delivery is not configured yet")
+    raw = create_email_verify_token(users_col, user["_id"])
+    if not raw:
+        return {"ok": True, "detail": "Email already verified"}
+    link = f"{APP_BASE_URL}/verify-email?token={raw}"
+    send_transactional_email(
+        to_email=str(user.get("email") or ""),
+        subject="Verify your Tally email",
+        html=(
+            "<p>Confirm your Tally email.</p>"
+            f'<p><a href="{link}">Verify email</a></p>'
+            "<p>This link expires in 48 hours.</p>"
+        ),
+    )
+    return {"ok": True, "detail": "Verification email sent"}
+
+
+@app.get("/billing/config")
+def billing_config_public():
+    snap = resolve_entitlement(None)
+    return {
+        "billing_enabled": snap["billing_enabled"],
+        "trial_days": snap["trial_days"],
+        "pro_price_label": snap["pro_price_label"],
+        "features": snap["features"],
+        "publishable_key": snap.get("publishable_key"),
+    }
+
+
+@app.get("/billing/status")
+def billing_status(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    return resolve_entitlement(user)
+
+
+@app.post("/billing/checkout")
+def billing_checkout(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    if not billing_configured():
+        raise HTTPException(status_code=503, detail="Billing is not configured on this server")
+    try:
+        session = create_checkout_session(
+            users_col=users_col,
+            user=user,
+            success_url=f"{APP_BASE_URL}/pricing?checkout=success",
+            cancel_url=f"{APP_BASE_URL}/pricing?checkout=cancel",
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not start checkout: {exc}") from exc
+    return session
+
+
+@app.post("/billing/portal")
+def billing_portal(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    if not billing_configured():
+        raise HTTPException(status_code=503, detail="Billing is not configured on this server")
+    try:
+        session = create_portal_session(user=user, return_url=f"{APP_BASE_URL}/pricing")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return session
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    if not billing_configured():
+        raise HTTPException(status_code=503, detail="Billing is not configured")
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature") or ""
+    try:
+        event = construct_webhook_event(payload, sig)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Webhook error: {exc}") from exc
+    try:
+        handle_stripe_webhook_event(users_col, event)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: stripe webhook handler failed: {exc}")
+        raise HTTPException(status_code=500, detail="Webhook handler failed") from exc
+    return {"ok": True}
 
 
 @app.post("/auth/forgot-password")
@@ -1080,9 +1269,9 @@ def auth_forgot_password(request: Request, payload: ForgotPasswordPayload):
         email = str(user.get("email") or "")
         send_transactional_email(
             to_email=email,
-            subject="Reset your Money Track password",
+            subject="Reset your Tally password",
             html=(
-                "<p>We received a request to reset your Money Track password.</p>"
+                "<p>We received a request to reset your Tally password.</p>"
                 f'<p><a href="{link}">Reset password</a></p>'
                 "<p>This link expires in 1 hour. If you did not ask for this, you can ignore this email.</p>"
             ),
@@ -1101,6 +1290,28 @@ def auth_reset_password(request: Request, payload: ResetPasswordPayload):
         "access_token": token,
         "token_type": "bearer",
         "user": serialize_user(user),
+    }
+
+
+@app.post("/auth/change-password")
+def auth_change_password(request: Request, payload: ChangePasswordPayload):
+    enforce_rate_limit(request, bucket="auth_change_password", limit=8, window_sec=60)
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Please log in")
+    updated = change_password(
+        users_col,
+        user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    token = create_access_token(user_id=str(updated["_id"]), email=str(updated.get("email") or ""))
+    return {
+        "ok": True,
+        "access_token": token,
+        "token_type": "bearer",
+        "user": serialize_user(updated),
+        "detail": "Password updated",
     }
 
 
@@ -1452,12 +1663,12 @@ def sms_webhook_get_hint():
         "error": "Use POST, not GET",
         "ios": (
             "iPhone Shortcuts → Get Contents of URL → Method POST. "
-            "Use your private webhook link from Money Track → Accounts. "
+            "Use your private webhook link from Tally → Accounts. "
             "JSON body: sender + Message Contents."
         ),
         "android": (
             "MacroDroid or Tasker → HTTP Request POST to your private webhook link "
-            "from Money Track → Accounts. JSON: sender + full SMS text."
+            "from Tally → Accounts. JSON: sender + full SMS text."
         ),
     }
 
@@ -1725,7 +1936,22 @@ async def _ingest_sms_request(
 
 @app.post("/sms-webhook")
 async def receive_sms(request: Request):
-    """Legacy: API key auth — routes into the owner's primary linked account."""
+    """Legacy: shared API key → seed/primary user's phone. Disabled unless explicitly enabled."""
+    if not ALLOW_LEGACY_API_KEY_WEBHOOK:
+        _log_webhook_event(
+            {
+                "stored": False,
+                "reason": "legacy_api_key_webhook_disabled",
+                "content_type": request.headers.get("content-type") or "unknown",
+            }
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "Shared API-key SMS webhook is disabled. "
+                "Use your private link from Tally → Phones & email (…/sms-webhook/{token})."
+            ),
+        )
     provided_key = request.headers.get("x-api-key") or ""
     if not API_KEY or not provided_key or not secrets.compare_digest(provided_key, API_KEY):
         _log_webhook_event(
@@ -1766,7 +1992,7 @@ async def receive_sms_with_token(token: str, request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
                 "This SMS link is unknown or turned off. "
-                "Open Money Track → Accounts and copy a fresh link for this phone."
+                "Open Tally → Accounts and copy a fresh link for this phone."
             ),
         )
     return await _ingest_sms_request(request, linked_account=linked)
@@ -1798,7 +2024,7 @@ def email_webhook_get_hint():
         "error": "Use POST, not GET",
         "hint": (
             "Forward bank alert emails to an inbound service that POSTs JSON here, "
-            "or paste an email on Money Track → Phones. "
+            "or paste an email on Tally → Phones. "
             "JSON fields: from, subject, text (or html)."
         ),
     }
@@ -2007,7 +2233,7 @@ async def receive_email_with_token(token: str, request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
                 "This email link is unknown or turned off. "
-                "Open Money Track → Phones and copy a fresh email link."
+                "Open Tally → Phones and copy a fresh email link."
             ),
         )
     return await _ingest_email_request(request, linked_account=linked)
@@ -2816,7 +3042,7 @@ def export_data(
     if format == "json":
         return JSONResponse(
             content=payload,
-            headers={"Content-Disposition": "attachment; filename=money-track-export.json"},
+            headers={"Content-Disposition": "attachment; filename=tally-export.json"},
         )
 
     buf = io.StringIO()
@@ -2862,7 +3088,7 @@ def export_data(
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=money-track-export.csv"},
+        headers={"Content-Disposition": "attachment; filename=tally-export.csv"},
     )
 
 
@@ -3810,7 +4036,7 @@ def reports_monthly_pdf(request: Request, month: str):
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="money-track-{month}.pdf"'
+            "Content-Disposition": f'attachment; filename="tally-{month}.pdf"'
         },
     )
 

@@ -1,7 +1,8 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowRight, Eye, EyeOff, Loader2, Mail } from 'lucide-react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { trackEvent } from '../lib/analytics'
 
 type Mode = 'signin' | 'signup'
 
@@ -13,7 +14,7 @@ const labelClass = 'mb-1.5 block text-[12px] font-medium text-[var(--muted)]'
 function postAuthPath(u: { setup_completed?: boolean; onboarding_completed?: boolean }): string {
   if (!u.setup_completed) return '/setup'
   if (!u.onboarding_completed) return '/getting-started'
-  return '/'
+  return '/dashboard'
 }
 
 function AuthCard({ children }: { children: ReactNode }) {
@@ -66,7 +67,10 @@ function SegmentedToggle({
 export function LoginPage() {
   const { user, loading, login, register } = useAuth()
   const navigate = useNavigate()
-  const [mode, setMode] = useState<Mode>('signin')
+  const [searchParams] = useSearchParams()
+  const [mode, setMode] = useState<Mode>(() =>
+    searchParams.get('mode') === 'signup' ? 'signup' : 'signin',
+  )
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -75,6 +79,10 @@ export function LoginPage() {
   const [showConfirm, setShowConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (searchParams.get('mode') === 'signup') setMode('signup')
+  }, [searchParams])
 
   if (!loading && user) {
     return <Navigate to={postAuthPath(user)} replace />
@@ -101,9 +109,11 @@ export function LoginPage() {
           password,
           signup_code: signupCode.trim() || undefined,
         })
+        trackEvent('activation_signup')
         navigate(postAuthPath(u), { replace: true })
       } else {
         const u = await login(email.trim(), password)
+        trackEvent('activation_login')
         navigate(postAuthPath(u), { replace: true })
       }
     } catch (err) {
@@ -122,21 +132,23 @@ export function LoginPage() {
   return (
     <AuthCard>
       <div className="mb-7 text-center">
-        <div
-          className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-semibold text-white shadow-[var(--elev-2)] ring-1 ring-white/25"
-          style={{
-            background:
-              'linear-gradient(145deg, color-mix(in srgb, var(--sapphire) 88%, white) 0%, var(--sapphire) 48%, color-mix(in srgb, var(--sapphire) 65%, #061028) 100%)',
-          }}
-          aria-hidden
-        >
-          ₹
-        </div>
+        <Link to="/" className="mx-auto mb-4 inline-flex" aria-label="Tally home">
+          <div
+            className="flex h-14 w-14 items-center justify-center rounded-2xl text-xl font-semibold text-white shadow-[var(--elev-2)] ring-1 ring-white/25"
+            style={{
+              background:
+                'linear-gradient(145deg, color-mix(in srgb, var(--sapphire) 88%, white) 0%, var(--sapphire) 48%, color-mix(in srgb, var(--sapphire) 65%, #061028) 100%)',
+            }}
+            aria-hidden
+          >
+            ₹
+          </div>
+        </Link>
         <h1 className="font-[family-name:var(--font-display)] text-[1.65rem] font-semibold tracking-tight text-[var(--text)]">
-          Money Track
+          Tally
         </h1>
         <p className="mt-1.5 text-[13px] leading-snug text-[var(--text-secondary)]">
-          {mode === 'signin' ? 'Sign in to see your money' : 'Create your account'}
+          {mode === 'signin' ? 'Sign in to your SMS ledger' : 'Create your ledger account'}
         </p>
       </div>
 
@@ -314,6 +326,15 @@ export function LoginPage() {
             .
           </>
         )}
+      </p>
+      <p className="mt-4 text-center text-[11px] text-[var(--muted)]">
+        <Link to="/privacy" className="underline-offset-2 hover:text-[var(--text)] hover:underline">
+          Privacy
+        </Link>
+        <span className="mx-2 opacity-40">·</span>
+        <Link to="/terms" className="underline-offset-2 hover:text-[var(--text)] hover:underline">
+          Terms
+        </Link>
       </p>
     </AuthCard>
   )

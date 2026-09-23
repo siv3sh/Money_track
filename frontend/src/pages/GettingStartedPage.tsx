@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { CheckCircle2, ChevronDown, Circle } from 'lucide-react'
-import { saveOnboarding } from '../api'
+import { fetchLinkedAccounts, saveOnboarding, type LinkedAccount } from '../api'
+import { ConnectStatusCard } from '../components/ConnectStatusCard'
 import { GuideSteps } from '../components/GuideSteps'
 import { ChartCard, PageHeader } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
+import { trackEvent } from '../lib/analytics'
 import { GUIDE_FEATURES, GUIDE_TIPS, GUIDE_WELCOME } from '../lib/productGuide'
 import { FULL_SETUP_JOURNEY, TROUBLESHOOTING } from '../lib/setupGuide'
 
@@ -14,7 +16,21 @@ export function GettingStartedPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [openChapter, setOpenChapter] = useState<string>('sms')
+  const [accounts, setAccounts] = useState<LinkedAccount[]>([])
+  const [inboundConfigured, setInboundConfigured] = useState(false)
   const firstRun = !user?.onboarding_completed
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetchLinkedAccounts(true)
+        setAccounts(res.items)
+        setInboundConfigured(Boolean(res.resend_inbound_configured))
+      } catch {
+        /* guide still useful without status */
+      }
+    })()
+  }, [])
 
   const finishOnboarding = async () => {
     setBusy(true)
@@ -23,7 +39,8 @@ export function GettingStartedPage() {
       const next = await saveOnboarding({ onboarding_completed: true })
       setUser(next)
       await refreshUser()
-      navigate('/', { replace: true })
+      trackEvent('activation_onboarding_done', { sms_live: smsLive })
+      navigate('/dashboard', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save progress')
     } finally {
@@ -31,13 +48,15 @@ export function GettingStartedPage() {
     }
   }
 
+  const smsLive = accounts.some((a) => Boolean(a.last_seen_at))
+
   return (
     <div className="fade-in mx-auto max-w-3xl space-y-5 pb-10">
       <PageHeader
         title={firstRun ? 'Your setup guide' : 'Help & setup guide'}
         description={
           firstRun
-            ? 'Everything you need to go from zero to a working dashboard — follow in order, skip what you do not need.'
+            ? 'Connect SMS first, then confirm a transaction. Email and imports are optional.'
             : GUIDE_WELCOME.subtitle
         }
       />
@@ -48,10 +67,27 @@ export function GettingStartedPage() {
         </div>
       ) : null}
 
+      <ConnectStatusCard accounts={accounts} inboundConfigured={inboundConfigured} compact />
+
       {firstRun ? (
-        <div className="rounded-xl border border-[var(--credit)]/30 bg-[var(--credit-soft)] px-4 py-3 text-sm text-[var(--credit)]">
-          <strong>SMS setup done?</strong> Work through the sections below. Bank emails and imports
-          are optional — many people only use SMS.
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            smsLive
+              ? 'border-[var(--credit)]/30 bg-[var(--credit-soft)] text-[var(--credit)]'
+              : 'border-[var(--border)] bg-[var(--sheet)] text-[var(--text-secondary)]'
+          }`}
+        >
+          {smsLive ? (
+            <>
+              <strong>SMS is flowing.</strong> Optional: bank email, salary keywords, then open the
+              dashboard.
+            </>
+          ) : (
+            <>
+              <strong>Next:</strong> open Phones & email → Copy SMS link → paste into Shortcuts or
+              MacroDroid. Come back when one bank SMS lands in Transactions.
+            </>
+          )}
         </div>
       ) : null}
 
@@ -111,7 +147,7 @@ export function GettingStartedPage() {
       <ChartCard title="Something not working?" subtitle="Common fixes">
         <GuideSteps steps={TROUBLESHOOTING} />
         <Link to="/accounts" className="btn mt-4 inline-flex text-sm">
-          Open Accounts for links & email setup
+          Open Phones & email
         </Link>
       </ChartCard>
 
@@ -151,15 +187,15 @@ export function GettingStartedPage() {
             disabled={busy}
             onClick={() => void finishOnboarding()}
           >
-            {busy ? 'Saving…' : 'Go to Dashboard'}
+            {busy ? 'Saving…' : smsLive ? 'Go to Dashboard' : 'Skip for now — go to Dashboard'}
           </button>
         ) : (
-          <button type="button" className="btn btn-primary" onClick={() => navigate('/')}>
+          <button type="button" className="btn btn-primary" onClick={() => navigate('/dashboard')}>
             Back to Dashboard
           </button>
         )}
         <Link to="/accounts" className="btn">
-          Accounts & SMS links
+          Phones & email
         </Link>
         {!user?.setup_completed ? (
           <Link to="/setup" className="btn">

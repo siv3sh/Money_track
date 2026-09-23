@@ -1,4 +1,4 @@
--- Dedicated Money Track Supabase project: public.docs (exposed to the Data API).
+-- Dedicated Tally Supabase project: public.docs (exposed to the Data API).
 
 CREATE TABLE IF NOT EXISTS public.docs (
   collection text NOT NULL,

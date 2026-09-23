@@ -1,0 +1,23 @@
+User-agent: *
+Allow: /
+Allow: /privacy
+Allow: /terms
+Allow: /login
+Allow: /pricing
+Disallow: /dashboard
+Disallow: /setup
+Disallow: /getting-started
+Disallow: /wealth
+Disallow: /spending
+Disallow: /transactions
+Disallow: /cash-flow
+Disallow: /ai
+Disallow: /import
+Disallow: /accounts
+Disallow: /profile
+Disallow: /admin
+Disallow: /planning
+Disallow: /monthly-reports
+Disallow: /api/
+
+Sitemap: https://tally.nuential.com/sitemap.xml

@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 
-const ADVISOR_PREF_KEY = 'money-track-advisor-enabled'
+const ADVISOR_PREF_KEY = 'tally-advisor-enabled'
 
 type AdvisorSettingsState = {
   enabled: boolean
@@ -27,8 +27,8 @@ function readEnabled(): boolean {
   } catch {
     /* ignore */
   }
-  // Default on — matches current product behavior
-  return true
+  // Default off — ledger-first product; enable in Profile when wanted
+  return false
 }
 
 export function AdvisorSettingsProvider({ children }: { children: ReactNode }) {

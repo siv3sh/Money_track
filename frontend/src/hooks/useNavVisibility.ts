@@ -9,37 +9,43 @@ import {
   type ReactNode,
 } from 'react'
 
-const NAV_PREF_KEY = 'money-track-nav-visible-v2'
+/** Bumped so ledger-first defaults apply for everyone once. */
+const NAV_PREF_KEY = 'tally-nav-visible-v3'
 
 export const NAV_PREF_IDS = [
   'dashboard',
-  'wealth',
-  'planning',
-  'cash-flow',
   'spending',
   'transactions',
-  'ai',
-  'monthly-reports',
-  'import',
   'accounts',
+  'import',
+  'cash-flow',
+  'monthly-reports',
+  'wealth',
+  'planning',
+  'ai',
 ] as const
 
 export type NavPrefId = (typeof NAV_PREF_IDS)[number]
 
 export const ALWAYS_VISIBLE_NAV: NavPrefId[] = ['dashboard']
 
+/** Core ledger loop — advanced pages off until the user opts in. */
 const DEFAULT_VISIBLE: Record<NavPrefId, boolean> = {
   dashboard: true,
-  wealth: true,
-  planning: true,
-  'cash-flow': false,
   spending: true,
   transactions: true,
-  ai: false,
-  'monthly-reports': true,
-  import: false,
   accounts: true,
+  import: true,
+  'cash-flow': false,
+  'monthly-reports': false,
+  wealth: false,
+  planning: false,
+  ai: false,
 }
+
+const ALL_VISIBLE: Record<NavPrefId, boolean> = Object.fromEntries(
+  NAV_PREF_IDS.map((id) => [id, true]),
+) as Record<NavPrefId, boolean>
 
 function loadPrefs(): Record<NavPrefId, boolean> {
   try {
@@ -61,6 +67,7 @@ type NavVisibilityState = {
   visible: Record<NavPrefId, boolean>
   toggle: (id: NavPrefId) => void
   showAll: () => void
+  resetDefaults: () => void
   isVisible: (id: NavPrefId) => boolean
 }
 
@@ -79,14 +86,18 @@ export function NavVisibilityProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const showAll = useCallback(() => {
+    setVisible({ ...ALL_VISIBLE })
+  }, [])
+
+  const resetDefaults = useCallback(() => {
     setVisible({ ...DEFAULT_VISIBLE })
   }, [])
 
   const isVisible = useCallback((id: NavPrefId) => visible[id] !== false, [visible])
 
   const value = useMemo(
-    () => ({ visible, toggle, showAll, isVisible }),
-    [visible, toggle, showAll, isVisible],
+    () => ({ visible, toggle, showAll, resetDefaults, isVisible }),
+    [visible, toggle, showAll, resetDefaults, isVisible],
   )
 
   return createElement(NavVisibilityContext.Provider, { value }, children)

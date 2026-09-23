@@ -22,48 +22,52 @@ export type SetupChapter = {
 }
 
 export const SETUP_INTRO = {
-  title: 'Set up Money Track',
+  title: 'Set up Tally',
   subtitle:
-    'About 10 minutes once. You will connect the phone that gets bank SMS, optionally forward bank emails, then confirm your first transaction appears.',
+    'About 5–10 minutes once. Connect the phone that gets bank SMS — that is the main feed. Bank email is optional later.',
 }
+
+/** MacroDroid HTTP body — copy-paste into Content / Body field. */
+export const ANDROID_SMS_JSON_BODY =
+  '{"sender":"[sms_from]","body":"[sms_body]"}'
 
 export const IPHONE_SMS_STEPS: GuideStep[] = [
   {
     title: 'Open the Shortcuts app',
-    body: 'It is pre-installed on every iPhone. Look for the blue-and-pink icon.',
+    body: 'Pre-installed on iPhone — blue-and-pink icon. Keep this Tally tab open so you can copy the SMS link again.',
   },
   {
     title: 'Create an automation for incoming SMS',
     bullets: [
-      'Tap Automation at the bottom → tap + (top right).',
-      'Choose Message (or “SMS received”).',
-      'You can start with “Any Sender” and narrow to bank senders later.',
+      'Tap Automation → + (top right).',
+      'Choose Message / “Message” received.',
+      'Start with Any Sender (narrow to banks later).',
       'Tap Next.',
     ],
   },
   {
     title: 'Add “Get Contents of URL”',
     bullets: [
-      'Tap Add Action → search “Get Contents of URL”.',
-      'Tap the URL field → paste your Money Track SMS link (copied in the previous step).',
-      'Set Method to POST (not GET — this is important).',
-      'Tap Show More → Request Body → JSON.',
-      'Add two fields: sender = Sender, body = Message Contents (use the blue variable chips).',
+      'Add Action → search “Get Contents of URL”.',
+      'URL field → paste your Tally SMS link (Copy SMS link above).',
+      'Method → POST (not GET).',
+      'Show More → Request Body → JSON.',
+      'Add two fields with blue chips: sender = Sender, body = Message Contents.',
     ],
+    tip: 'If the body is empty or GET is selected, nothing will arrive in Tally.',
   },
   {
-    title: 'Make it run automatically',
+    title: 'Run without asking',
     bullets: [
-      'Turn off “Ask Before Running” when prompted (or in automation settings).',
+      'Turn off “Ask Before Running”.',
       'Save the automation.',
     ],
-    tip: 'If iOS asks for permission, allow Shortcuts to send data when receiving messages.',
   },
   {
-    title: 'Test it',
+    title: 'Confirm in Tally',
     bullets: [
-      'Wait for a real bank debit/credit SMS, or ask someone to text you a sample.',
-      'Open Money Track → Transactions. The alert should appear within a few seconds.',
+      'Wait for one real bank SMS (or have someone text you).',
+      'Open Transactions — amount should appear within a few seconds.',
     ],
   },
 ]
@@ -71,42 +75,40 @@ export const IPHONE_SMS_STEPS: GuideStep[] = [
 export const ANDROID_SMS_STEPS: GuideStep[] = [
   {
     title: 'Install MacroDroid',
-    body: 'Free on the Play Store. Tasker also works if you already use it — the idea is the same.',
+    body: 'Free on the Play Store. Keep this Tally tab open to copy the SMS link and JSON body.',
   },
   {
     title: 'Allow SMS permission',
-    body: 'When MacroDroid asks, allow SMS read access so it can see bank alerts.',
+    body: 'When asked, allow SMS read so MacroDroid can see bank alerts.',
   },
   {
-    title: 'Create a new macro',
+    title: 'Create a macro',
     bullets: [
-      'Tap + to add a macro.',
-      'Trigger → Phone/SMS → SMS Received (you can filter by sender later).',
+      'Tap + → Trigger → Phone/SMS → SMS Received.',
+      'You can filter by bank sender later.',
     ],
   },
   {
-    title: 'Add HTTP Request action',
+    title: 'Add HTTP Request (POST)',
     bullets: [
       'Action → Connectivity → HTTP Request.',
-      'Method: POST.',
-      'URL: paste your Money Track SMS link.',
-      'Content type: application/json.',
-      'Body: { "sender": "[sms_from]", "body": "[sms_body]" } — use MacroDroid’s magic text for sender and body.',
+      'Method: POST · Content type: application/json.',
+      'URL: paste your Tally SMS link (Copy SMS link above).',
+      'Body: paste the JSON template (Copy JSON body) — MacroDroid fills [sms_from] / [sms_body].',
     ],
+    tip: 'Use the Copy JSON body button on Accounts / Setup so the braces and quotes stay exact.',
   },
   {
-    title: 'Keep it running in the background',
+    title: 'Keep MacroDroid alive',
     bullets: [
-      'Phone Settings → Apps → MacroDroid → Battery → Unrestricted (or “Don’t optimize”).',
-      'Disable battery saver for MacroDroid if transactions stop arriving.',
+      'Phone Settings → Apps → MacroDroid → Battery → Unrestricted.',
     ],
-    warning: 'Some Android brands (Xiaomi, Oppo, Vivo) aggressively kill background apps — whitelist MacroDroid.',
+    warning: 'Xiaomi / Oppo / Vivo often kill background apps — whitelist MacroDroid.',
   },
   {
-    title: 'Test it',
+    title: 'Confirm in Tally',
     bullets: [
-      'Trigger a bank SMS or wait for the next real alert.',
-      'Check Money Track → Transactions.',
+      'Wait for a bank SMS, then open Transactions.',
     ],
   },
 ]
@@ -131,14 +133,14 @@ export const GMAIL_FORWARD_STEPS: GuideStep[] = [
   {
     title: 'Forward matching emails only',
     bullets: [
-      'Tick Forward it to → choose or add your Money Track address.',
+      'Tick Forward it to → choose or add your Tally address.',
       'Gmail may email you once to verify forwarding — click the link in that email.',
       'Save the filter.',
     ],
     tip: 'Only bank alerts you forward are parsed. Newsletters and OTPs in your inbox are untouched.',
   },
   {
-    title: 'Confirm in Money Track',
+    title: 'Confirm in Tally',
     body: 'The next debit/credit email should show in Transactions within seconds, same as SMS.',
   },
 ]
@@ -165,37 +167,33 @@ export const FULL_SETUP_JOURNEY: SetupChapter[] = [
     part: 2,
     title: 'Connect bank SMS (main feed)',
     summary:
-      'Most Indian banks still text you for every debit and credit. We read those messages automatically once your phone forwards them.',
+      'Most Indian banks text every debit and credit. Copy your private link into Shortcuts (iPhone) or MacroDroid (Android).',
     steps: [
       {
-        title: 'Run the phone setup wizard',
-        body: 'If you have not finished it yet, open Setup from the menu or use the button below.',
-        tip: 'You need the phone that actually receives HDFC/ICICI/SBI etc. SMS — usually your daily driver.',
+        title: 'Open Phones & email',
+        body: 'Tap Copy SMS link for your phone. Treat the link like a password.',
+        tip: 'Use the phone that actually receives HDFC / ICICI / SBI SMS.',
       },
       {
-        title: 'Copy your private SMS link',
-        body: 'Each phone gets one secret link. Treat it like a password — do not post it online.',
-      },
-      {
-        title: 'Paste the link into Shortcuts (iPhone) or MacroDroid (Android)',
-        body: 'See the detailed steps in Setup or Accounts → SMS setup help.',
+        title: 'Paste into Shortcuts or MacroDroid',
+        body: 'Accounts shows platform steps under each phone. On Android, also copy the JSON body template.',
       },
       {
         title: 'Wait for one real bank SMS',
-        body: 'Open Transactions. You should see amount, merchant, and category.',
+        body: 'Open Transactions — you should see amount, merchant, and category.',
       },
     ],
-    cta: { label: 'Open setup wizard', to: '/setup' },
+    cta: { label: 'Open Phones & email', to: '/accounts' },
   },
   {
     id: 'email',
     part: 3,
     title: 'Bank emails (optional)',
     summary:
-      'Some banks email alerts instead of (or as well as) SMS. Forward only those emails — we ignore OTPs and promos.',
+      'Paste a bank alert to test anytime. When auto-forward is on, copy your personal address into a Gmail filter. OTPs and promos are ignored.',
     optional: true,
     steps: GMAIL_FORWARD_STEPS,
-    cta: { label: 'Set up email forwarding', to: '/accounts' },
+    cta: { label: 'Set up bank email', to: '/accounts' },
   },
   {
     id: 'verify',
@@ -213,7 +211,7 @@ export const FULL_SETUP_JOURNEY: SetupChapter[] = [
       },
       {
         title: 'Fix categories',
-        body: 'On Transactions, change any wrong category — Money Track learns from your corrections.',
+        body: 'On Transactions, change any wrong category — Tally learns from your corrections.',
         tip: 'Do this for 3–5 merchants in the first week for best accuracy.',
       },
     ],
@@ -274,9 +272,10 @@ export const TROUBLESHOOTING: GuideStep[] = [
   {
     title: 'Email not parsing',
     bullets: [
+      'Gmail forwards to your personal @ address from Accounts — never paste the onrender.com webhook link.',
       'Only forward real debit/credit alerts — OTP and marketing emails are skipped on purpose.',
       'Try paste mode on Accounts to test one email manually.',
-      'If auto-forward is unavailable, ask your admin to enable inbound email on the server.',
+      'If you do not see a forwarding address yet, auto-forward is still being enabled — paste works meanwhile.',
     ],
   },
   {
@@ -292,6 +291,5 @@ export const TROUBLESHOOTING: GuideStep[] = [
 export const SETUP_PROGRESS_LABELS = [
   'Choose phone',
   'Name phone',
-  'Copy link',
-  'Phone steps',
+  'Copy link & phone steps',
 ] as const

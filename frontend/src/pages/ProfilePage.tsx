@@ -1,7 +1,7 @@
-import { useBlocker } from 'react-router-dom'
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CheckCircle2, Circle, Sparkles, UserRound, Wallet } from 'lucide-react'
 import {
+  changePasswordRequest,
   createLearnedFact,
   deleteAccountRequest,
   deleteLearnedFact,
@@ -10,6 +10,7 @@ import {
   fetchLearnedFacts,
   fetchPlanningSummary,
   saveAdvisorTraining,
+  setStoredToken,
   type AdvisorTrainingQuestion,
   type LearnedFact,
   type PlanningGoal,
@@ -22,7 +23,7 @@ import { useWealthSettings } from '../hooks/useWealthSettings'
 const RELATION_OPTIONS = ['Mom', 'Dad', 'Spouse', 'Sibling', 'Family', 'Friend', 'Roommate', 'Other']
 
 export function ProfilePage() {
-  const { logout } = useAuth()
+  const { logout, setUser, user } = useAuth()
   const { enabled: advisorEnabled, setEnabled: setAdvisorEnabled } = useAdvisorSettings()
   const { enabled: wealthEnabled, setEnabled: setWealthEnabled } = useWealthSettings()
   const [loading, setLoading] = useState(true)
@@ -39,6 +40,11 @@ export function ProfilePage() {
   const [deletePassword, setDeletePassword] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [deleting, setDeleting] = useState(false)
+
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [changingPassword, setChangingPassword] = useState(false)
 
   const [trainingQs, setTrainingQs] = useState<AdvisorTrainingQuestion[]>([])
   const [trainAnswers, setTrainAnswers] = useState<Record<string, string>>({})
@@ -137,14 +143,6 @@ export function ProfilePage() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [incomeDirty])
 
-  const blocker = useBlocker(incomeDirty)
-  useEffect(() => {
-    if (blocker.state !== 'blocked') return
-    const leave = window.confirm('You have unsaved salary settings. Leave without saving?')
-    if (leave) blocker.proceed()
-    else blocker.reset()
-  }, [blocker])
-
   const flash = (msg: string) => {
     setSaved(msg)
     setTimeout(() => setSaved(null), 2500)
@@ -167,14 +165,14 @@ export function ProfilePage() {
       {
         id: 'coach',
         done: completeness >= 50,
-        label: 'Coach profile halfway done',
-        tip: 'Advisor uses your soft spot & motivation',
+        label: 'Optional: coach answers',
+        tip: 'Only if you turn Advisor on later',
       },
       {
         id: 'goal',
         done: goals.length > 0,
-        label: 'A savings goal',
-        tip: 'Optional — add under Advisor anytime',
+        label: 'Optional: a savings goal',
+        tip: 'Not required for SMS tracking',
       },
     ]
     const done = items.filter((i) => i.done).length
@@ -351,92 +349,8 @@ export function ProfilePage() {
     <div className="fade-in space-y-5">
       <PageHeader
         title="Your profile"
-        description="A short checklist so Money Track understands your salary, family, and goals — no tech skills needed."
+        description="Salary keywords and people labels so your ledger stays clean. Wealth, Advisor, and AI stay off until you want them."
       />
-
-      <ChartCard
-        title="Money Advisor"
-        subtitle="Turn the floating chat, banners, comments, and Advisor page on or off."
-      >
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
-              <Sparkles size={16} />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-[var(--text)]">
-                {advisorEnabled ? 'Advisor is on' : 'Advisor is off'}
-              </p>
-              <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
-                {advisorEnabled
-                  ? 'Chat, nudges, voice banners, and the Advisor page are available.'
-                  : 'All advisor UI is hidden. Goals and salary settings on this page still work.'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={advisorEnabled}
-            aria-label={advisorEnabled ? 'Turn advisor off' : 'Turn advisor on'}
-            onClick={() => {
-              setAdvisorEnabled(!advisorEnabled)
-              flash(advisorEnabled ? 'Advisor turned off' : 'Advisor turned on')
-            }}
-            className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
-              advisorEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
-            }`}
-          >
-            <span
-              className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                advisorEnabled ? 'translate-x-6' : 'translate-x-0'
-              }`}
-            />
-          </button>
-        </div>
-      </ChartCard>
-
-      <ChartCard
-        title="Wealth"
-        subtitle="Show or hide the Wealth page and INDmoney import."
-      >
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
-              <Wallet size={16} />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-[var(--text)]">
-                {wealthEnabled ? 'Wealth is on' : 'Wealth is off'}
-              </p>
-              <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
-                {wealthEnabled
-                  ? 'Net worth, holdings, and INDmoney import stay in the menu.'
-                  : 'Wealth and INDmoney pages are hidden until you turn this back on.'}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={wealthEnabled}
-            aria-label={wealthEnabled ? 'Turn wealth off' : 'Turn wealth on'}
-            onClick={() => {
-              setWealthEnabled(!wealthEnabled)
-              flash(wealthEnabled ? 'Wealth turned off' : 'Wealth turned on')
-            }}
-            className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
-              wealthEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
-            }`}
-          >
-            <span
-              className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                wealthEnabled ? 'translate-x-6' : 'translate-x-0'
-              }`}
-            />
-          </button>
-        </div>
-      </ChartCard>
 
       {error ? (
         <div
@@ -457,7 +371,7 @@ export function ProfilePage() {
 
       <ChartCard
         title={`Setup progress · ${checklist.done}/${checklist.total}`}
-        subtitle="Tick these once — the app gets smarter for you"
+        subtitle="Ledger basics first — extras are optional"
       >
         <ul className="space-y-2">
           {checklist.items.map((item) => (
@@ -714,8 +628,167 @@ export function ProfilePage() {
       </ChartCard>
 
       <ChartCard
+        title="Change password"
+        subtitle={user?.email ? `Signed in as ${user.email}` : 'Update your login password'}
+      >
+        <form
+          className="max-w-xl space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void (async () => {
+              setError(null)
+              if (newPassword.length < 8) {
+                setError('New password must be at least 8 characters')
+                return
+              }
+              if (newPassword !== confirmPassword) {
+                setError('New passwords do not match')
+                return
+              }
+              setChangingPassword(true)
+              try {
+                const res = await changePasswordRequest(currentPassword, newPassword)
+                setStoredToken(res.access_token)
+                setUser(res.user)
+                setCurrentPassword('')
+                setNewPassword('')
+                setConfirmPassword('')
+                flash('Password updated')
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Could not change password')
+              } finally {
+                setChangingPassword(false)
+              }
+            })()
+          }}
+        >
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Current password</span>
+            <input
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)]"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">New password</span>
+            <input
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)]"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="At least 8 characters"
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Confirm new password</span>
+            <input
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)]"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </label>
+          <button type="submit" className="btn btn-primary" disabled={changingPassword || busy}>
+            {changingPassword ? 'Updating…' : 'Update password'}
+          </button>
+        </form>
+      </ChartCard>
+
+      <details className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-4 shadow-[var(--elev-1)]">
+        <summary className="cursor-pointer list-none text-sm font-semibold text-[var(--text)] [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center justify-between gap-2">
+            Optional extras — Wealth & Advisor
+            <span className="text-xs font-normal text-[var(--muted)]">Off by default · tap to expand</span>
+          </span>
+        </summary>
+        <div className="mt-4 space-y-4 border-t border-[var(--border)] pt-4">
+          <p className="text-xs text-[var(--muted)]">
+            The core product is SMS → transactions → spending. These do not improve ledger accuracy.
+          </p>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
+                <Sparkles size={16} />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-[var(--text)]">
+                  {advisorEnabled ? 'Advisor is on' : 'Advisor is off'}
+                </p>
+                <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
+                  Optional coaching UI — not financial advice.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={advisorEnabled}
+              aria-label={advisorEnabled ? 'Turn advisor off' : 'Turn advisor on'}
+              onClick={() => {
+                setAdvisorEnabled(!advisorEnabled)
+                flash(advisorEnabled ? 'Advisor turned off' : 'Advisor turned on')
+              }}
+              className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
+                advisorEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
+              }`}
+            >
+              <span
+                className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                  advisorEnabled ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
+                <Wallet size={16} />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-[var(--text)]">
+                  {wealthEnabled ? 'Wealth is on' : 'Wealth is off'}
+                </p>
+                <p className="mt-0.5 max-w-md text-xs text-[var(--muted)]">
+                  Optional net worth / INDmoney — separate from your SMS ledger.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={wealthEnabled}
+              aria-label={wealthEnabled ? 'Turn wealth off' : 'Turn wealth on'}
+              onClick={() => {
+                setWealthEnabled(!wealthEnabled)
+                flash(wealthEnabled ? 'Wealth turned off' : 'Wealth turned on')
+              }}
+              className={`relative h-8 w-14 shrink-0 rounded-full transition-colors ${
+                wealthEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
+              }`}
+            >
+              <span
+                className={`absolute top-1 left-1 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                  wealthEnabled ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      </details>
+
+      <ChartCard
         title="Delete account"
-        subtitle="Permanently removes your transactions, portfolio, and settings from Money Track"
+        subtitle="Permanently removes transactions, phones & SMS links, and settings"
       >
         <form className="max-w-xl space-y-3" onSubmit={(e) => void deleteAccount(e)}>
           <p className="text-sm text-[var(--muted)]">

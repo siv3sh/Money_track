@@ -45,8 +45,8 @@ export function BankEmailSetupCard({
       title="Bank alert emails"
       subtitle={
         liveReady
-          ? 'Forward bank emails once — we read them automatically'
-          : 'Try paste below now; auto-forward unlocks when live parsing is enabled on the server'
+          ? 'One Gmail filter → we parse debit/credit alerts automatically'
+          : 'Fastest path: paste a bank alert below. Auto-forward when a personal address is available.'
       }
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -63,14 +63,14 @@ export function BankEmailSetupCard({
               Auto-forward ready
             </>
           ) : (
-            'Paste mode'
+            'Paste works now'
           )}
         </span>
         <Link
           to="/getting-started"
           className="text-xs font-medium text-[var(--sapphire)] underline-offset-2 hover:underline"
         >
-          Full setup guide →
+          Full guide →
         </Link>
       </div>
 
@@ -79,7 +79,9 @@ export function BankEmailSetupCard({
           Last activity {new Date(primary!.last_seen_at!).toLocaleString('en-IN')}
         </p>
       ) : (
-        <p className="mb-4 text-xs text-[var(--muted)]">No bank email or SMS received yet</p>
+        <p className="mb-4 text-xs text-[var(--muted)]">
+          No email activity yet — paste one bank debit/credit alert to test
+        </p>
       )}
 
       {liveReady ? (
@@ -111,7 +113,9 @@ export function BankEmailSetupCard({
           </div>
 
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <p className="mb-3 text-sm font-medium text-[var(--text)]">Gmail filter (copy this into From)</p>
+            <p className="mb-3 text-sm font-medium text-[var(--text)]">
+              Gmail filter — paste into From
+            </p>
             <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start">
               <code className="block flex-1 break-all rounded-lg bg-[var(--surface-2)] px-2 py-1.5 text-[11px]">
                 {GMAIL_BANK_FILTER}
@@ -129,13 +133,11 @@ export function BankEmailSetupCard({
         </div>
       ) : (
         <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm leading-relaxed text-[var(--muted)]">
-          <p className="font-medium text-[var(--text)]">No auto-forward yet?</p>
+          <p className="font-medium text-[var(--text)]">Paste is the easy path</p>
           <p className="mt-1">
-            Copy any bank alert email and paste it below — same result as automatic. See{' '}
-            <Link to="/getting-started" className="font-medium text-[var(--sapphire)] hover:underline">
-              setup guide
-            </Link>{' '}
-            Part 3 for Gmail forwarding when it is enabled.
+            Copy any bank debit/credit email → paste below → Save. Same ledger as SMS. When
+            auto-forward is enabled on the server, a personal address appears here for Gmail
+            filters — until then, paste is fully supported.
           </p>
         </div>
       )}
@@ -148,7 +150,7 @@ export function BankEmailSetupCard({
       >
         <span className="flex items-center gap-2">
           <Mail size={16} className="text-[var(--sapphire)]" aria-hidden />
-          {liveReady ? 'Or paste one email to test' : 'Paste a bank email now'}
+          {liveReady ? 'Or paste one email to test' : 'Paste a bank email'}
         </span>
         <ChevronDown
           size={16}
@@ -177,21 +179,18 @@ export function BankEmailSetupCard({
             value={emailText}
             onChange={(e) => onEmailText(e.target.value)}
           />
-          <button type="submit" className="btn btn-primary self-start" disabled={busy}>
-            {busy ? 'Saving…' : 'Save to Transactions'}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="submit" className="btn btn-primary self-start" disabled={busy}>
+              {busy ? 'Saving…' : 'Save to Transactions'}
+            </button>
+            <Link
+              to="/transactions"
+              className="text-xs font-medium text-[var(--sapphire)] underline-offset-2 hover:underline"
+            >
+              Open Transactions →
+            </Link>
+          </div>
         </form>
-      ) : null}
-
-      {primary?.email_webhook_url ? (
-        <details className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-          <summary className="cursor-pointer text-xs font-medium text-[var(--muted)]">
-            Advanced — Zapier / developers only
-          </summary>
-          <p className="mt-2 break-all font-mono text-[11px] text-[var(--muted)]">
-            {primary.email_webhook_url}
-          </p>
-        </details>
       ) : null}
     </ChartCard>
   )

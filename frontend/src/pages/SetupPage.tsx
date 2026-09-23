@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Check, Copy } from 'lucide-react'
 import {
   createLinkedAccount,
   fetchLinkedAccounts,
@@ -10,8 +10,10 @@ import {
 } from '../api'
 import { GuideSteps, SetupProgressBar } from '../components/GuideSteps'
 import { useAuth } from '../context/AuthContext'
+import { trackEvent } from '../lib/analytics'
 import { LoadingBlock, PageHeader } from '../components/ui'
 import {
+  ANDROID_SMS_JSON_BODY,
   ANDROID_SMS_STEPS,
   IPHONE_SMS_STEPS,
   SETUP_INTRO,
@@ -30,9 +32,9 @@ export function SetupPage() {
   const [account, setAccount] = useState<LinkedAccount | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'url' | 'json' | null>(null)
 
-  const totalSteps = 4
+  const totalSteps = 3
 
   useEffect(() => {
     if (!user) return
@@ -44,6 +46,9 @@ export function SetupPage() {
           if (res.items[0].label) setLabel(res.items[0].label)
           if (res.items[0].identifier && res.items[0].identifier !== 'primary') {
             setPhone(res.items[0].identifier)
+          }
+          if (res.items[0].platform === 'ios' || res.items[0].platform === 'android') {
+            setPlatform(res.items[0].platform)
           }
         }
       } catch {
@@ -61,7 +66,7 @@ export function SetupPage() {
   }
   if (!user) return <Navigate to="/login" replace />
   if (user.setup_completed) {
-    return <Navigate to={user.onboarding_completed ? '/' : '/getting-started'} replace />
+    return <Navigate to="/accounts" replace />
   }
 
   const webhookUrl = account?.webhook_url || ''
@@ -121,6 +126,7 @@ export function SetupPage() {
       const next = await saveSetup({ platform, setup_completed: true })
       setUser(next)
       await refreshUser()
+      trackEvent('activation_setup_done', { platform })
       navigate('/getting-started', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save setup')
@@ -129,14 +135,14 @@ export function SetupPage() {
     }
   }
 
-  const copyUrl = async () => {
-    if (!webhookUrl) return
+  const copyText = async (text: string, kind: 'url' | 'json') => {
     try {
-      await navigator.clipboard.writeText(webhookUrl)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      await navigator.clipboard.writeText(text)
+      setCopied(kind)
+      setTimeout(() => setCopied(null), 2000)
+      if (kind === 'url') trackEvent('activation_copy_sms_link', { where: 'setup' })
     } catch {
-      setError('Could not copy — select the link below and copy manually')
+      setError('Could not copy — select the text and copy manually')
     }
   }
 
@@ -146,7 +152,6 @@ export function SetupPage() {
       setStep(1)
       setPlatform(null)
     } else if (step === 3) setStep(2)
-    else if (step === 4) setStep(3)
   }
 
   return (
@@ -154,7 +159,9 @@ export function SetupPage() {
       <PageHeader title={SETUP_INTRO.title} description={SETUP_INTRO.subtitle} />
 
       <SetupProgressBar step={step} total={totalSteps} />
-      <p className="-mt-4 mb-6 text-sm font-medium text-[var(--text)]">{SETUP_PROGRESS_LABELS[step - 1]}</p>
+      <p className="-mt-4 mb-6 text-sm font-medium text-[var(--text)]">
+        {SETUP_PROGRESS_LABELS[step - 1]}
+      </p>
 
       {error ? (
         <div className="mb-4 rounded-xl border border-[var(--debit)]/30 bg-[var(--debit-soft)] px-4 py-3 text-sm text-[var(--debit)]">
@@ -177,8 +184,8 @@ export function SetupPage() {
         <section className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
           <h2 className="text-lg font-semibold text-[var(--text)]">Which phone gets bank SMS?</h2>
           <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
-            Choose the phone that receives texts like “Rs 500 spent at…” from your bank. This is how
-            Money Track learns your spending automatically.
+            Choose the phone that receives texts like “Rs 500 spent at…” — that is how Tally builds
+            your ledger.
           </p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <button
@@ -187,7 +194,9 @@ export function SetupPage() {
               onClick={() => choosePlatform('ios')}
             >
               <span className="text-base font-semibold">iPhone</span>
-              <span className="text-xs font-normal text-[var(--muted)]">Apple Shortcuts (free, built-in)</span>
+              <span className="text-xs font-normal text-[var(--muted)]">
+                Apple Shortcuts (built-in, free)
+              </span>
             </button>
             <button
               type="button"
@@ -205,8 +214,7 @@ export function SetupPage() {
         <section className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
           <h2 className="text-lg font-semibold">Name this phone</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            So you can tell phones apart later (e.g. “Personal” vs “Work”). You can add more phones
-            anytime under Accounts.
+            Nickname only — add more phones later under Phones & email.
           </p>
           <div className="mt-4 space-y-3">
             <label className="block text-sm">
@@ -224,10 +232,15 @@ export function SetupPage() {
                 className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="10-digit mobile — for your reference only"
+                placeholder="10-digit mobile — for your reference"
               />
             </label>
-            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void createLink()}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void createLink()}
+            >
               {busy ? 'Creating…' : 'Continue → get my SMS link'}
             </button>
           </div>
@@ -236,38 +249,63 @@ export function SetupPage() {
 
       {step === 3 && platform ? (
         <section className="space-y-4">
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
-            <h2 className="text-lg font-semibold">Copy your private SMS link</h2>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              This link is unique to <strong>{label}</strong>. Keep it private — anyone with the link
-              could post fake transactions.
+          <div className="sticky top-2 z-10 rounded-2xl border border-[var(--sapphire)]/25 bg-[var(--sheet)] p-4 shadow-[var(--elev-1)]">
+            <h2 className="text-base font-semibold text-[var(--text)]">Your private SMS link</h2>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Unique to <strong>{label}</strong>. Keep private — anyone with it could post fake
+              transactions.
             </p>
-            <div className="mt-3 break-all rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 font-mono text-xs">
+            <div className="mt-2 break-all rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 font-mono text-[11px]">
               {webhookUrl || 'Creating link…'}
             </div>
-            <button
-              type="button"
-              className="btn btn-primary mt-3"
-              disabled={!webhookUrl}
-              onClick={() => void copyUrl()}
-            >
-              {copied ? 'Copied!' : 'Copy SMS link'}
-            </button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-primary gap-1.5 text-sm"
+                disabled={!webhookUrl}
+                onClick={() => void copyText(webhookUrl, 'url')}
+              >
+                {copied === 'url' ? (
+                  <>
+                    <Check size={14} aria-hidden />
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy size={14} aria-hidden />
+                    Copy SMS link
+                  </>
+                )}
+              </button>
+              {platform === 'android' ? (
+                <button
+                  type="button"
+                  className="btn gap-1.5 text-sm"
+                  onClick={() => void copyText(ANDROID_SMS_JSON_BODY, 'json')}
+                >
+                  {copied === 'json' ? (
+                    <>
+                      <Check size={14} aria-hidden />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} aria-hidden />
+                      Copy JSON body
+                    </>
+                  )}
+                </button>
+              ) : null}
+            </div>
           </div>
-          <button type="button" className="btn w-full justify-center" onClick={() => setStep(4)}>
-            I copied it — show phone steps
-          </button>
-        </section>
-      ) : null}
 
-      {step === 4 && platform ? (
-        <section className="space-y-4">
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--sheet)] p-5 shadow-[var(--elev-1)]">
             <h2 className="text-lg font-semibold">
-              {platform === 'ios' ? 'Set up on your iPhone' : 'Set up on your Android'}
+              {platform === 'ios' ? 'On your iPhone' : 'On your Android'}
             </h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Do these on the phone that receives bank SMS. Come back here when done.
+              Follow these on the phone that gets bank SMS. The link stays above so you can copy
+              again anytime.
             </p>
             <div className="mt-4">
               <GuideSteps steps={platform === 'ios' ? IPHONE_SMS_STEPS : ANDROID_SMS_STEPS} />
@@ -275,18 +313,23 @@ export function SetupPage() {
           </div>
 
           <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--muted)]">
-            <p className="font-medium text-[var(--text)]">What about bank emails?</p>
+            <p className="font-medium text-[var(--text)]">Bank emails?</p>
             <p className="mt-1">
-              Optional. After you finish here, open{' '}
+              Optional. After this, open{' '}
               <Link to="/accounts" className="font-medium text-[var(--sapphire)] hover:underline">
-                Accounts
+                Phones & email
               </Link>{' '}
-              for step-by-step Gmail forwarding — or skip if SMS is enough.
+              to paste a bank alert or set Gmail forward.
             </p>
           </div>
 
-          <button type="button" className="btn btn-primary w-full justify-center" disabled={busy} onClick={() => void finish()}>
-            {busy ? 'Saving…' : 'Done — continue to full guide'}
+          <button
+            type="button"
+            className="btn btn-primary w-full justify-center"
+            disabled={busy}
+            onClick={() => void finish()}
+          >
+            {busy ? 'Saving…' : 'Done — continue to guide'}
           </button>
         </section>
       ) : null}

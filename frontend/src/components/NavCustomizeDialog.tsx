@@ -6,7 +6,7 @@ import { useWealthSettings } from '../hooks/useWealthSettings'
 import { ALWAYS_VISIBLE_NAV, useNavVisibility } from '../hooks/useNavVisibility'
 
 export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { visible, toggle, showAll } = useNavVisibility()
+  const { visible, toggle, showAll, resetDefaults } = useNavVisibility()
   const { enabled: advisorEnabled } = useAdvisorSettings()
   const { enabled: wealthEnabled } = useWealthSettings()
   const panelRef = useRef<HTMLDivElement>(null)
@@ -64,8 +64,8 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
               Customise menu
             </h2>
             <p className="mt-0.5 text-xs text-[var(--muted)]">
-              Pick the pages you want in the sidebar.
-              {hintParts.length ? ` ${hintParts.join(' · ')} — enable in Profile.` : ''}
+              Core ledger pages stay on. Optional extras are off until you enable them.
+              {hintParts.length ? ` ${hintParts.join(' · ')} — turn on in Profile.` : ''}
             </p>
           </div>
           <button
@@ -128,6 +128,10 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
                     <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
                       Always on
                     </span>
+                  ) : item.advanced ? (
+                    <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted)]">
+                      Extra
+                    </span>
                   ) : null}
                 </button>
               </li>
@@ -137,13 +141,22 @@ export function NavCustomizeDialog({ open, onClose }: { open: boolean; onClose: 
 
         {/* footer */}
         <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-5 py-3">
-          <button
-            type="button"
-            className="text-xs font-medium text-[var(--sapphire)] hover:underline"
-            onClick={showAll}
-          >
-            Show all
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className="text-xs font-medium text-[var(--sapphire)] hover:underline"
+              onClick={showAll}
+            >
+              Show all
+            </button>
+            <button
+              type="button"
+              className="text-xs font-medium text-[var(--muted)] hover:underline"
+              onClick={resetDefaults}
+            >
+              Ledger defaults
+            </button>
+          </div>
           <button type="button" className="btn btn-primary" onClick={onClose}>
             Done
           </button>

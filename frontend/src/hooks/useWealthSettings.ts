@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 
-const WEALTH_PREF_KEY = 'money-track-wealth-enabled'
+const WEALTH_PREF_KEY = 'tally-wealth-enabled'
 
 type WealthSettingsState = {
   enabled: boolean
@@ -27,7 +27,8 @@ function readEnabled(): boolean {
   } catch {
     /* ignore */
   }
-  return true
+  // Default off — net worth is optional; enable in Profile
+  return false
 }
 
 export function WealthSettingsProvider({ children }: { children: ReactNode }) {

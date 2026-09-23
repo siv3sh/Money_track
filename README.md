@@ -1,13 +1,15 @@
-# SMS Money Tracker
+# Tally
 
-Personal finance tracker that captures bank/UPI SMS from your iPhone (via Shortcuts), parses debit/credit details with the tested `parser.py`, stores them in Supabase Postgres, and shows them on a web dashboard.
+Your UPI/SMS ledger that doesn’t lie: capture bank/UPI SMS from your phone, parse debit/credit with `parser.py`, store per-user data, and show a private Dashboard / Spending / Transactions loop.
 
-Single-user — webhook protected by an API key only.
+Wealth, Advisor, and AI stay optional. Not financial advice.
+
+**Live:** [tally.nuential.com](https://tally.nuential.com) · Marketing landing at `/`, app at `/dashboard` after signup.
 
 ```
-iPhone Shortcuts  →  POST /sms-webhook  →  parser.py  →  Supabase Postgres
-                                                                    ↓
-                                                            React dashboard
+Phone SMS → POST /sms-webhook (per-device token) → parser.py → Supabase
+                                                              ↓
+                                                     React dashboard
 ```
 
 ## Project layout

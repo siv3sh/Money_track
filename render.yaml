@@ -21,7 +21,7 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: APP_BASE_URL
-        sync: false
+        value: https://tally.nuential.com
       - key: WEBHOOK_PUBLIC_BASE
         value: https://money-track-epnn.onrender.com
       - key: PYTHON_VERSION
@@ -40,6 +40,18 @@ services:
         sync: false
       - key: RESEND_INBOUND_DOMAIN
         sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: BILLING_TRIAL_DAYS
+        value: "14"
+      - key: BILLING_PRO_PRICE_LABEL
+        value: "₹299/mo"
 
   # Runs on the 1st of each month (UTC) — generates prior-month report + email
   - type: cron

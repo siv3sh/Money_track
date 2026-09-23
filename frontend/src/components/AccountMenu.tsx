@@ -126,7 +126,7 @@ export function AccountMenu() {
               onClick={() => {
                 setOpen(false)
                 logout()
-                navigate('/login')
+                navigate('/')
               }}
             >
               <LogOut size={14} />

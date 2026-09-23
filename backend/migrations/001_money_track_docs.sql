@@ -1,4 +1,4 @@
--- Isolated Money Track store (migrated from MongoDB).
+-- Isolated Tally store (migrated from MongoDB).
 -- Applied on the connected Supabase project as money_track_docs_schema.
 
 CREATE SCHEMA IF NOT EXISTS money_track;
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS money_track.docs (
 );
 
 COMMENT ON TABLE money_track.docs IS
-  'Document store for Money Track, migrated from MongoDB money_tracker.';
+  'Document store for Tally, migrated from MongoDB money_tracker.';
 
 CREATE INDEX IF NOT EXISTS money_track_docs_user_idx
   ON money_track.docs (collection, user_id);

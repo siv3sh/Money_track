@@ -1,15 +1,24 @@
 import type { AnalyticsPayload, CardType, Transaction, TxnType } from './types'
 
-// Dev default: same-origin /api (Vite proxies to uvicorn). Override with VITE_API_URL if needed.
+// Same-origin /api: Vite proxies in dev; Vercel rewrites to Render in prod.
+// Override with VITE_API_URL only when you must hit the API host directly.
 const API_BASE =
-  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ||
-  (import.meta.env.DEV ? '/api' : 'http://127.0.0.1:8000')
+  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') || '/api'
 
-const TOKEN_KEY = 'money-track-token'
+const TOKEN_KEY = 'tally-token'
+const LEGACY_TOKEN_KEY = 'money-track-token'
 
 export function getStoredToken(): string | null {
   try {
-    return localStorage.getItem(TOKEN_KEY)
+    const current = localStorage.getItem(TOKEN_KEY)
+    if (current) return current
+    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY)
+    if (legacy) {
+      localStorage.setItem(TOKEN_KEY, legacy)
+      localStorage.removeItem(LEGACY_TOKEN_KEY)
+      return legacy
+    }
+    return null
   } catch {
     return null
   }
@@ -17,10 +26,20 @@ export function getStoredToken(): string | null {
 
 export function setStoredToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token)
+  try {
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
 }
 
 export function logoutLocal(): void {
   localStorage.removeItem(TOKEN_KEY)
+  try {
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
 }
 
 export type AuthUser = {
@@ -35,6 +54,12 @@ export type AuthUser = {
   disabled?: boolean
   is_admin?: boolean
   created_at?: string | null
+  plan?: 'free' | 'pro' | string
+  entitled?: boolean
+  subscription_status?: string
+  trial_ends_at?: string | null
+  trial_active?: boolean
+  billing_enabled?: boolean
 }
 
 export type LinkedAccount = {
@@ -163,7 +188,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
   } catch {
     throw new Error(
-      `Cannot reach API at ${API_BASE}. Start the backend (uvicorn on port 8000) and retry.`,
+      `Cannot reach the API (${API_BASE}). If you just opened the app, the server may be waking up — wait ~30s and retry.`,
     )
   } finally {
     if (slowTimer != null) window.clearTimeout(slowTimer)
@@ -213,6 +238,49 @@ export function fetchMe(): Promise<AuthUser> {
   return request('/auth/me')
 }
 
+export function verifyEmailRequest(
+  token: string,
+): Promise<{ access_token: string; token_type: string; user: AuthUser; ok: boolean }> {
+  return request('/auth/verify-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+}
+
+export function resendVerificationRequest(): Promise<{ ok: boolean; detail?: string }> {
+  return request('/auth/resend-verification', { method: 'POST' })
+}
+
+export type BillingStatus = {
+  billing_enabled: boolean
+  plan: string
+  entitled: boolean
+  subscription_status: string
+  trial_ends_at: string | null
+  trial_active: boolean
+  trial_days: number
+  pro_price_label: string
+  publishable_key?: string | null
+  features: string[]
+}
+
+export function fetchBillingConfig(): Promise<BillingStatus> {
+  return request('/billing/config')
+}
+
+export function fetchBillingStatus(): Promise<BillingStatus> {
+  return request('/billing/status')
+}
+
+export function createBillingCheckout(): Promise<{ id: string; url: string }> {
+  return request('/billing/checkout', { method: 'POST' })
+}
+
+export function createBillingPortal(): Promise<{ url: string }> {
+  return request('/billing/portal', { method: 'POST' })
+}
+
 export function saveSetup(payload: {
   platform: 'ios' | 'android'
   setup_completed?: boolean
@@ -250,6 +318,26 @@ export function resetPasswordRequest(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token, password }),
+  })
+}
+
+export function changePasswordRequest(
+  currentPassword: string,
+  newPassword: string,
+): Promise<{
+  ok: boolean
+  access_token: string
+  token_type: string
+  user: AuthUser
+  detail?: string
+}> {
+  return request('/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
   })
 }
 
@@ -1186,7 +1274,7 @@ export async function downloadMonthlyReportPdf(month: string): Promise<void> {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `money-track-${month}.pdf`
+  a.download = `tally-${month}.pdf`
   document.body.appendChild(a)
   a.click()
   a.remove()

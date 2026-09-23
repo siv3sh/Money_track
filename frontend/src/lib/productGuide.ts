@@ -1,6 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
 import {
-  ArrowLeftRight,
   FileText,
   LayoutDashboard,
   List,
@@ -29,35 +28,35 @@ export type GuideChecklistItem = {
 }
 
 export const GUIDE_WELCOME = {
-  title: 'Welcome to Money Track',
+  title: 'Welcome to Tally',
   subtitle:
-    'One place for SMS bank alerts, statements, and portfolio imports — so you can see spend, cash flow, and wealth without spreadsheet chaos.',
+    'Your UPI/SMS ledger that doesn’t lie — connect bank alerts, confirm amounts, and see real spending. No bank password.',
 }
 
 export const GUIDE_SETUP_STEPS: Array<{ title: string; body: string; to?: string; cta?: string }> = [
   {
     title: '1. Connect bank SMS',
-    body: 'Use the setup wizard on your iPhone (Shortcuts) or Android (MacroDroid). This is the main way transactions appear.',
-    to: '/setup',
-    cta: 'Open setup wizard',
+    body: 'Copy your private SMS link from Phones & email into Shortcuts (iPhone) or MacroDroid (Android).',
+    to: '/accounts',
+    cta: 'Open Phones & email',
   },
   {
-    title: '2. Confirm Transactions',
-    body: 'Wait for one real bank SMS, then check Transactions for the correct amount.',
+    title: '2. Confirm the first SMS',
+    body: 'Wait for one real bank alert, then open Transactions and check the amount and debit/credit sign.',
     to: '/transactions',
     cta: 'View Transactions',
   },
   {
-    title: '3. Bank emails (optional)',
-    body: 'Forward only debit/credit alert emails from Gmail — step-by-step on Accounts.',
-    to: '/accounts',
-    cta: 'Email setup',
+    title: '3. Fix a few categories',
+    body: 'Recategorize 3–5 merchants so Spending stays accurate. Tally learns from your corrections.',
+    to: '/transactions',
+    cta: 'Categorize',
   },
   {
-    title: '4. Import history (optional)',
-    body: 'Upload a bank CSV/PDF or INDmoney export when you want older data or holdings.',
-    to: '/import',
-    cta: 'Import',
+    title: '4. Optional: email or history',
+    body: 'Paste a bank email on Phones & email, or import a CSV/PDF for older data.',
+    to: '/accounts',
+    cta: 'Phones & email',
   },
 ]
 
@@ -65,74 +64,69 @@ export const GUIDE_FEATURES: GuideFeature[] = [
   {
     id: 'dashboard',
     title: 'Dashboard',
-    description: 'Period overview of money in and out, with recent activity.',
-    to: '/',
+    description: 'Money in and out for the period — your ledger at a glance.',
+    to: '/dashboard',
     icon: LayoutDashboard,
   },
   {
     id: 'spending',
     title: 'Spending',
-    description: 'Categories, trends, merchants, budgets, subscriptions, and anomalies.',
+    description: 'Categories, merchants, subscriptions, budgets, and odd spikes.',
     to: '/spending',
     icon: PieChart,
   },
   {
-    id: 'cash-flow',
-    title: 'Cash Flow',
-    description: 'Credits vs debits and how your balance moves over time.',
-    to: '/cash-flow',
-    icon: ArrowLeftRight,
-  },
-  {
     id: 'transactions',
     title: 'Transactions',
-    description: 'Search, filter, and recategorize individual SMS and imports.',
+    description: 'Every SMS and import — search, filter, fix categories.',
     to: '/transactions',
     icon: List,
   },
   {
-    id: 'wealth',
-    title: 'Wealth',
-    description: 'Net worth, holdings, and INDmoney snapshot.',
-    to: '/wealth',
-    icon: Wallet,
-    note: 'Can be turned off in Profile',
-  },
-  {
-    id: 'planning',
-    title: 'Advisor',
-    description: 'Goals, coaching, and planning with the Money Advisor.',
-    to: '/planning',
-    icon: Target,
-    note: 'Can be turned off in Profile',
-  },
-  {
-    id: 'ai',
-    title: 'AI Insights',
-    description: 'Ask questions about your spend and get structured answers.',
-    to: '/ai',
-    icon: Sparkles,
-  },
-  {
-    id: 'reports',
-    title: 'Reports',
-    description: 'Monthly digests you can revisit and share.',
-    to: '/monthly-reports',
-    icon: FileText,
+    id: 'accounts',
+    title: 'Phones & email',
+    description: 'Copy SMS links, paste bank emails, set Gmail forward.',
+    to: '/accounts',
+    icon: Smartphone,
   },
   {
     id: 'import',
     title: 'Import',
-    description: 'Bring in statement CSVs and portfolio files.',
+    description: 'Statement CSV/PDF when you need history before SMS started.',
     to: '/import',
     icon: Upload,
   },
   {
-    id: 'accounts',
-    title: 'Phones & email',
-    description: 'Manage webhook links, rotate tokens, and add more phones.',
-    to: '/accounts',
-    icon: Smartphone,
+    id: 'wealth',
+    title: 'Wealth',
+    description: 'Optional net worth and INDmoney holdings.',
+    to: '/wealth',
+    icon: Wallet,
+    note: 'Off by default — enable in Profile',
+  },
+  {
+    id: 'planning',
+    title: 'Advisor',
+    description: 'Optional goals and coaching (not financial advice).',
+    to: '/planning',
+    icon: Target,
+    note: 'Off by default — enable in Profile',
+  },
+  {
+    id: 'ai',
+    title: 'Ask Tally',
+    description: 'Optional Q&A on your own ledger numbers.',
+    to: '/ai',
+    icon: Sparkles,
+    note: 'Add via Customise menu',
+  },
+  {
+    id: 'reports',
+    title: 'Reports',
+    description: 'Optional monthly digests.',
+    to: '/monthly-reports',
+    icon: FileText,
+    note: 'Add via Customise menu',
   },
 ]
 
@@ -140,32 +134,26 @@ export const GUIDE_CHECKLIST: GuideChecklistItem[] = [
   {
     id: 'sms',
     title: 'Confirm an SMS arrived',
-    description: 'Send a small bank alert or wait for the next debit — it should show under Transactions.',
+    description: 'One real debit/credit in Transactions with the right ₹ amount.',
     to: '/transactions',
   },
   {
     id: 'categorize',
     title: 'Fix a few categories',
-    description: 'Recategorize 3–5 merchants so Spending and budgets stay accurate.',
+    description: 'Recategorize 3–5 merchants so Spending is trustworthy.',
     to: '/transactions',
   },
   {
     id: 'profile',
-    title: 'Set salary & budgets',
-    description: 'Add employer/salary keywords and soft category caps in Profile.',
+    title: 'Optional: salary keywords',
+    description: 'Add employer/salary words in Profile so credits label cleanly.',
     to: '/profile',
-  },
-  {
-    id: 'wealth',
-    title: 'Optional: import Wealth',
-    description: 'If you use INDmoney or broker CSVs, import holdings so net worth is complete.',
-    to: '/investments/indmoney',
   },
 ]
 
 export const GUIDE_TIPS: string[] = [
-  'Use the date filters on each page to switch Day / Week / Month / Year views.',
-  'Profile lets you hide Advisor or Wealth if you want a simpler menu.',
-  'Reopen this guide anytime from the avatar menu → Help & guide.',
-  'Private SMS links are secret — never post them publicly; rotate in Accounts if leaked.',
+  'Trust the ledger first — amount and sign matter more than charts.',
+  'Hide extras anytime: avatar → Customise menu, or Profile for Advisor/Wealth.',
+  'Private SMS links are secret — rotate in Accounts if leaked.',
+  'Tally is not a bank and not financial advice.',
 ]

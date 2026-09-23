@@ -109,7 +109,15 @@ def detect_statement_profile(
     blob = f"{filename}\n{sample[:12000]}".lower()
     name = (filename or "").lower()
 
-    scores = {"Federal Bank": 0, "ICICI Bank": 0, "South Indian Bank": 0}
+    scores = {
+        "Federal Bank": 0,
+        "ICICI Bank": 0,
+        "South Indian Bank": 0,
+        "HDFC Bank": 0,
+        "State Bank of India": 0,
+        "Axis Bank": 0,
+        "Kotak Mahindra Bank": 0,
+    }
     if "federal" in blob or "fedbnk" in blob or "fedbk" in blob or "fed-" in name:
         scores["Federal Bank"] += 5
     if "icici" in blob or "icicib" in blob:
@@ -122,6 +130,14 @@ def detect_statement_profile(
         or "sib.bank" in blob
     ):
         scores["South Indian Bank"] += 8
+    if "hdfc" in blob:
+        scores["HDFC Bank"] += 5
+    if "state bank" in blob or re.search(r"\bsbi\b", blob) or "sbiinb" in blob:
+        scores["State Bank of India"] += 5
+    if "axis" in blob:
+        scores["Axis Bank"] += 5
+    if "kotak" in blob:
+        scores["Kotak Mahindra Bank"] += 5
 
     is_credit_card = any(h in blob for h in CREDIT_CARD_HINTS) or (
         "credit" in name and "card" in name

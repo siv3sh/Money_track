@@ -47,6 +47,7 @@ JWT_DAYS = int(os.getenv("JWT_EXPIRE_DAYS", "14"))
 USER_OWNED_COLLECTIONS = (
     "transactions",
     "webhook_events",
+    "linked_accounts",
     "category_memory",
     "portfolio",
     "networth_snapshots",
@@ -125,6 +126,9 @@ def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
     # Legacy accounts (no verification flags) are treated as already verified.
     email_verified = True if "email_verified" not in doc else bool(doc.get("email_verified"))
     phone_verified = True if "phone_verified" not in doc else bool(doc.get("phone_verified"))
+    from billing import resolve_entitlement
+
+    billing = resolve_entitlement(doc)
     return {
         "id": str(doc["_id"]),
         "email": doc.get("email"),
@@ -139,6 +143,12 @@ def serialize_user(doc: dict[str, Any]) -> dict[str, Any]:
         "onboarding_completed": onboarding_completed,
         "disabled": bool(doc.get("disabled")),
         "is_admin": is_admin_user(doc),
+        "plan": billing.get("plan"),
+        "entitled": billing.get("entitled"),
+        "subscription_status": billing.get("subscription_status"),
+        "trial_ends_at": billing.get("trial_ends_at"),
+        "trial_active": billing.get("trial_active"),
+        "billing_enabled": billing.get("billing_enabled"),
     }
 
 
@@ -207,6 +217,9 @@ def register_user(
     }
     if phone_n:
         doc["phone"] = phone_n
+    from billing import apply_signup_trial
+
+    apply_signup_trial(doc)
     try:
         res = users.insert_one(doc)
     except Exception as exc:  # noqa: BLE001
@@ -417,6 +430,87 @@ def reset_password_with_token(users: Collection, token: str, new_password: str) 
             "$unset": {
                 "password_reset_token_hash": "",
                 "password_reset_expires": "",
+            },
+        },
+    )
+    refreshed = users.find_one({"_id": doc["_id"]})
+    return refreshed or doc
+
+
+def change_password(
+    users: Collection,
+    user: dict[str, Any],
+    *,
+    current_password: str,
+    new_password: str,
+) -> dict[str, Any]:
+    """Authenticated password change. Requires the current password."""
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    if current_password == new_password:
+        raise HTTPException(status_code=400, detail="New password must be different from the current one")
+    if not verify_password(str(user.get("password_hash") or ""), current_password):
+        raise HTTPException(status_code=401, detail="Current password is wrong")
+    users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": hash_password(new_password),
+                "updated_at": _now(),
+            },
+            "$unset": {
+                "password_reset_token_hash": "",
+                "password_reset_expires": "",
+            },
+        },
+    )
+    refreshed = users.find_one({"_id": user["_id"]})
+    return refreshed or user
+
+
+def create_email_verify_token(users: Collection, user_id: ObjectId) -> str | None:
+    """Store hashed email-verify token (48h) and return the raw token."""
+    doc = users.find_one({"_id": user_id})
+    if not doc or doc.get("disabled"):
+        return None
+    if doc.get("email_verified") is True:
+        return None
+    raw = secrets.token_urlsafe(32)
+    users.update_one(
+        {"_id": user_id},
+        {
+            "$set": {
+                "email_verify_token_hash": _hash_reset_token(raw),
+                "email_verify_expires": _now() + timedelta(hours=48),
+                "updated_at": _now(),
+            }
+        },
+    )
+    return raw
+
+
+def verify_email_with_token(users: Collection, token: str) -> dict[str, Any]:
+    raw = (token or "").strip()
+    if len(raw) < 20:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    token_hash = _hash_reset_token(raw)
+    doc = users.find_one({"email_verify_token_hash": token_hash})
+    if not doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    expires = doc.get("email_verify_expires")
+    if not isinstance(expires, datetime):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < _now():
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    users.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {"email_verified": True, "updated_at": _now()},
+            "$unset": {
+                "email_verify_token_hash": "",
+                "email_verify_expires": "",
             },
         },
     )

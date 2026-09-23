@@ -20,3 +20,4 @@ langgraph
 # pytesseract
 # pdf2image
 # Pillow
+stripe>=11.0.0

@@ -12,8 +12,8 @@ import httpx
 from report_pdf import render_report_pdf
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-RESEND_FROM = os.getenv("RESEND_FROM_EMAIL", "Money Track <onboarding@resend.dev>").strip()
-APP_BASE_URL = os.getenv("APP_BASE_URL", "https://fin.sivesh-pb.com").strip().rstrip("/")
+RESEND_FROM = os.getenv("RESEND_FROM_EMAIL", "Tally <onboarding@resend.dev>").strip()
+APP_BASE_URL = os.getenv("APP_BASE_URL", "https://tally.nuential.com").strip().rstrip("/")
 
 
 def _fmt_inr(value: Any) -> str:
@@ -356,7 +356,7 @@ def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Money Track — {label}</title></head>
+<title>Tally — {label}</title></head>
 <body style="margin:0;padding:0;background:{bg};font-family:Georgia,'Times New Roman',serif;color:{text};">
   <table width="100%" cellpadding="0" cellspacing="0" style="background:{bg};padding:32px 12px;">
     <tr><td align="center">
@@ -398,7 +398,7 @@ def render_report_html(report: dict[str, Any], *, advisor_profile: dict[str, Any
 
         <tr><td style="padding:20px 0 0;border-top:1px solid {border};">
           <p style="margin:0 0 8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;">
-            <a href="{report_url}" style="color:#1a5f8a;text-decoration:none;">View full report in Money Track →</a>
+            <a href="{report_url}" style="color:#1a5f8a;text-decoration:none;">View full report in Tally →</a>
           </p>
           <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:11px;color:{muted};">
             Numbers are computed from your transactions. AI only narrates — it does not invent figures.
@@ -438,7 +438,7 @@ def send_report_email(
         "html": html,
         "attachments": [
             {
-                "filename": f"money-track-{month_key}.pdf",
+                "filename": f"tally-{month_key}.pdf",
                 "content": base64.b64encode(pdf_bytes).decode("ascii"),
             }
         ],

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { fetchAnalytics, fetchTransactions, updateTransactionCategory, deleteTransaction } from '../api'
 import { AdvisorVoiceBanner } from '../components/AdvisorVoiceBanner'
@@ -768,9 +769,22 @@ export function DashboardPage() {
             {listLoading ? (
               <LoadingBlock />
             ) : visibleTxns.length === 0 ? (
-              <p className="py-8 text-center text-sm text-[var(--muted)]">
-                No transactions in this {period === 'year' && selectedKey ? 'month' : period}.
-              </p>
+              <div className="space-y-3 py-8 text-center">
+                <p className="text-sm text-[var(--muted)]">
+                  No transactions in this {period === 'year' && selectedKey ? 'month' : period}.
+                </p>
+                <p className="text-xs text-[var(--muted)]">
+                  Waiting for bank SMS? Connect your phone, or paste a bank email.
+                </p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Link to="/accounts" className="btn btn-primary text-sm">
+                    Connect phone / email
+                  </Link>
+                  <Link to="/getting-started" className="btn text-sm">
+                    Setup guide
+                  </Link>
+                </div>
+              </div>
             ) : period === 'year' && !selectedKey ? (
               <div className="space-y-6">
                 {monthGroups.map(({ month, items }) => {

@@ -166,10 +166,32 @@ BANK_SENDER_MAP = {
     "SIBL": "South Indian Bank",
     "SIBBK": "South Indian Bank",
     "SOUTHI": "South Indian Bank",
+    # National banks — SMS sender IDs vary by DLT / operator prefix
+    "HDFCBK": "HDFC Bank",
+    "HDFC": "HDFC Bank",
+    "SBIINB": "State Bank of India",
+    "SBI": "State Bank of India",
+    "SBICRD": "State Bank of India",
+    "AXISBK": "Axis Bank",
+    "AXISB": "Axis Bank",
+    "AXIS": "Axis Bank",
+    "KOTAKB": "Kotak Mahindra Bank",
+    "KOTAK": "Kotak Mahindra Bank",
+    "CKOTAK": "Kotak Mahindra Bank",
 }
 
 # Banks we store from SMS ingest / statement import
-ALLOWED_BANKS = frozenset({"Federal Bank", "ICICI Bank", "South Indian Bank"})
+ALLOWED_BANKS = frozenset(
+    {
+        "Federal Bank",
+        "ICICI Bank",
+        "South Indian Bank",
+        "HDFC Bank",
+        "State Bank of India",
+        "Axis Bank",
+        "Kotak Mahindra Bank",
+    }
+)
 ALLOWED_BANK_HINTS = (
     "federal",
     "fedbnk",
@@ -180,6 +202,14 @@ ALLOWED_BANK_HINTS = (
     "southindian",
     "sibl",
     "sibbk",
+    "hdfc",
+    "hdfcbk",
+    "state bank",
+    "sbi",
+    "sbiinb",
+    "axis",
+    "axisbk",
+    "kotak",
 )
 
 _BAD_MERCHANT = re.compile(
@@ -225,7 +255,8 @@ _LLM_PARSE_BATCH = 8
 
 _SMS_LLM_SYSTEM = (
     "Extract bank transactions from Indian SMS or statement narrations. "
-    "Supported banks: Federal Bank, ICICI Bank, South Indian Bank. "
+    "Supported banks: Federal Bank, ICICI Bank, South Indian Bank, HDFC Bank, "
+    "State Bank of India, Axis Bank, Kotak Mahindra Bank. "
     "Ignore OTP, KYC, promo, and non-money texts. "
     "Return JSON only. Amounts are INR numbers (no commas). "
     "type debit = money left the user; credit = money received."
@@ -534,6 +565,14 @@ def _detect_bank(sender: str, body: str = "") -> Optional[str]:
         return "ICICI Bank"
     if "federal" in blob or "fedbnk" in blob or "fedbk" in blob:
         return "Federal Bank"
+    if "hdfc" in blob:
+        return "HDFC Bank"
+    if "state bank" in blob or re.search(r"\bsbi\b", blob):
+        return "State Bank of India"
+    if "axis" in blob:
+        return "Axis Bank"
+    if "kotak" in blob:
+        return "Kotak Mahindra Bank"
     return None
 
 

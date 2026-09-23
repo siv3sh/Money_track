@@ -81,7 +81,7 @@ export function AdminPage() {
     <div className="fade-in space-y-5">
       <PageHeader
         title="Database & users"
-        description="Manage accounts created via signup. Each user keeps separate transactions, wealth, and settings."
+        description="Manage signup accounts. Each user’s ledger is isolated."
       />
 
       <ChartCard

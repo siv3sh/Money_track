@@ -12,7 +12,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error('Money Track UI crash', error, info.componentStack)
+    console.error('Tally UI crash', error, info.componentStack)
   }
 
   render() {
@@ -25,7 +25,7 @@ export class ErrorBoundary extends Component<Props, State> {
             in.
           </p>
           <button type="button" className="btn" onClick={() => window.location.assign('/')}>
-            Reload Money Track
+            Reload Tally
           </button>
         </div>
       )

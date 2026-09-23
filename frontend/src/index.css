@@ -3,7 +3,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
-  Sapphire Vault — light first-paint; dark twin via .dark
+  Tally — light first-paint; dark twin via .dark
   Depth: 0 Canvas · 1 Sheet · 2 Lift · 3 Float (glass chrome only)
 */
 
@@ -662,6 +662,29 @@ button:focus-visible {
   :root {
     --sidebar-w: 0px;
   }
+
+  .sidebar-link {
+    min-height: 2.75rem;
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .landing-root {
+    overflow-x: hidden;
+  }
+
+  /* Tables / wide charts: allow horizontal scroll without blowing the page */
+  .passbook-list,
+  .recharts-responsive-container {
+    max-width: 100%;
+  }
+
+  main .overflow-x-auto,
+  main table {
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 @media (max-width: 420px) {
@@ -686,3 +709,107 @@ button:focus-visible {
 .dark {
   scrollbar-color: #243248 transparent;
 }
+
+/* —— Marketing landing —— */
+/* Do NOT set scroll-behavior on html — it makes wheel/touch scroll feel unstable.
+   Anchor jumps use scrollIntoView({ behavior: 'smooth' }) only. */
+
+.landing-hero-bg {
+  background:
+    radial-gradient(ellipse 80% 55% at 50% -10%, rgba(14, 77, 181, 0.14), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 90% 20%, rgba(15, 138, 95, 0.06), transparent 50%),
+    linear-gradient(180deg, var(--canvas) 0%, var(--bg-elevated) 45%, var(--canvas) 100%);
+}
+
+.landing-hero-glow {
+  background: radial-gradient(ellipse 70% 60% at 50% 0%, rgba(14, 77, 181, 0.12), transparent 70%);
+}
+
+.landing-fade-up {
+  animation: landingFadeUp 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.landing-delay-1 {
+  animation-delay: 50ms;
+}
+.landing-delay-2 {
+  animation-delay: 100ms;
+}
+.landing-delay-3 {
+  animation-delay: 150ms;
+}
+
+@keyframes landingFadeUp {
+  from {
+    opacity: 0.01;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.landing-chip-row {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.landing-chip-row::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+
+.landing-hero-visual {
+  overflow-anchor: none;
+}
+
+.landing-demo-shell {
+  height: 21.5rem;
+  overflow: hidden;
+  overflow-anchor: none;
+  contain: layout size;
+}
+
+@media (min-width: 640px) {
+  .landing-demo-shell {
+    height: 19.75rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing-demo-shell {
+    height: 20.25rem;
+  }
+}
+
+.landing-demo-active-slot,
+.landing-demo-list {
+  overflow-anchor: none;
+}
+
+.landing-how-panel {
+  animation: landingFadeUp 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.landing-sticky-cta {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-fade-up,
+  .landing-how-panel {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .landing-sticky-cta {
+    transition: none !important;
+  }
+}
+
+.legal-prose strong {
+  font-weight: 600;
+}
+

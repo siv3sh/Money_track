@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 
-const THEME_KEY = 'money-track-theme'
+const THEME_KEY = 'tally-theme'
 
 type ThemeState = {
   dark: boolean
