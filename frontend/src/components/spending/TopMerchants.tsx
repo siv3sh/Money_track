@@ -15,8 +15,8 @@ export function TopMerchants({
 
   return (
     <ChartCard
-      title="Top merchants"
-      subtitle="Ranked by spend — click a row to filter transactions"
+      title="Who got paid"
+      subtitle="Top merchants by spend — click to open those ledger rows"
       className="mb-5"
     >
       {!rows.length ? (

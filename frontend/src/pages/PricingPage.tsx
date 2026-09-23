@@ -14,7 +14,7 @@ import { trackEvent } from '../lib/analytics'
 
 const FREE_FEATURES = [
   'Bank SMS + email ingest',
-  'Dashboard, Spending, Transactions',
+  'Home, Spending, Transactions',
   'CSV/PDF import for history',
   'Federal, ICICI, SIB, HDFC, SBI, Axis, Kotak',
 ]
@@ -101,7 +101,7 @@ export function PricingPage() {
           <div className="flex items-center gap-3 text-sm">
             {user ? (
               <Link to="/dashboard" className="text-[var(--muted)] hover:text-[var(--text)]">
-                Dashboard
+                Home
               </Link>
             ) : (
               <Link to="/login" className="text-[var(--muted)] hover:text-[var(--text)]">
@@ -166,7 +166,7 @@ export function PricingPage() {
               to={user ? '/dashboard' : '/login?mode=signup'}
               className="btn mt-8 w-full justify-center border border-[var(--border)] bg-[var(--surface)] py-2.5 text-sm"
             >
-              {user ? 'Open dashboard' : 'Start free'}
+              {user ? 'Open Home' : 'Start free'}
             </Link>
           </div>
 

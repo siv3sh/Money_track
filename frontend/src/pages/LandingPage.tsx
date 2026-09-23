@@ -113,7 +113,7 @@ function InteractiveHeroDemo({
             <span className="h-2.5 w-2.5 rounded-full bg-[var(--wealth)]/70" />
             <span className="h-2.5 w-2.5 rounded-full bg-[var(--credit)]/70" />
             <span className="ml-2 truncate font-[family-name:var(--font-mono)] text-[10px] text-[var(--muted)] sm:ml-3 sm:text-[11px]">
-              Tally · Dashboard
+              Tally · Home
             </span>
             <span className="ml-auto rounded-md bg-[var(--credit-soft)] px-2 py-0.5 font-[family-name:var(--font-mono)] text-[10px] text-[var(--credit)]">
               In ledger
@@ -256,7 +256,7 @@ const HOW_STEPS = [
     id: 'trust',
     icon: LayoutDashboard,
     title: 'Trust the ledger',
-    body: 'Dashboard, Spending, and Transactions stay front and center — the ledger customers actually use.',
+    body: 'Home, Spending, and Transactions stay front and center — the ledger customers actually use.',
     preview: 'The promise: a UPI/SMS ledger that doesn’t lie.',
   },
 ] as const

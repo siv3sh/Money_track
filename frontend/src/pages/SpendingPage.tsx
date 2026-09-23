@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { ArrowRight } from 'lucide-react'
 import { useFilters } from '../context/FilterContext'
 import { FilterBar } from '../components/FilterBar'
 import { LoadingBlock, PageHeader } from '../components/ui'
@@ -15,6 +16,7 @@ import {
   resolveAnomalies,
   resolveMomCompare,
 } from '../components/spending/utils'
+import { formatINR } from '../lib/format'
 
 function buildTxnSearchUrl(opts: {
   merchant?: string
@@ -34,6 +36,34 @@ function buildTxnSearchUrl(opts: {
   return qs ? `/transactions?${qs}` : '/transactions'
 }
 
+/** One coaching line from MoM + top category — not noise. */
+function spendingCoach(opts: {
+  totalDebit: number
+  topCategory: string | null
+  topShare: number | null
+  momPct: number | null
+}): string {
+  const { totalDebit, topCategory, topShare, momPct } = opts
+  if (totalDebit <= 0) {
+    return 'No lifestyle spend in this range yet. Once SMS lands, categories tell you where money actually went.'
+  }
+  const parts: string[] = []
+  if (topCategory && topShare != null) {
+    parts.push(`${topCategory} is ${topShare}% of spend`)
+  }
+  if (momPct != null) {
+    if (momPct > 8) parts.push(`${momPct}% higher than last month`)
+    else if (momPct < -8) parts.push(`${Math.abs(momPct)}% lower than last month`)
+    else parts.push('roughly flat vs last month')
+  }
+  if (!parts.length) return `Lifestyle spend ${formatINR(totalDebit)} — tap a category to audit the rows.`
+  return `${parts.join(' · ')}. Tap a slice to open those transactions.`
+}
+
+/**
+ * Spending — “where did it go?”
+ * Order: story (MoM) → categories → merchants → trend → budgets/subs/anomalies only when useful.
+ */
 export function SpendingPage() {
   const navigate = useNavigate()
   const { data, loading, error, dateFrom, dateTo } = useFilters()
@@ -59,6 +89,25 @@ export function SpendingPage() {
       }),
     [data?.alerts, data?.lifestyle_category_monthly, data?.category_monthly, cats],
   )
+
+  const totalDebit = useMemo(() => cats.reduce((s, c) => s + c.debit, 0), [cats])
+  const top = cats[0]
+  const topShare =
+    top && totalDebit > 0 ? Math.round((top.debit / totalDebit) * 1000) / 10 : null
+
+  const insight = useMemo(
+    () =>
+      spendingCoach({
+        totalDebit,
+        topCategory: top?.name ?? null,
+        topShare,
+        momPct: mom?.pct ?? null,
+      }),
+    [totalDebit, top?.name, topShare, mom?.pct],
+  )
+
+  const budgetEntries = Object.entries(data?.budgets || {}).filter(([, amt]) => Number(amt) > 0)
+  const recurring = data?.recurring?.merchants || []
 
   const openFindTxns = useCallback(
     (opts: { merchant?: string; category?: string; amountMin?: string }) => {
@@ -102,7 +151,12 @@ export function SpendingPage() {
     <div className="fade-in">
       <PageHeader
         title="Spending"
-        description="Category mix, trends, merchants, budgets, and subscriptions for the selected range."
+        description="Where the money went — categories first, then merchants. Click anything to open the ledger rows."
+        actions={
+          <Link to="/dashboard" className="btn text-sm">
+            Back to Home
+          </Link>
+        }
       />
       <FilterBar />
 
@@ -116,13 +170,49 @@ export function SpendingPage() {
         <LoadingBlock />
       ) : data ? (
         <>
+          <div className="elev-sheet mb-5 border-l-4 border-l-[var(--debit)] px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">
+              The story
+            </p>
+            <p className="mt-1 text-sm leading-snug text-[var(--text)]">{insight}</p>
+            {totalDebit > 0 ? (
+              <p className="mt-2 text-xs text-[var(--muted)]">
+                Lifestyle spend {formatINR(totalDebit)}
+                {dateFrom && dateTo ? ` · ${dateFrom} → ${dateTo}` : ''}
+              </p>
+            ) : null}
+          </div>
+
           <MomCompareStrip compare={mom} />
           <CategoryBreakdown categories={cats} onCategoryClick={onCategoryClick} />
-          <SpendingTrend daily={data.daily || []} />
           <TopMerchants merchants={data.merchants || []} onMerchantClick={onMerchantClick} />
-          <BudgetVsActual budgets={data.budgets} categories={cats} />
-          <SubscriptionsCard merchants={data.recurring?.merchants || []} />
-          <AnomalyFlags items={anomalies} onAnomalyClick={onAnomalyClick} />
+          <SpendingTrend daily={data.daily || []} />
+
+          {budgetEntries.length > 0 ? (
+            <BudgetVsActual budgets={data.budgets} categories={cats} />
+          ) : (
+            <p className="mb-5 rounded-xl border border-dashed border-[var(--border)] bg-[var(--sheet)] px-4 py-3 text-sm text-[var(--muted)]">
+              Optional:{' '}
+              <Link to="/profile" className="font-medium text-[var(--sapphire)] hover:underline">
+                set category budgets in Profile
+              </Link>{' '}
+              if you want soft caps here.
+            </p>
+          )}
+
+          {recurring.length > 0 ? <SubscriptionsCard merchants={recurring} /> : null}
+
+          {anomalies.length > 0 ? (
+            <AnomalyFlags items={anomalies} onAnomalyClick={onAnomalyClick} />
+          ) : null}
+
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--sheet)] px-4 py-3 text-sm">
+            <p className="text-[var(--muted)]">See a wrong category? Fix it on the row.</p>
+            <Link to="/transactions?type=debit" className="inline-flex items-center gap-1 font-medium text-[var(--sapphire)] hover:underline">
+              Open transactions
+              <ArrowRight size={14} />
+            </Link>
+          </div>
         </>
       ) : !error ? (
         <p className="rounded-xl border border-[var(--border)] bg-[var(--sheet)] px-4 py-10 text-center text-sm text-[var(--muted)]">

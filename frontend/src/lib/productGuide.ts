@@ -59,15 +59,15 @@ export const GUIDE_SETUP_STEPS: Array<{ title: string; body: string; to?: string
 export const GUIDE_FEATURES: GuideFeature[] = [
   {
     id: 'dashboard',
-    title: 'Dashboard',
-    description: 'Money in and out for the period — your ledger at a glance.',
+    title: 'Home',
+    description: 'Cash pulse — spent, received, net, and the latest bank alerts.',
     to: '/dashboard',
     icon: LayoutDashboard,
   },
   {
     id: 'spending',
     title: 'Spending',
-    description: 'Categories, merchants, subscriptions, budgets, and odd spikes.',
+    description: 'Where it went — categories, then merchants. Click to open the rows.',
     to: '/spending',
     icon: PieChart,
   },

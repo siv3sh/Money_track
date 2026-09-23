@@ -6,7 +6,7 @@ import type { MomCompare } from './utils'
 export function MomCompareStrip({ compare }: { compare: MomCompare | null }) {
   if (!compare) {
     return (
-      <ChartCard title="Month vs last month" subtitle="Total lifestyle-related debit" className="mb-5">
+      <ChartCard title="Vs last month" subtitle="Total lifestyle-related debit" className="mb-5">
         <p className="text-sm text-[var(--muted)]">Not enough monthly history to compare yet.</p>
       </ChartCard>
     )
@@ -20,8 +20,8 @@ export function MomCompareStrip({ compare }: { compare: MomCompare | null }) {
 
   return (
     <ChartCard
-      title="Month vs last month"
-      subtitle={`${compare.previousMonth} → ${compare.currentMonth}`}
+      title="Vs last month"
+      subtitle={`${compare.previousMonth} → ${compare.currentMonth} · lifestyle debit`}
       className="mb-5"
     >
       <div className="flex flex-wrap items-end justify-between gap-4">

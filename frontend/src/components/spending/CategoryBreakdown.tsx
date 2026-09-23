@@ -14,8 +14,8 @@ export function CategoryBreakdown({
 
   return (
     <ChartCard
-      title="Category breakdown"
-      subtitle="Share of lifestyle spend — click a slice to filter transactions"
+      title="Where it went"
+      subtitle="Share of lifestyle spend — click a category to open those transactions"
       className="mb-5"
     >
       {!categories.length ? (

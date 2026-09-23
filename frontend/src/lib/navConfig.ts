@@ -18,7 +18,7 @@ export type NavItem = {
 
 /** Customer main — SMS ledger only. Extras stay on the `dev` branch. */
 export const APP_NAV: NavItem[] = [
-  { id: 'dashboard', to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { id: 'dashboard', to: '/dashboard', label: 'Home', icon: LayoutDashboard, end: true },
   { id: 'spending', to: '/spending', label: 'Spending', icon: PieChart },
   { id: 'transactions', to: '/transactions', label: 'Transactions', icon: List },
   { id: 'accounts', to: '/accounts', label: 'Phones & email', icon: Smartphone },
